@@ -34,9 +34,10 @@ env/
 *~
 
 # Models (too large for Git)
-models/*.onnx
-models/**/*.onnx
-models/**/*.pth
+# Models (too large for Git)
+# models/*.onnx
+# models/**/*.onnx
+# models/**/*.pth
 
 # Output
 output/

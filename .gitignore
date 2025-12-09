@@ -36,6 +36,7 @@ ENV/
 
 # Project specific
 models/
+!src/models/
 runs/
 *.log
 Backup/

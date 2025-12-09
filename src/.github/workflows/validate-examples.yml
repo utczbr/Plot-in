@@ -1,0 +1,28 @@
+name: Test Documentation Examples
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**/*.md'
+
+jobs:
+  test-code-examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Extract Code Blocks
+        run: |
+          python .documentation/agents/extract_executable_blocks.py \
+            docs/how-to-guides/ \
+            --output docs/.tests/
+      
+      - name: Run Example Tests
+        run: |
+          pytest docs/.tests/ -v --tb=short
+          
+      - name: Report Failures
+        if: failure()
+        run: |
+          echo "❌ Documentation examples are broken. Fix before merging."
+          exit 1

@@ -1,0 +1,19 @@
+{
+  "models_directory": "models",
+  "calibration_method": "PROSAC",
+  "ocr": {
+    "engine": "Paddle",
+    "use_gpu": false,
+    "accuracy": "optimized"
+  },
+  "processing": {
+    "default_mode": "optimized",
+    "batch_workers": 4,
+    "conf_threshold": 0.4
+  },
+  "ui": {
+    "default_theme": "dark",
+    "sidebar_width": 240,
+    "icon_width": 48
+  }
+}

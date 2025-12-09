@@ -1,0 +1,41 @@
+name: Documentation Validation
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'src/**/*.py'
+  push:
+    branches: [main]
+
+jobs:
+  validate-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      # Check 1: Verify code examples execute successfully
+      - name: Test Code Snippets
+        run: |
+          python scripts/extract_code_blocks.py docs/ | python
+          
+      # Check 2: Validate internal links
+      - name: Check Dead Links
+        uses: lycheeverse/lychee-action@v1
+        with:
+          args: --verbose --no-progress 'docs/**/*.md'
+          
+      # Check 3: Ensure all Python modules have corresponding docs
+      - name: Coverage Check
+        run: |
+          python scripts/doc_coverage.py --src src/ --docs docs/reference/api/
+          
+      # Check 4: Verify ADR references match actual code
+      - name: ADR Code Reference Validation
+        run: |
+          python scripts/validate_adr_references.py docs/architecture/
+          
+      # Check 5: Check for outdated version numbers
+      - name: Version Consistency
+        run: |
+          grep -r "v1.0" docs/ | python scripts/check_version_consistency.py

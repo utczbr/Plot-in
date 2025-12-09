@@ -1,0 +1,171 @@
+{
+  "total_files": 100,
+  "total_annotations": 4833,
+  "total_text_present": 2045,
+  "total_text_missing": 2788,
+  "total_text_bearing_with_text": 1736,
+  "total_text_bearing_without_text": 0,
+  "total_invalid_bboxes": 0,
+  "by_chart_type": {
+    "area": {
+      "count": 15,
+      "annotations": 234,
+      "text_present": 221,
+      "text_missing": 13,
+      "class_counts": {
+        "6": 15,
+        "5": 13,
+        "2": 30,
+        "8": 176
+      }
+    },
+    "pie": {
+      "count": 13,
+      "annotations": 109,
+      "text_present": 107,
+      "text_missing": 2,
+      "class_counts": {
+        "6": 13,
+        "7": 52,
+        "5": 2,
+        "2": 6,
+        "8": 36
+      }
+    },
+    "bar": {
+      "count": 6,
+      "annotations": 143,
+      "text_present": 91,
+      "text_missing": 52,
+      "class_counts": {
+        "6": 6,
+        "2": 12,
+        "8": 68,
+        "1": 52,
+        "3": 5
+      }
+    },
+    "scatter": {
+      "count": 14,
+      "annotations": 1259,
+      "text_present": 224,
+      "text_missing": 1035,
+      "class_counts": {
+        "6": 14,
+        "2": 28,
+        "8": 182,
+        "1": 1017,
+        "7": 7,
+        "4": 7,
+        "9": 4
+      }
+    },
+    "box": {
+      "count": 15,
+      "annotations": 515,
+      "text_present": 233,
+      "text_missing": 282,
+      "class_counts": {
+        "6": 15,
+        "2": 30,
+        "8": 176,
+        "1": 82,
+        "7": 71,
+        "4": 83,
+        "9": 46,
+        "3": 12
+      }
+    },
+    "line": {
+      "count": 13,
+      "annotations": 189,
+      "text_present": 177,
+      "text_missing": 12,
+      "class_counts": {
+        "6": 13,
+        "5": 12,
+        "2": 26,
+        "8": 138
+      }
+    },
+    "unknown": {
+      "count": 12,
+      "annotations": 2181,
+      "text_present": 791,
+      "text_missing": 1390,
+      "class_counts": {
+        "5": 10,
+        "2": 24,
+        "7": 212,
+        "1": 1384,
+        "3": 5,
+        "6": 506,
+        "8": 40
+      }
+    },
+    "histogram": {
+      "count": 12,
+      "annotations": 203,
+      "text_present": 201,
+      "text_missing": 2,
+      "class_counts": {
+        "4": 10,
+        "2": 24,
+        "6": 137,
+        "5": 11,
+        "8": 21
+      }
+    }
+  },
+  "by_class_id": {
+    "6": {
+      "count": 719,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "5": {
+      "count": 48,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "2": {
+      "count": 180,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "8": {
+      "count": 837,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "7": {
+      "count": 342,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "1": {
+      "count": 2535,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "4": {
+      "count": 100,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "3": {
+      "count": 22,
+      "text_present": 0,
+      "text_missing": 0
+    },
+    "9": {
+      "count": 50,
+      "text_present": 0,
+      "text_missing": 0
+    }
+  },
+  "problem_files": [],
+  "text_coverage_rate": 42.31,
+  "text_missing_rate": 57.69,
+  "text_bearing_coverage_rate": 100.0
+}

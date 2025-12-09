@@ -1,0 +1,518 @@
+{
+  "image_metadata": {
+    "image_id": "chart_00011",
+    "resolution": {
+      "width": 1050,
+      "height": 750
+    },
+    "chart_types": [
+      "box"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "box",
+    "orientation": "vertical",
+    "num_annotations": 23
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": null
+    },
+    "bar_info": [],
+    "keypoint_info": [],
+    "boxplot_metadata": {
+      "num_groups": 12,
+      "box_width": 0.6,
+      "orientation": "horizontal",
+      "medians": [
+        {
+          "group_index": 0,
+          "group_label": "G1",
+          "median_value": 30.71,
+          "lower_left": {
+            "x": 30.71,
+            "y": 0.7
+          },
+          "upper_right": {
+            "x": 30.71,
+            "y": 1.3
+          },
+          "center_x": null,
+          "center_y": 1.0,
+          "line_length": 0.6000000000000001
+        },
+        {
+          "group_index": 1,
+          "group_label": "G2",
+          "median_value": 82.36,
+          "lower_left": {
+            "x": 82.36,
+            "y": 1.7
+          },
+          "upper_right": {
+            "x": 82.36,
+            "y": 2.3
+          },
+          "center_x": null,
+          "center_y": 2.0,
+          "line_length": 0.5999999999999999
+        },
+        {
+          "group_index": 2,
+          "group_label": "G3",
+          "median_value": 87.5,
+          "lower_left": {
+            "x": 87.5,
+            "y": 2.7
+          },
+          "upper_right": {
+            "x": 87.5,
+            "y": 3.3
+          },
+          "center_x": null,
+          "center_y": 3.0,
+          "line_length": 0.5999999999999996
+        },
+        {
+          "group_index": 3,
+          "group_label": "G4",
+          "median_value": 68.17,
+          "lower_left": {
+            "x": 68.17,
+            "y": 3.7
+          },
+          "upper_right": {
+            "x": 68.17,
+            "y": 4.3
+          },
+          "center_x": null,
+          "center_y": 4.0,
+          "line_length": 0.5999999999999996
+        },
+        {
+          "group_index": 4,
+          "group_label": "G5",
+          "median_value": 10.92,
+          "lower_left": {
+            "x": 10.92,
+            "y": 4.7
+          },
+          "upper_right": {
+            "x": 10.92,
+            "y": 5.3
+          },
+          "center_x": null,
+          "center_y": 5.0,
+          "line_length": 0.5999999999999996
+        },
+        {
+          "group_index": 5,
+          "group_label": "G6",
+          "median_value": 34.915000000000006,
+          "lower_left": {
+            "x": 34.915000000000006,
+            "y": 5.7
+          },
+          "upper_right": {
+            "x": 34.915000000000006,
+            "y": 6.3
+          },
+          "center_x": null,
+          "center_y": 6.0,
+          "line_length": 0.5999999999999996
+        },
+        {
+          "group_index": 6,
+          "group_label": "G7",
+          "median_value": 31.134999999999998,
+          "lower_left": {
+            "x": 31.134999999999998,
+            "y": 6.7
+          },
+          "upper_right": {
+            "x": 31.134999999999998,
+            "y": 7.3
+          },
+          "center_x": null,
+          "center_y": 7.0,
+          "line_length": 0.5999999999999996
+        },
+        {
+          "group_index": 7,
+          "group_label": "G8",
+          "median_value": 62.715,
+          "lower_left": {
+            "x": 62.715,
+            "y": 7.7
+          },
+          "upper_right": {
+            "x": 62.715,
+            "y": 8.3
+          },
+          "center_x": null,
+          "center_y": 8.0,
+          "line_length": 0.6000000000000005
+        },
+        {
+          "group_index": 8,
+          "group_label": "G9",
+          "median_value": 56.91,
+          "lower_left": {
+            "x": 56.91,
+            "y": 8.7
+          },
+          "upper_right": {
+            "x": 56.91,
+            "y": 9.3
+          },
+          "center_x": null,
+          "center_y": 9.0,
+          "line_length": 0.6000000000000014
+        },
+        {
+          "group_index": 9,
+          "group_label": "G10",
+          "median_value": 28.6,
+          "lower_left": {
+            "x": 28.6,
+            "y": 9.7
+          },
+          "upper_right": {
+            "x": 28.6,
+            "y": 10.3
+          },
+          "center_x": null,
+          "center_y": 10.0,
+          "line_length": 0.6000000000000014
+        },
+        {
+          "group_index": 10,
+          "group_label": "G11",
+          "median_value": 80.6,
+          "lower_left": {
+            "x": 80.6,
+            "y": 10.7
+          },
+          "upper_right": {
+            "x": 80.6,
+            "y": 11.3
+          },
+          "center_x": null,
+          "center_y": 11.0,
+          "line_length": 0.6000000000000014
+        },
+        {
+          "group_index": 11,
+          "group_label": "G12",
+          "median_value": 30.0,
+          "lower_left": {
+            "x": 30.0,
+            "y": 11.7
+          },
+          "upper_right": {
+            "x": 30.0,
+            "y": 12.3
+          },
+          "center_x": null,
+          "center_y": 12.0,
+          "line_length": 0.6000000000000014
+        }
+      ]
+    },
+    "pie_geometry": {},
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        408.08333333333326,
+        680.3333333333334,
+        731.4583333333333,
+        708.3333333333334
+      ],
+      "text": "Dose\u2013Response Curve"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        41.66666666666667,
+        233.89583333333337,
+        65.66666666666669,
+        529.7708333333334
+      ],
+      "text": "Operating Expenses ($)"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        493.52083333333326,
+        41.666666666666686,
+        646.0208333333333,
+        65.66666666666669
+      ],
+      "text": "Salesperson"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        74.00000000000001,
+        529.2291666666666,
+        116.62500000000001,
+        549.2291666666666
+      ],
+      "text": "G10"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        74.00000000000001,
+        574.7708333333334,
+        116.62500000000001,
+        594.7708333333334
+      ],
+      "text": "G11"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        74.00000000000001,
+        620.3125,
+        116.62500000000001,
+        640.3125
+      ],
+      "text": "G12"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        826.573380190181,
+        74.00000000000001,
+        866.323380190181,
+        94.00000000000001
+      ],
+      "text": "100"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        961.6475259251868,
+        74.00000000000001,
+        1001.3975259251868,
+        94.00000000000001
+      ],
+      "text": "120"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.12500000000001,
+        347.0625,
+        116.62500000000001,
+        367.0625
+      ],
+      "text": "G6"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.12500000000001,
+        483.6875,
+        116.62500000000001,
+        503.6875
+      ],
+      "text": "G9"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.25000000000001,
+        119.35416666666669,
+        116.62500000000001,
+        139.35416666666669
+      ],
+      "text": "G1"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.25000000000001,
+        164.89583333333334,
+        116.62500000000001,
+        184.89583333333334
+      ],
+      "text": "G2"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.25000000000001,
+        210.4375,
+        116.62500000000001,
+        230.4375
+      ],
+      "text": "G3"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.25000000000001,
+        255.97916666666669,
+        116.62500000000001,
+        275.9791666666667
+      ],
+      "text": "G4"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.25000000000001,
+        301.5208333333333,
+        116.62500000000001,
+        321.5208333333333
+      ],
+      "text": "G5"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.25000000000001,
+        392.60416666666663,
+        116.62500000000001,
+        412.60416666666663
+      ],
+      "text": "G7"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        87.37500000000001,
+        438.1458333333333,
+        116.62500000000001,
+        458.1458333333333
+      ],
+      "text": "G8"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        562.9875887201691,
+        74.00000000000001,
+        589.6125887201691,
+        94.00000000000001
+      ],
+      "text": "60"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        292.9017972501574,
+        74.00000000000001,
+        319.4017972501574,
+        94.00000000000001
+      ],
+      "text": "20"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        427.97594298516333,
+        74.00000000000001,
+        454.47594298516333,
+        94.00000000000001
+      ],
+      "text": "40"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        698.186734455175,
+        74.00000000000001,
+        724.561734455175,
+        94.00000000000001
+      ],
+      "text": "80"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        164.45265151515153,
+        74.00000000000001,
+        177.70265151515153,
+        94.00000000000001
+      ],
+      "text": "0"
+    },
+    {
+      "class_id": "3",
+      "bbox": [
+        968.4640151515152,
+        506.45833333333337,
+        997.4640151515152,
+        530.4583333333334
+      ],
+      "text": "ns"
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 23,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

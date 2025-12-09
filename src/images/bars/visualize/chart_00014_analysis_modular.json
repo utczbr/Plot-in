@@ -1,0 +1,766 @@
+{
+  "image_file": "chart_00014.png",
+  "chart_type": "bar",
+  "orientation": "horizontal",
+  "scale_labels": [
+    {
+      "xyxy": [
+        682,
+        658,
+        723,
+        679
+      ],
+      "conf": 0.9484339952468872,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 702.5,
+      "text": "600",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "600"
+    },
+    {
+      "xyxy": [
+        326,
+        658,
+        366,
+        679
+      ],
+      "conf": 0.9343692064285278,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 346.0,
+      "text": "200",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "200"
+    },
+    {
+      "xyxy": [
+        504,
+        658,
+        544,
+        679
+      ],
+      "conf": 0.9150141477584839,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 524.0,
+      "text": "400",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "400"
+    },
+    {
+      "xyxy": [
+        860,
+        658,
+        900,
+        679
+      ],
+      "conf": 0.9063869714736938,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 880.0,
+      "text": "800",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "800"
+    },
+    {
+      "xyxy": [
+        160,
+        658,
+        173,
+        679
+      ],
+      "conf": 0.8619734644889832,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 166.5,
+      "text": "0*",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "0"
+    }
+  ],
+  "tick_labels": [
+    {
+      "xyxy": [
+        69,
+        291,
+        152,
+        313
+      ],
+      "conf": 0.9171518683433533,
+      "cls": 8,
+      "text": "Group 3",
+      "ocr_confidence": 0.8
+    },
+    {
+      "xyxy": [
+        70,
+        155,
+        152,
+        176
+      ],
+      "conf": 0.9080337285995483,
+      "cls": 8,
+      "text": "Group 4",
+      "ocr_confidence": 0.8
+    },
+    {
+      "xyxy": [
+        70,
+        427,
+        152,
+        449
+      ],
+      "conf": 0.9007272124290466,
+      "cls": 8,
+      "text": "Group 2",
+      "ocr_confidence": 0.8
+    },
+    {
+      "xyxy": [
+        70,
+        565,
+        153,
+        586
+      ],
+      "conf": 0.8853356838226318,
+      "cls": 8,
+      "text": "Group 1",
+      "ocr_confidence": 0.8
+    }
+  ],
+  "processing_mode": "optimized",
+  "detections": {
+    "chart": [],
+    "bar": [
+      {
+        "xyxy": [
+          167,
+          317,
+          535,
+          345
+        ],
+        "conf": 0.9408208131790161,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          166,
+          391,
+          296,
+          421
+        ],
+        "conf": 0.9400741457939148,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          166,
+          119,
+          853,
+          149
+        ],
+        "conf": 0.9383081197738647,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          167,
+          179,
+          195,
+          210
+        ],
+        "conf": 0.9342803955078125,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          167,
+          453,
+          379,
+          483
+        ],
+        "conf": 0.9308745861053467,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          168,
+          423,
+          343,
+          453
+        ],
+        "conf": 0.9128173589706421,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          168,
+          255,
+          495,
+          285
+        ],
+        "conf": 0.9112319946289062,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          166,
+          286,
+          579,
+          316
+        ],
+        "conf": 0.8812481164932251,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          168,
+          558,
+          789,
+          589
+        ],
+        "conf": 0.8674184679985046,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          167,
+          589,
+          189,
+          619
+        ],
+        "conf": 0.8393884897232056,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          167,
+          150,
+          195,
+          180
+        ],
+        "conf": 0.8254680633544922,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          163,
+          527,
+          781,
+          559
+        ],
+        "conf": 0.7613894939422607,
+        "cls": 1
+      }
+    ],
+    "axis_title": [
+      {
+        "xyxy": [
+          42,
+          327,
+          64,
+          413
+        ],
+        "conf": 0.9153172969818115,
+        "cls": 2
+      },
+      {
+        "xyxy": [
+          543,
+          687,
+          630,
+          707
+        ],
+        "conf": 0.9028522968292236,
+        "cls": 2
+      }
+    ],
+    "significance_marker": [
+      {
+        "xyxy": [
+          966,
+          438,
+          994,
+          457
+        ],
+        "conf": 0.8107813596725464,
+        "cls": 3,
+        "text": "",
+        "ocr_confidence": 0.2
+      }
+    ],
+    "error_bar": [],
+    "legend": [],
+    "chart_title": [
+      {
+        "xyxy": [
+          416,
+          41,
+          761,
+          69
+        ],
+        "conf": 0.9221494197845459,
+        "cls": 6,
+        "text": "Debt-to-Equity Analysis",
+        "ocr_confidence": 0.8
+      }
+    ],
+    "data_label": [],
+    "axis_labels": [
+      {
+        "xyxy": [
+          682,
+          658,
+          723,
+          679
+        ],
+        "conf": 0.9484339952468872,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 702.5,
+        "text": "600",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "600"
+      },
+      {
+        "xyxy": [
+          326,
+          658,
+          366,
+          679
+        ],
+        "conf": 0.9343692064285278,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 346.0,
+        "text": "200",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "200"
+      },
+      {
+        "xyxy": [
+          69,
+          291,
+          152,
+          313
+        ],
+        "conf": 0.9171518683433533,
+        "cls": 8,
+        "text": "Group 3",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          504,
+          658,
+          544,
+          679
+        ],
+        "conf": 0.9150141477584839,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 524.0,
+        "text": "400",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "400"
+      },
+      {
+        "xyxy": [
+          70,
+          155,
+          152,
+          176
+        ],
+        "conf": 0.9080337285995483,
+        "cls": 8,
+        "text": "Group 4",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          860,
+          658,
+          900,
+          679
+        ],
+        "conf": 0.9063869714736938,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 880.0,
+        "text": "800",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "800"
+      },
+      {
+        "xyxy": [
+          70,
+          427,
+          152,
+          449
+        ],
+        "conf": 0.9007272124290466,
+        "cls": 8,
+        "text": "Group 2",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          70,
+          565,
+          153,
+          586
+        ],
+        "conf": 0.8853356838226318,
+        "cls": 8,
+        "text": "Group 1",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          160,
+          658,
+          173,
+          679
+        ],
+        "conf": 0.8619734644889832,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 166.5,
+        "text": "0*",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "0"
+      }
+    ]
+  },
+  "timing_info": {
+    "total_processing_time": 5.603759288787842,
+    "image_load_time": 0.008420705795288086,
+    "chart_classification_time": 0.13777470588684082,
+    "detection_inference_time": 0.21345257759094238,
+    "detection_organization_time": 1.52587890625e-05,
+    "orientation_detection_time": 5.91278076171875e-05,
+    "spatial_classification_time": 0.036708831787109375,
+    "dual_axis_detection_time": 0.016086339950561523,
+    "ocr_processing_time": 5.184237957000732,
+    "calibration_time": 0.0038716793060302734,
+    "baseline_detection_time": 0.00011229515075683594,
+    "extraction_time": 0.0003573894500732422
+  },
+  "baseline_coord": 167.09879450518642,
+  "dual_axis": false,
+  "bars": [
+    {
+      "index": 0,
+      "xyxy": [
+        167,
+        317,
+        535,
+        345
+      ],
+      "confidence": 0.9408208131790161,
+      "pixel_dimension": 367.90120549481355,
+      "estimated_value": 412.559531425708,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "",
+        "bbox": [
+          966,
+          438,
+          994,
+          457
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 1,
+      "xyxy": [
+        166,
+        391,
+        296,
+        421
+      ],
+      "confidence": 0.9400741457939148,
+      "pixel_dimension": 128.90120549481358,
+      "estimated_value": 144.548101894977,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": null,
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 2,
+      "xyxy": [
+        166,
+        119,
+        853,
+        149
+      ],
+      "confidence": 0.9383081197738647,
+      "pixel_dimension": 685.9012054948136,
+      "estimated_value": 769.1605129770571,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "",
+        "bbox": [
+          966,
+          438,
+          994,
+          457
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 3,
+      "xyxy": [
+        167,
+        179,
+        195,
+        210
+      ],
+      "confidence": 0.9342803955078125,
+      "pixel_dimension": 27.90120549481358,
+      "estimated_value": 31.28804171671831,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": null,
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 4,
+      "xyxy": [
+        167,
+        453,
+        379,
+        483
+      ],
+      "confidence": 0.9308745861053467,
+      "pixel_dimension": 211.90120549481358,
+      "estimated_value": 237.62320085334798,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": null,
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 5,
+      "xyxy": [
+        168,
+        423,
+        343,
+        453
+      ],
+      "confidence": 0.9128173589706421,
+      "pixel_dimension": 175.90120549481358,
+      "estimated_value": 197.25327841357264,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": null,
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 6,
+      "xyxy": [
+        168,
+        255,
+        495,
+        285
+      ],
+      "confidence": 0.9112319946289062,
+      "pixel_dimension": 327.90120549481355,
+      "estimated_value": 367.7040620481797,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "",
+        "bbox": [
+          966,
+          438,
+          994,
+          457
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 7,
+      "xyxy": [
+        166,
+        286,
+        579,
+        316
+      ],
+      "confidence": 0.8812481164932251,
+      "pixel_dimension": 411.90120549481355,
+      "estimated_value": 461.90054774098894,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "",
+        "bbox": [
+          966,
+          438,
+          994,
+          457
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 8,
+      "xyxy": [
+        168,
+        558,
+        789,
+        589
+      ],
+      "confidence": 0.8674184679985046,
+      "pixel_dimension": 621.9012054948136,
+      "estimated_value": 697.391761973012,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "",
+        "bbox": [
+          966,
+          438,
+          994,
+          457
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 9,
+      "xyxy": [
+        167,
+        589,
+        189,
+        619
+      ],
+      "confidence": 0.8393884897232056,
+      "pixel_dimension": 21.90120549481358,
+      "estimated_value": 24.55972131008906,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": null,
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 10,
+      "xyxy": [
+        167,
+        150,
+        195,
+        180
+      ],
+      "confidence": 0.8254680633544922,
+      "pixel_dimension": 27.90120549481358,
+      "estimated_value": 31.28804171671831,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": null,
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    },
+    {
+      "index": 11,
+      "xyxy": [
+        163,
+        527,
+        781,
+        559
+      ],
+      "confidence": 0.7613894939422607,
+      "pixel_dimension": 613.9012054948136,
+      "estimated_value": 688.4206680975063,
+      "orientation": "horizontal",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "",
+        "bbox": [
+          966,
+          438,
+          994,
+          457
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 167.09879450518642
+    }
+  ],
+  "num_bars": 12,
+  "titles": {
+    "chart_title": "Debt-to-Equity Analysis",
+    "axis_titles": [
+      "",
+      ""
+    ]
+  },
+  "legend": [],
+  "calibration_quality": {
+    "r_squared": 0.999996620435269,
+    "baseline_coord": 167.09879450518642,
+    "orientation": "horizontal"
+  },
+  "calibration": {
+    "coefficients": [
+      1.121386734438205,
+      -187.38237149873166
+    ],
+    "r_squared": 0.999996620435269,
+    "method": "optimized",
+    "axis_type": "x",
+    "num_points": 5
+  }
+}

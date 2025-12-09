@@ -1,0 +1,425 @@
+{
+  "image_file": "chart_00000.png",
+  "chart_type": "bar",
+  "orientation": "vertical",
+  "scale_labels": [
+    {
+      "xyxy": [
+        70,
+        321,
+        109,
+        341
+      ],
+      "conf": 0.9184589385986328,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 331.0,
+      "text": "300",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "300"
+    },
+    {
+      "xyxy": [
+        70,
+        427,
+        109,
+        448
+      ],
+      "conf": 0.9131950736045837,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 437.5,
+      "text": "200",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "200"
+    },
+    {
+      "xyxy": [
+        70,
+        105,
+        109,
+        126
+      ],
+      "conf": 0.9049213528633118,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 115.5,
+      "text": "500",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "500"
+    },
+    {
+      "xyxy": [
+        70,
+        536,
+        109,
+        555
+      ],
+      "conf": 0.8951021432876587,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 545.5,
+      "text": "100",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "100"
+    },
+    {
+      "xyxy": [
+        69,
+        212,
+        109,
+        233
+      ],
+      "conf": 0.8900457620620728,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 222.5,
+      "text": "400",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "400"
+    },
+    {
+      "xyxy": [
+        97,
+        643,
+        109,
+        663
+      ],
+      "conf": 0.8280773162841797,
+      "cls": 8,
+      "axis_cluster": 0,
+      "coord_for_scale": 653.0,
+      "text": "0",
+      "ocr_confidence": 0.92,
+      "cleanedvalue": "0"
+    }
+  ],
+  "tick_labels": [
+    {
+      "xyxy": [
+        766,
+        658,
+        848,
+        679
+      ],
+      "conf": 0.9070249795913696,
+      "cls": 8,
+      "text": "Group 2",
+      "ocr_confidence": 0.8
+    },
+    {
+      "xyxy": [
+        284,
+        659,
+        366,
+        679
+      ],
+      "conf": 0.8778372406959534,
+      "cls": 8,
+      "text": "Group 1",
+      "ocr_confidence": 0.8
+    }
+  ],
+  "processing_mode": "optimized",
+  "detections": {
+    "chart": [],
+    "bar": [
+      {
+        "xyxy": [
+          168,
+          123,
+          476,
+          651
+        ],
+        "conf": 0.9771988391876221,
+        "cls": 1
+      },
+      {
+        "xyxy": [
+          646,
+          257,
+          967,
+          647
+        ],
+        "conf": 0.9387279152870178,
+        "cls": 1
+      }
+    ],
+    "axis_title": [
+      {
+        "xyxy": [
+          41,
+          255,
+          61,
+          491
+        ],
+        "conf": 0.9393967390060425,
+        "cls": 2
+      },
+      {
+        "xyxy": [
+          425,
+          686,
+          706,
+          707
+        ],
+        "conf": 0.9248390793800354,
+        "cls": 2
+      }
+    ],
+    "significance_marker": [
+      {
+        "xyxy": [
+          801,
+          209,
+          814,
+          231
+        ],
+        "conf": 0.8841512799263,
+        "cls": 3,
+        "text": "d",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          319,
+          70,
+          332,
+          93
+        ],
+        "conf": 0.8730247020721436,
+        "cls": 3,
+        "text": "b",
+        "ocr_confidence": 0.8
+      }
+    ],
+    "error_bar": [],
+    "legend": [],
+    "chart_title": [
+      {
+        "xyxy": [
+          432,
+          41,
+          701,
+          68
+        ],
+        "conf": 0.936689019203186,
+        "cls": 6,
+        "text": "Network Overview",
+        "ocr_confidence": 0.8
+      }
+    ],
+    "data_label": [],
+    "axis_labels": [
+      {
+        "xyxy": [
+          70,
+          321,
+          109,
+          341
+        ],
+        "conf": 0.9184589385986328,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 331.0,
+        "text": "300",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "300"
+      },
+      {
+        "xyxy": [
+          70,
+          427,
+          109,
+          448
+        ],
+        "conf": 0.9131950736045837,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 437.5,
+        "text": "200",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "200"
+      },
+      {
+        "xyxy": [
+          766,
+          658,
+          848,
+          679
+        ],
+        "conf": 0.9070249795913696,
+        "cls": 8,
+        "text": "Group 2",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          70,
+          105,
+          109,
+          126
+        ],
+        "conf": 0.9049213528633118,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 115.5,
+        "text": "500",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "500"
+      },
+      {
+        "xyxy": [
+          70,
+          536,
+          109,
+          555
+        ],
+        "conf": 0.8951021432876587,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 545.5,
+        "text": "100",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "100"
+      },
+      {
+        "xyxy": [
+          69,
+          212,
+          109,
+          233
+        ],
+        "conf": 0.8900457620620728,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 222.5,
+        "text": "400",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "400"
+      },
+      {
+        "xyxy": [
+          284,
+          659,
+          366,
+          679
+        ],
+        "conf": 0.8778372406959534,
+        "cls": 8,
+        "text": "Group 1",
+        "ocr_confidence": 0.8
+      },
+      {
+        "xyxy": [
+          97,
+          643,
+          109,
+          663
+        ],
+        "conf": 0.8280773162841797,
+        "cls": 8,
+        "axis_cluster": 0,
+        "coord_for_scale": 653.0,
+        "text": "0",
+        "ocr_confidence": 0.92,
+        "cleanedvalue": "0"
+      }
+    ]
+  },
+  "timing_info": {
+    "total_processing_time": 3.4824047088623047,
+    "image_load_time": 0.00922703742980957,
+    "chart_classification_time": 0.08504104614257812,
+    "detection_inference_time": 0.11593770980834961,
+    "detection_organization_time": 1.1205673217773438e-05,
+    "orientation_detection_time": 5.412101745605469e-05,
+    "spatial_classification_time": 0.0011739730834960938,
+    "dual_axis_detection_time": 0.005147218704223633,
+    "ocr_processing_time": 3.261674642562866,
+    "calibration_time": 0.0024995803833007812,
+    "baseline_detection_time": 0.0006158351898193359,
+    "extraction_time": 0.00014066696166992188
+  },
+  "baseline_coord": 653.0,
+  "dual_axis": false,
+  "bars": [
+    {
+      "index": 0,
+      "xyxy": [
+        168,
+        123,
+        476,
+        651
+      ],
+      "confidence": 0.9771988391876221,
+      "pixel_dimension": 530.0,
+      "estimated_value": 492.9560290442793,
+      "orientation": "vertical",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "b",
+        "bbox": [
+          319,
+          70,
+          332,
+          93
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 653.0
+    },
+    {
+      "index": 1,
+      "xyxy": [
+        646,
+        257,
+        967,
+        647
+      ],
+      "confidence": 0.9387279152870178,
+      "pixel_dimension": 396.0,
+      "estimated_value": 368.32186321044264,
+      "orientation": "vertical",
+      "text_label": "",
+      "data_label": null,
+      "error_bar": null,
+      "significance": {
+        "text": "d",
+        "bbox": [
+          801,
+          209,
+          814,
+          231
+        ]
+      },
+      "axis_assignment": "primary",
+      "model_used": "primary",
+      "baseline_used": 653.0
+    }
+  ],
+  "num_bars": 2,
+  "titles": {
+    "chart_title": "Network Overview",
+    "axis_titles": [
+      "",
+      ""
+    ]
+  },
+  "legend": [],
+  "calibration_quality": {
+    "r_squared": 0.9999965160612518,
+    "baseline_coord": 653.0,
+    "orientation": "vertical"
+  },
+  "calibration": {
+    "r_squared": 0.9999965160612518,
+    "coefficients": [
+      -0.9301057151778855,
+      607.3156122475045
+    ]
+  }
+}

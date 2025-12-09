@@ -1,0 +1,400 @@
+{
+  "image_metadata": {
+    "image_id": "chart_00033",
+    "resolution": {
+      "width": 840,
+      "height": 600
+    },
+    "chart_types": [
+      "line"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "line",
+    "orientation": "vertical",
+    "num_annotations": 9
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": "x"
+    },
+    "bar_info": [],
+    "keypoint_info": [
+      {
+        "series_idx": 0,
+        "points": [
+          {
+            "x": 0.0,
+            "y": 4.3,
+            "is_inflection": false
+          },
+          {
+            "x": 1.0,
+            "y": 9.0,
+            "is_inflection": true
+          },
+          {
+            "x": 2.0,
+            "y": 10.3,
+            "is_inflection": false
+          },
+          {
+            "x": 3.0,
+            "y": 32.1,
+            "is_inflection": true
+          },
+          {
+            "x": 4.0,
+            "y": 77.9,
+            "is_inflection": true
+          },
+          {
+            "x": 5.0,
+            "y": 107.7,
+            "is_inflection": false
+          },
+          {
+            "x": 6.0,
+            "y": 185.3,
+            "is_inflection": true
+          },
+          {
+            "x": 7.0,
+            "y": 264.2,
+            "is_inflection": true
+          },
+          {
+            "x": 8.0,
+            "y": 283.9,
+            "is_inflection": false
+          },
+          {
+            "x": 9.0,
+            "y": 314.6,
+            "is_inflection": false
+          }
+        ]
+      },
+      {
+        "series_idx": 1,
+        "points": [
+          {
+            "x": 0.0,
+            "y": 480.3,
+            "is_inflection": false
+          },
+          {
+            "x": 1.0,
+            "y": 370.55,
+            "is_inflection": true
+          },
+          {
+            "x": 2.0,
+            "y": 389.88,
+            "is_inflection": true
+          },
+          {
+            "x": 3.0,
+            "y": 346.73,
+            "is_inflection": true
+          },
+          {
+            "x": 4.0,
+            "y": 386.9,
+            "is_inflection": true
+          },
+          {
+            "x": 5.0,
+            "y": 338.79,
+            "is_inflection": false
+          },
+          {
+            "x": 6.0,
+            "y": 323.29,
+            "is_inflection": true
+          },
+          {
+            "x": 7.0,
+            "y": 323.85,
+            "is_inflection": true
+          },
+          {
+            "x": 8.0,
+            "y": 294.34,
+            "is_inflection": false
+          },
+          {
+            "x": 9.0,
+            "y": 297.93,
+            "is_inflection": false
+          }
+        ]
+      },
+      {
+        "series_idx": 2,
+        "points": [
+          {
+            "x": 0.0,
+            "y": 13.8,
+            "is_inflection": false
+          },
+          {
+            "x": 1.0,
+            "y": 13.4,
+            "is_inflection": true
+          },
+          {
+            "x": 2.0,
+            "y": 14.6,
+            "is_inflection": true
+          },
+          {
+            "x": 3.0,
+            "y": 15.4,
+            "is_inflection": false
+          },
+          {
+            "x": 4.0,
+            "y": 19.6,
+            "is_inflection": false
+          },
+          {
+            "x": 5.0,
+            "y": 53.0,
+            "is_inflection": false
+          },
+          {
+            "x": 6.0,
+            "y": 233.0,
+            "is_inflection": true
+          },
+          {
+            "x": 7.0,
+            "y": 420.1,
+            "is_inflection": true
+          },
+          {
+            "x": 8.0,
+            "y": 444.4,
+            "is_inflection": false
+          },
+          {
+            "x": 9.0,
+            "y": 513.0,
+            "is_inflection": false
+          }
+        ]
+      },
+      {
+        "series_idx": 3,
+        "points": [
+          {
+            "x": 0.0,
+            "y": 0.85,
+            "is_inflection": false
+          },
+          {
+            "x": 1.0,
+            "y": 1.71,
+            "is_inflection": true
+          },
+          {
+            "x": 2.0,
+            "y": 3.74,
+            "is_inflection": true
+          },
+          {
+            "x": 3.0,
+            "y": 5.53,
+            "is_inflection": false
+          },
+          {
+            "x": 4.0,
+            "y": 12.45,
+            "is_inflection": false
+          },
+          {
+            "x": 5.0,
+            "y": 23.38,
+            "is_inflection": false
+          },
+          {
+            "x": 6.0,
+            "y": 62.45,
+            "is_inflection": true
+          },
+          {
+            "x": 7.0,
+            "y": 128.65,
+            "is_inflection": true
+          },
+          {
+            "x": 8.0,
+            "y": 178.89,
+            "is_inflection": false
+          },
+          {
+            "x": 9.0,
+            "y": 285.18,
+            "is_inflection": false
+          }
+        ]
+      }
+    ],
+    "boxplot_metadata": {},
+    "pie_geometry": {},
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        355.20572916666663,
+        544.6666666666666,
+        539.4557291666666,
+        566.6666666666666
+      ],
+      "text": "Innovation Pipeline"
+    },
+    {
+      "class_id": "5",
+      "bbox": [
+        680.2083333333333,
+        91.0,
+        795.3333333333333,
+        183.33333333333334
+      ]
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        33.333333333333314,
+        228.91666666666663,
+        49.41145833333333,
+        375.41666666666663
+      ],
+      "text": "Surface Area (m\u00b2/g)"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        407.95572916666663,
+        33.33333333333332,
+        486.70572916666663,
+        49.33333333333332
+      ],
+      "text": "IC50 (nM)"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        56.078124999999986,
+        170.71217002594528,
+        76.32812499999999,
+        182.71217002594528
+      ],
+      "text": "100"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        56.078124999999986,
+        249.70181262000062,
+        76.32812499999999,
+        261.7018126200006
+      ],
+      "text": "200"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        56.078124999999986,
+        407.6810978081114,
+        76.32812499999999,
+        419.6810978081114
+      ],
+      "text": "400"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        56.203124999999986,
+        328.691455214056,
+        76.32812499999999,
+        340.691455214056
+      ],
+      "text": "300"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        56.203124999999986,
+        486.67074040216676,
+        76.32812499999999,
+        498.67074040216676
+      ],
+      "text": "500"
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 9,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

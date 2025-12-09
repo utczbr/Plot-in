@@ -1,0 +1,400 @@
+{
+  "image_metadata": {
+    "image_id": "chart_00098",
+    "resolution": {
+      "width": 672,
+      "height": 480
+    },
+    "chart_types": [
+      "area"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "area",
+    "orientation": "vertical",
+    "num_annotations": 13
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": "x"
+    },
+    "bar_info": [],
+    "keypoint_info": [
+      {
+        "series_idx": 0,
+        "points": [
+          {
+            "x": 0.0,
+            "y": 0.93,
+            "is_inflection": false
+          },
+          {
+            "x": 1.0,
+            "y": 1.42,
+            "is_inflection": false
+          },
+          {
+            "x": 2.0,
+            "y": 2.04,
+            "is_inflection": false
+          },
+          {
+            "x": 3.0,
+            "y": 3.38,
+            "is_inflection": true
+          },
+          {
+            "x": 4.0,
+            "y": 5.86,
+            "is_inflection": true
+          },
+          {
+            "x": 5.0,
+            "y": 6.8,
+            "is_inflection": false
+          },
+          {
+            "x": 6.0,
+            "y": 12.34,
+            "is_inflection": false
+          },
+          {
+            "x": 7.0,
+            "y": 19.15,
+            "is_inflection": false
+          },
+          {
+            "x": 8.0,
+            "y": 26.3,
+            "is_inflection": true
+          },
+          {
+            "x": 9.0,
+            "y": 44.38,
+            "is_inflection": true
+          },
+          {
+            "x": 10.0,
+            "y": 59.16,
+            "is_inflection": false
+          },
+          {
+            "x": 11.0,
+            "y": 78.28,
+            "is_inflection": false
+          },
+          {
+            "x": 12.0,
+            "y": 122.26,
+            "is_inflection": true
+          },
+          {
+            "x": 13.0,
+            "y": 173.31,
+            "is_inflection": true
+          },
+          {
+            "x": 14.0,
+            "y": 190.72,
+            "is_inflection": true
+          },
+          {
+            "x": 15.0,
+            "y": 276.81,
+            "is_inflection": false
+          },
+          {
+            "x": 16.0,
+            "y": 312.83,
+            "is_inflection": false
+          }
+        ]
+      },
+      {
+        "series_idx": 1,
+        "points": [
+          {
+            "x": 0.0,
+            "y": 390.88,
+            "is_inflection": false
+          },
+          {
+            "x": 1.0,
+            "y": 367.52,
+            "is_inflection": true
+          },
+          {
+            "x": 2.0,
+            "y": 477.96,
+            "is_inflection": true
+          },
+          {
+            "x": 3.0,
+            "y": 280.95,
+            "is_inflection": false
+          },
+          {
+            "x": 4.0,
+            "y": 266.24,
+            "is_inflection": true
+          },
+          {
+            "x": 5.0,
+            "y": 361.37,
+            "is_inflection": false
+          },
+          {
+            "x": 6.0,
+            "y": 422.66,
+            "is_inflection": true
+          },
+          {
+            "x": 7.0,
+            "y": 302.89,
+            "is_inflection": false
+          },
+          {
+            "x": 8.0,
+            "y": 257.73,
+            "is_inflection": true
+          },
+          {
+            "x": 9.0,
+            "y": 389.01,
+            "is_inflection": false
+          },
+          {
+            "x": 10.0,
+            "y": 372.93,
+            "is_inflection": true
+          },
+          {
+            "x": 11.0,
+            "y": 298.37,
+            "is_inflection": true
+          },
+          {
+            "x": 12.0,
+            "y": 377.99,
+            "is_inflection": true
+          },
+          {
+            "x": 13.0,
+            "y": 343.0,
+            "is_inflection": true
+          },
+          {
+            "x": 14.0,
+            "y": 469.57,
+            "is_inflection": false
+          },
+          {
+            "x": 15.0,
+            "y": 439.26,
+            "is_inflection": false
+          },
+          {
+            "x": 16.0,
+            "y": 330.96,
+            "is_inflection": false
+          }
+        ]
+      }
+    ],
+    "boxplot_metadata": {},
+    "pie_geometry": {},
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        269.43489583333326,
+        435.33333333333337,
+        454.43489583333326,
+        453.33333333333337
+      ],
+      "text": "Algorithm Comparison"
+    },
+    {
+      "class_id": "5",
+      "bbox": [
+        539.5416666666666,
+        372.3333333333333,
+        635.6666666666666,
+        409.66666666666663
+      ]
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        286.05989583333326,
+        26.66666666666667,
+        437.80989583333326,
+        41.74479166666667
+      ],
+      "text": "Separation Factor (\u03b1)"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        26.666666666666675,
+        186.87239583333334,
+        41.744791666666686,
+        300.87239583333337
+      ],
+      "text": "Capacitance (F)"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        47.078125000000014,
+        124.75559937478852,
+        69.20312500000001,
+        136.75559937478852
+      ],
+      "text": "100"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        47.078125000000014,
+        188.59974041624372,
+        69.20312500000001,
+        200.59974041624372
+      ],
+      "text": "200"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        47.078125000000014,
+        252.44388145769892,
+        69.20312500000001,
+        264.4438814576989
+      ],
+      "text": "300"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        47.078125000000014,
+        316.28802249915407,
+        69.20312500000001,
+        328.28802249915407
+      ],
+      "text": "400"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        47.078125000000014,
+        380.1321635406092,
+        69.20312500000001,
+        392.1321635406092
+      ],
+      "text": "500"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        612.1323390151514,
+        47.07812500000001,
+        627.0073390151514,
+        59.07812500000001
+      ],
+      "text": "16"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        418.96863162878776,
+        47.07812500000001,
+        433.71863162878776,
+        59.07812500000001
+      ],
+      "text": "10"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        483.3773674242424,
+        47.07812500000001,
+        498.1273674242424,
+        59.07812500000001
+      ],
+      "text": "12"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        547.7861032196969,
+        47.07812500000001,
+        562.5361032196969,
+        59.07812500000001
+      ],
+      "text": "14"
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 13,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

@@ -1,0 +1,176 @@
+{
+  "image_metadata": {
+    "image_id": "chart_00077",
+    "resolution": {
+      "width": 1050,
+      "height": 750
+    },
+    "chart_types": [
+      "pie"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "pie",
+    "orientation": "vertical",
+    "num_annotations": 5
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": null
+    },
+    "bar_info": [],
+    "keypoint_info": [],
+    "boxplot_metadata": {},
+    "pie_geometry": {
+      "center_point": {
+        "x": -0.05445370413724532,
+        "y": 0.0838736794574636
+      },
+      "radius": 1.0,
+      "wedges": [
+        {
+          "wedge_index": 0,
+          "start_angle": 90.0,
+          "end_angle": 155.9860646724701,
+          "mid_angle": 122.99303233623505,
+          "percentage": 18.32946240901947
+        },
+        {
+          "wedge_index": 1,
+          "start_angle": 155.9860646724701,
+          "end_angle": 281.714848279953,
+          "mid_angle": 218.85045647621155,
+          "percentage": 34.9246621131897
+        },
+        {
+          "wedge_index": 2,
+          "start_angle": 281.714848279953,
+          "end_angle": 359.25097703933716,
+          "mid_angle": 320.4829126596451,
+          "percentage": 21.537813544273376
+        },
+        {
+          "wedge_index": 3,
+          "start_angle": 359.25097703933716,
+          "end_angle": 449.99998927116394,
+          "mid_angle": 404.62548315525055,
+          "percentage": 25.208058953285217
+        }
+      ]
+    },
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        388.25,
+        680.3333333333335,
+        661.75,
+        708.3333333333335
+      ],
+      "text": "Seasonal Adjustment"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        387.67185495465054,
+        243.21964311475398,
+        453.92185495465054,
+        263.219643114754
+      ],
+      "text": "34.9%"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        595.1567320093932,
+        242.01295983446772,
+        661.2817320093932,
+        262.0129598344677
+      ],
+      "text": "21.5%"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        587.1659299729042,
+        421.1439120013853,
+        653.2909299729042,
+        441.1439120013853
+      ],
+      "text": "25.2%"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        404.56776522853295,
+        461.8216084125508,
+        470.56776522853295,
+        481.8216084125508
+      ],
+      "text": "18.3%"
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 5,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

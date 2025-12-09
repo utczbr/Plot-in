@@ -1,0 +1,176 @@
+{
+  "image_metadata": {
+    "image_id": "chart_00045",
+    "resolution": {
+      "width": 840,
+      "height": 600
+    },
+    "chart_types": [
+      "pie"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "pie",
+    "orientation": "vertical",
+    "num_annotations": 5
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": null
+    },
+    "bar_info": [],
+    "keypoint_info": [],
+    "boxplot_metadata": {},
+    "pie_geometry": {
+      "center_point": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "radius": 1.0,
+      "wedges": [
+        {
+          "wedge_index": 0,
+          "start_angle": 90.0,
+          "end_angle": 179.4800752401352,
+          "mid_angle": 134.7400376200676,
+          "percentage": 24.85557645559311
+        },
+        {
+          "wedge_index": 1,
+          "start_angle": 179.4800752401352,
+          "end_angle": 244.8279082775116,
+          "mid_angle": 212.1539917588234,
+          "percentage": 18.152175843715668
+        },
+        {
+          "wedge_index": 2,
+          "start_angle": 244.8279082775116,
+          "end_angle": 318.4815448522568,
+          "mid_angle": 281.6547265648842,
+          "percentage": 20.45934349298477
+        },
+        {
+          "wedge_index": 3,
+          "start_angle": 318.4815448522568,
+          "end_angle": 450.0000160932541,
+          "mid_angle": 384.24078047275543,
+          "percentage": 36.53290867805481
+        }
+      ]
+    },
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        283.24999999999994,
+        543.6666666666666,
+        556.75,
+        566.6666666666666
+      ],
+      "text": "Safety Incident Reports"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        262.74348807552803,
+        189.30548294415195,
+        315.36848807552803,
+        207.30548294415195
+      ],
+      "text": "18.2%"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        284.8815308547858,
+        381.47982057787925,
+        337.3815308547858,
+        399.47982057787925
+      ],
+      "text": "24.9%"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        424.9950294455431,
+        120.14057842684676,
+        477.4950294455431,
+        138.14057842684676
+      ],
+      "text": "20.5%"
+    },
+    {
+      "class_id": "7",
+      "bbox": [
+        534.7798797549484,
+        335.1206295734932,
+        587.2798797549484,
+        353.1206295734932
+      ],
+      "text": "36.5%"
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 5,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

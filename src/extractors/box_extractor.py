@@ -16,6 +16,32 @@ from extractors.smart_whisker_estimator import SmartWhiskerEstimator
 from extractors.vision_based_whisker_detector import VisionBasedWhiskerDetector
 from extractors.improved_pixel_based_detector import ImprovedPixelBasedDetector
 
+
+def compute_adaptive_threshold(confidences: List[float], base_threshold: float = 0.3) -> float:
+    """
+    Compute adaptive confidence threshold based on detection quality distribution.
+    
+    For charts with generally high-quality detections, we can be stricter.
+    For charts with poor detections, we accept lower confidence to avoid fallbacks.
+    
+    Args:
+        confidences: List of confidence values from prior detections
+        base_threshold: Minimum threshold floor
+    
+    Returns:
+        Adaptive threshold value
+    """
+    if not confidences or len(confidences) < 2:
+        return base_threshold
+    
+    mean_conf = np.mean(confidences)
+    std_conf = np.std(confidences)
+    
+    # Adaptive: use mean - 1 std, but floor at base_threshold
+    adaptive = mean_conf - std_conf
+    return max(base_threshold, min(0.6, adaptive))  # Cap between 0.3 and 0.6
+
+
 class BoxExtractor(BaseExtractor):
     def __init__(self):
         super().__init__()
@@ -154,8 +180,17 @@ class BoxExtractor(BaseExtractor):
                     detection_result = improved_detector.detect_box_elements(
                         img, box['xyxy'], orientation, scale_func
                     )
+                    
+                    # Collect prior detection confidences for adaptive thresholding
+                    prior_confidences = [
+                        g['box'].get('median_confidence', 0) 
+                        for g in groups[:i] 
+                        if 'median_confidence' in g.get('box', {})
+                    ]
+                    adaptive_median_threshold = compute_adaptive_threshold(prior_confidences, base_threshold=0.3)
+                    
                     if (detection_result['median'] is not None and
-                        detection_result['median_confidence'] > 0.3):
+                        detection_result['median_confidence'] > adaptive_median_threshold):
                         box_info['median'] = detection_result['median']
                         box_info['median_detection_method'] = detection_result['detection_method']
                         box_info['median_confidence'] = detection_result['median_confidence']
@@ -222,12 +257,15 @@ class BoxExtractor(BaseExtractor):
                             box_info['whisker_high'] = w_max
                             box_info['whisker_low'] = min(w_min, q1)
                         else:
-                            if dist_to_q1_min + dist_to_q1_max < dist_to_q3_min + dist_to_q3_max:
-                                box_info['whisker_low'] = min(w_min, q1)
-                                box_info['whisker_high'] = max(w_max, q3)
-                            else:
-                                box_info['whisker_low'] = min(w_min, q1)
-                                box_info['whisker_high'] = max(w_max, q3)
+                            # Both whisker values inside box range - use IQR-based heuristic
+                            # This case indicates detection uncertainty; apply 1.5×IQR rule
+                            iqr = q3 - q1
+                            box_info['whisker_low'] = q1 - 1.5 * iqr
+                            box_info['whisker_high'] = q3 + 1.5 * iqr
+                            box_info['whisker_detection_method'] = 'iqr_fallback'
+                            self.logger.warning(
+                                f"Box {i}: Whisker coordinates inside box, using 1.5×IQR fallback"
+                            )
 
                         box_info['whisker_low'] = min(box_info['whisker_low'], q1)
                         box_info['whisker_high'] = max(box_info['whisker_high'], q3)
@@ -252,9 +290,19 @@ class BoxExtractor(BaseExtractor):
                         img, box['xyxy'], orientation, scale_func
                     )
 
+                    # Adaptive whisker threshold based on prior successful detections
+                    prior_whisker_confidences = [
+                        g['box'].get('whisker_confidence', 0) 
+                        for g in groups[:i] 
+                        if 'whisker_confidence' in g.get('box', {})
+                    ]
+                    adaptive_whisker_threshold = compute_adaptive_threshold(
+                        prior_whisker_confidences, base_threshold=0.4
+                    )
+
                     if (detection_result['whisker_low'] is not None and
                         detection_result['whisker_high'] is not None and
-                        detection_result['whisker_confidence'] > 0.5):
+                        detection_result['whisker_confidence'] > adaptive_whisker_threshold):
                         box_info['whisker_low'] = detection_result['whisker_low']
                         box_info['whisker_high'] = detection_result['whisker_high']
                         box_info['whisker_detection_method'] = detection_result['detection_method']

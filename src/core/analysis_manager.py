@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .data_manager import DataManager
 from .image_manager import ImageManager
+from .config import MODELS_CONFIG
 from pipelines.chart_pipeline import ChartAnalysisPipeline
 from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
@@ -58,10 +59,10 @@ class AnalysisManager:
             ocr_engine = OCREngineFactory.create_engine(
                 'paddle_onnx',
                 self._easyocr_reader,
-                det_model_path='models/OCR/PP-OCRv5_server_det.onnx',
-                rec_model_path='models/OCR/PP-OCRv5_server_rec.onnx',
-                dict_path='models/OCR/PP-OCRv5_server_rec.yml',
-                cls_model_path='models/OCR/PP-LCNet_x1_0_textline_ori.onnx'
+                det_model_path=MODELS_CONFIG.ocr['det'],
+                rec_model_path=MODELS_CONFIG.ocr['rec'],
+                dict_path=MODELS_CONFIG.ocr['dict'],
+                cls_model_path=MODELS_CONFIG.ocr['cls']
             )
         elif ocr_engine_name == 'Paddle_docs':
             ocr_engine = OCREngineFactory.create_engine('paddle_full', self._easyocr_reader)

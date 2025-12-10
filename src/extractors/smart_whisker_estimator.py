@@ -75,32 +75,46 @@ class SmartWhiskerEstimator:
             
             return estimated_whisker_low, estimated_whisker_high
         
-        # Strategy 3: Neighbor-based estimation
+        # Strategy 3: Distance-weighted neighbor-based estimation
         if neighboring_boxes:
-            # Calculate whisker extension ratios from neighbors
-            low_ratios = []
-            high_ratios = []
+            # Calculate whisker extension ratios from neighbors with distance weighting
+            weighted_low_ratios = []  # (ratio, weight)
+            weighted_high_ratios = []  # (ratio, weight)
             
             for neighbor in neighboring_boxes:
                 if 'whisker_low' in neighbor and 'whisker_high' in neighbor:
+                    # Filter by neighbor detection confidence
+                    neighbor_conf = neighbor.get('whisker_confidence', 0.5)
+                    if neighbor_conf < 0.5:  # Skip low-confidence neighbors
+                        continue
+                    
                     neighbor_iqr = neighbor['q3'] - neighbor['q1']
                     if neighbor_iqr > 0:
                         low_ratio = (neighbor['q1'] - neighbor['whisker_low']) / neighbor_iqr
                         high_ratio = (neighbor['whisker_high'] - neighbor['q3']) / neighbor_iqr
-                        low_ratios.append(low_ratio)
-                        high_ratios.append(high_ratio)
+                        
+                        # Distance weighting: use box position (index-based or spatial)
+                        # For now use confidence as weight proxy (higher confidence = more weight)
+                        weight = neighbor_conf
+                        
+                        weighted_low_ratios.append((low_ratio, weight))
+                        weighted_high_ratios.append((high_ratio, weight))
             
-            if low_ratios and high_ratios:
-                # Use median ratio from neighbors
-                median_low_ratio = np.median(low_ratios)
-                median_high_ratio = np.median(high_ratios)
+            if weighted_low_ratios and weighted_high_ratios:
+                # Compute weighted averages
+                total_low_weight = sum(w for _, w in weighted_low_ratios)
+                total_high_weight = sum(w for _, w in weighted_high_ratios)
                 
-                estimated_whisker_low = q1 - median_low_ratio * iqr
-                estimated_whisker_high = q3 + median_high_ratio * iqr
+                weighted_low_ratio = sum(r * w for r, w in weighted_low_ratios) / total_low_weight
+                weighted_high_ratio = sum(r * w for r, w in weighted_high_ratios) / total_high_weight
+                
+                estimated_whisker_low = q1 - weighted_low_ratio * iqr
+                estimated_whisker_high = q3 + weighted_high_ratio * iqr
                 
                 self.logger.info(
-                    f"Strategy 3 (neighbor-based): whiskers estimated from {len(low_ratios)} neighbors "
-                    f"(low_ratio={median_low_ratio:.2f}, high_ratio={median_high_ratio:.2f})"
+                    f"Strategy 3 (weighted neighbor-based): whiskers from {len(weighted_low_ratios)} "
+                    f"quality-filtered neighbors (low_ratio={weighted_low_ratio:.2f}, "
+                    f"high_ratio={weighted_high_ratio:.2f})"
                 )
                 
                 return estimated_whisker_low, estimated_whisker_high

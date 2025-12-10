@@ -1,0 +1,679 @@
+{
+  "image_metadata": {
+    "image_id": "chart_01486",
+    "resolution": {
+      "width": 1050,
+      "height": 750
+    },
+    "chart_types": [
+      "bar"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "bar",
+    "orientation": "vertical",
+    "num_annotations": 24
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": null
+    },
+    "bar_info": [
+      {
+        "center": 212.65,
+        "height": 425.3,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 425.3,
+        "series_idx": 0,
+        "bar_idx": 0,
+        "axis": "primary"
+      },
+      {
+        "center": 248.1,
+        "height": 496.2,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 496.2,
+        "series_idx": 0,
+        "bar_idx": 1,
+        "axis": "primary"
+      },
+      {
+        "center": 189.4,
+        "height": 378.8,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 378.8,
+        "series_idx": 0,
+        "bar_idx": 2,
+        "axis": "primary"
+      },
+      {
+        "center": 164.9,
+        "height": 329.8,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 329.8,
+        "series_idx": 0,
+        "bar_idx": 3,
+        "axis": "primary"
+      },
+      {
+        "center": 175.2,
+        "height": 350.4,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 350.4,
+        "series_idx": 0,
+        "bar_idx": 4,
+        "axis": "primary"
+      },
+      {
+        "center": 157.6,
+        "height": 315.2,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 315.2,
+        "series_idx": 0,
+        "bar_idx": 5,
+        "axis": "primary"
+      },
+      {
+        "center": 150.65,
+        "height": 301.3,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 301.3,
+        "series_idx": 0,
+        "bar_idx": 6,
+        "axis": "primary"
+      },
+      {
+        "center": 212.65,
+        "height": 425.3,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 425.3,
+        "series_idx": 0,
+        "bar_idx": 7,
+        "axis": "primary"
+      },
+      {
+        "center": 248.1,
+        "height": 496.2,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 496.2,
+        "series_idx": 0,
+        "bar_idx": 8,
+        "axis": "primary"
+      },
+      {
+        "center": 189.4,
+        "height": 378.8,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 378.8,
+        "series_idx": 0,
+        "bar_idx": 9,
+        "axis": "primary"
+      },
+      {
+        "center": 164.9,
+        "height": 329.8,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 329.8,
+        "series_idx": 0,
+        "bar_idx": 10,
+        "axis": "primary"
+      },
+      {
+        "center": 175.2,
+        "height": 350.4,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 350.4,
+        "series_idx": 0,
+        "bar_idx": 11,
+        "axis": "primary"
+      },
+      {
+        "center": 157.6,
+        "height": 315.2,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 315.2,
+        "series_idx": 0,
+        "bar_idx": 12,
+        "axis": "primary"
+      },
+      {
+        "center": 150.65,
+        "height": 301.3,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 301.3,
+        "series_idx": 0,
+        "bar_idx": 13,
+        "axis": "primary"
+      }
+    ],
+    "keypoint_info": [],
+    "boxplot_metadata": {},
+    "pie_geometry": {},
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        426.02083333333326,
+        680.3333333333334,
+        698.6458333333333,
+        708.3333333333334
+      ],
+      "text": "Quality Control Chart"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        431.89583333333326,
+        41.666666666666686,
+        692.7708333333333,
+        67.66666666666669
+      ],
+      "text": "Revenue per User ($)"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        41.66666666666666,
+        334.37239583333337,
+        65.66666666666666,
+        426.37239583333337
+      ],
+      "text": "Season"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        163.82932263814615,
+        76.00000000000001,
+        245.32932263814615,
+        91.07812500000001
+      ],
+      "text": "Category 1"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        283.0806595365419,
+        76.00000000000001,
+        364.5806595365419,
+        91.07812500000001
+      ],
+      "text": "Category 2"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        521.5833333333334,
+        76.00000000000001,
+        603.0833333333334,
+        91.07812500000001
+      ],
+      "text": "Category 4"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        760.0860071301249,
+        76.00000000000001,
+        841.5860071301249,
+        91.07812500000001
+      ],
+      "text": "Category 6"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        879.3373440285206,
+        76.00000000000001,
+        960.8373440285206,
+        91.07812500000001
+      ],
+      "text": "Category 7"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        402.39449643493765,
+        76.00000000000001,
+        483.76949643493765,
+        91.07812500000001
+      ],
+      "text": "Category 3"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        640.8971702317291,
+        76.00000000000001,
+        722.2721702317291,
+        91.07812500000001
+      ],
+      "text": "Category 5"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        73.99999999999999,
+        183.07425993945242,
+        101.74999999999999,
+        198.07425993945242
+      ],
+      "text": "100"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        73.99999999999999,
+        269.4870615455715,
+        101.74999999999999,
+        284.4870615455715
+      ],
+      "text": "200"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        73.99999999999999,
+        442.31266475780967,
+        101.74999999999999,
+        457.31266475780967
+      ],
+      "text": "400"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        73.99999999999999,
+        615.1382679700479,
+        101.74999999999999,
+        630.1382679700479
+      ],
+      "text": "600"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        74.12499999999999,
+        355.8998631516906,
+        101.74999999999999,
+        370.8998631516906
+      ],
+      "text": "300"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        74.12499999999999,
+        528.7254663639287,
+        101.74999999999999,
+        543.7254663639287
+      ],
+      "text": "500"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        92.49999999999999,
+        96.66145833333334,
+        101.74999999999999,
+        111.66145833333334
+      ],
+      "text": "0"
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        276.1301247771836,
+        105.66145833333334,
+        371.53119429590015,
+        534.4417799028962
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        156.87878787878785,
+        105.66145833333334,
+        252.27985739750443,
+        473.1751035641578
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        395.3814616755793,
+        105.66145833333334,
+        490.7825311942959,
+        432.9931508173124
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        633.8841354723709,
+        105.66145833333334,
+        729.2852049910875,
+        408.4519151611746
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        514.6327985739752,
+        105.66145833333334,
+        610.0338680926918,
+        390.65087803031406
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        753.1354723707666,
+        105.66145833333334,
+        848.5365418894831,
+        378.0346089958207
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        872.3868092691623,
+        105.66145833333334,
+        967.7878787878789,
+        366.02322957257013
+      ]
+    }
+  ],
+  "baselines": [
+    {
+      "id": "baseline_0",
+      "y_pixel": 644.3385416666666,
+      "x_range": [
+        116.33333333333331,
+        1008.3333333333334
+      ],
+      "width": 892.0,
+      "type": "primary",
+      "bbox": [
+        116.33333333333331,
+        94.91666666666663,
+        1008.3333333333334,
+        644.3385416666666
+      ],
+      "axis_index": 0
+    }
+  ],
+  "bars_with_baseline": [
+    {
+      "xyxy": [
+        156.87878787878785,
+        276.8248964358422,
+        252.27985739750446,
+        644.3385416666666
+      ],
+      "data_value": 425.3,
+      "series_idx": 0,
+      "bar_index": 0,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        276.1301247771836,
+        215.5582200971038,
+        371.53119429590015,
+        644.3385416666666
+      ],
+      "data_value": 496.2,
+      "series_idx": 0,
+      "bar_index": 1,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        395.3814616755793,
+        317.0068491826876,
+        490.7825311942959,
+        644.3385416666666
+      ],
+      "data_value": 378.8,
+      "series_idx": 0,
+      "bar_index": 2,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        514.6327985739752,
+        359.34912196968594,
+        610.0338680926916,
+        644.3385416666666
+      ],
+      "data_value": 329.8,
+      "series_idx": 0,
+      "bar_index": 3,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        633.8841354723709,
+        341.5480848388254,
+        729.2852049910875,
+        644.3385416666666
+      ],
+      "data_value": 350.4,
+      "series_idx": 0,
+      "bar_index": 4,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        753.1354723707666,
+        371.9653910041793,
+        848.5365418894833,
+        644.3385416666666
+      ],
+      "data_value": 315.2,
+      "series_idx": 0,
+      "bar_index": 5,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        872.3868092691623,
+        383.97677042742987,
+        967.787878787879,
+        644.3385416666666
+      ],
+      "data_value": 301.3,
+      "series_idx": 0,
+      "bar_index": 6,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        991.638146167558,
+        276.8248964358422,
+        1087.0392156862747,
+        644.3385416666666
+      ],
+      "data_value": 425.3,
+      "series_idx": 0,
+      "bar_index": 7,
+      "baseline_id": null,
+      "baseline_distance": null
+    },
+    {
+      "xyxy": [
+        1110.8894830659538,
+        215.5582200971038,
+        1206.2905525846704,
+        644.3385416666666
+      ],
+      "data_value": 496.2,
+      "series_idx": 0,
+      "bar_index": 8,
+      "baseline_id": null,
+      "baseline_distance": null
+    },
+    {
+      "xyxy": [
+        1230.1408199643495,
+        317.0068491826876,
+        1325.5418894830661,
+        644.3385416666666
+      ],
+      "data_value": 378.8,
+      "series_idx": 0,
+      "bar_index": 9,
+      "baseline_id": null,
+      "baseline_distance": null
+    },
+    {
+      "xyxy": [
+        1349.3921568627452,
+        359.34912196968594,
+        1444.7932263814619,
+        644.3385416666666
+      ],
+      "data_value": 329.8,
+      "series_idx": 0,
+      "bar_index": 10,
+      "baseline_id": null,
+      "baseline_distance": null
+    },
+    {
+      "xyxy": [
+        1468.643493761141,
+        341.5480848388254,
+        1564.0445632798576,
+        644.3385416666666
+      ],
+      "data_value": 350.4,
+      "series_idx": 0,
+      "bar_index": 11,
+      "baseline_id": null,
+      "baseline_distance": null
+    },
+    {
+      "xyxy": [
+        1587.8948306595366,
+        371.9653910041793,
+        1683.2959001782533,
+        644.3385416666666
+      ],
+      "data_value": 315.2,
+      "series_idx": 0,
+      "bar_index": 12,
+      "baseline_id": null,
+      "baseline_distance": null
+    },
+    {
+      "xyxy": [
+        1707.1461675579324,
+        383.97677042742987,
+        1802.547237076649,
+        644.3385416666666
+      ],
+      "data_value": 301.3,
+      "series_idx": 0,
+      "bar_index": 13,
+      "baseline_id": null,
+      "baseline_distance": null
+    }
+  ],
+  "baseline_keypoints": [
+    {
+      "axis_index": 0,
+      "orientation": "vertical",
+      "baseline_coordinate": 644.3385416666666,
+      "type": "zero_line",
+      "axis_limits": {
+        "y_min": 0.0,
+        "y_max": 635.8107419133767
+      }
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 24,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

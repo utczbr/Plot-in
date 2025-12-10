@@ -166,18 +166,19 @@ class EnhancedChartClassifierHypertuner:
                 'bin_alignment_weight': (4.0, 7.0),
                 'continuous_scale_weight': (2.5, 5.5),
                 'numeric_boost': (3.0, 6.0),
+                'gaussian_sigma': (0.09, 0.15),  # ADDED: Search space for sigma
                 
                 # Size thresholds
-                'scale_size_max_width': (0.045, 0.10),
-                'scale_size_max_height': (0.025, 0.055),
+                'scale_size_max_width': (0.06, 0.12),  # WIDENED
+                'scale_size_max_height': (0.03, 0.07), # WIDENED
                 
                 # Title detection
                 'title_size_min': (0.10, 0.18),
                 'title_aspect_min': (5.0, 8.5),
                 
                 # Thresholds
-                'classification_threshold': (1.5, 3.5),
-                'edge_threshold': (0.13, 0.25)
+                'classification_threshold': (1.5, 3.0),
+                'edge_threshold': (0.15, 0.30)  # WIDENED
             }
         
         else:

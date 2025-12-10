@@ -77,175 +77,14 @@ class BaselineResult:
     diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
-@runtime_checkable
-class Clusterer(Protocol):
-    def fit_predict(self, X: np.ndarray) -> np.ndarray:
-        ...
-
-    def labels_(self) -> np.ndarray:
-        ...
-
-    def centers_(self) -> Optional[np.ndarray]:
-        ...
-
-    def name(self) -> str:
-        ...
-
-
-class DBSCANClusterer:
-    def __init__(self, eps: float = 8.0, min_samples: int = 2, metric: str = "euclidean"):
-        if DBSCAN is None:
-            raise ImportError("scikit-learn DBSCAN is required for DBSCANClusterer.")
-        self._db = DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
-        self._labels: Optional[np.ndarray] = None
-        self._last_X: Optional[np.ndarray] = None
-
-    def fit_predict(self, X: np.ndarray) -> np.ndarray:
-        self._last_X = np.asarray(X)
-        self._labels = self._db.fit_predict(self._last_X)
-        return self._labels
-
-    def labels_(self) -> np.ndarray:
-        if self._labels is None:
-            raise RuntimeError("DBSCANClusterer used before fit_predict.")
-        return self._labels
-
-    def centers_(self) -> Optional[np.ndarray]:
-        if self._labels is None or self._last_X is None:
-            return None
-        labs = self._labels
-        unique = [lab for lab in np.unique(labs) if lab != -1]
-        if len(unique) == 0:
-            return None
-        centers = [np.median(self._last_X[labs == lab], axis=0) for lab in unique]
-        return np.stack(centers, axis=0).astype(np.float32)
-
-    def name(self) -> str:
-        return "DBSCAN"
-
-
-class HDBSCANClusterer:
-    def __init__(self, min_cluster_size: int = 3, min_samples: Optional[int] = None, metric: str = "euclidean"):
-        if hdbscan_mod is None:
-            raise ImportError("hdbscan is required for HDBSCANClusterer.")
-        self._hdb = hdbscan_mod.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples, metric=metric)
-        self._labels: Optional[np.ndarray] = None
-        self._probs: Optional[np.ndarray] = None
-        self._last_X: Optional[np.ndarray] = None
-
-    def fit_predict(self, X: np.ndarray) -> np.ndarray:
-        self._last_X = np.asarray(X)
-        self._labels = self._hdb.fit_predict(self._last_X)
-        self._probs = getattr(self._hdb, "probabilities_", None)
-        return self._labels
-
-    def labels_(self) -> np.ndarray:
-        if self._labels is None:
-            raise RuntimeError("HDBSCANClusterer used before fit_predict.")
-        return self._labels
-
-    def centers_(self) -> Optional[np.ndarray]:
-        if self._labels is None or self._last_X is None:
-            return None
-        labs = self._labels
-        unique = [lab for lab in np.unique(labs) if lab != -1]
-        if len(unique) == 0:
-            return None
-        centers = [np.median(self._last_X[labs == lab], axis=0) for lab in unique]
-        return np.stack(centers, axis=0).astype(np.float32)
-
-    def name(self) -> str:
-        return "HDBSCAN"
-
-
-def _sample_gumbel(shape, eps: float = 1e-9) -> np.ndarray:
-    U = np.random.uniform(low=0.0, high=1.0, size=shape)
-    return -np.log(-np.log(U + eps) + eps)
-
-
-def gumbel_softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
-    g = _sample_gumbel(logits.shape)
-    y = (logits + g) / max(temperature, 1e-6)
-    y = y - y.max(axis=-1, keepdims=True)
-    e = np.exp(y)
-    return e / (e.sum(axis=-1, keepdims=True) + 1e-9)
-
-
-class KMeansGumbelClusterer:
-    def __init__(
-        self,
-        k_range: Tuple[int, int] = (1, 3),
-        n_init: int = 10,
-        max_iter: int = 300,
-        random_state: int = 42,
-        temperature: float = 0.7,
-        use_silhouette: bool = True,
-        use_ch: bool = True,
-    ):
-        if KMeans is None:
-            raise ImportError("scikit-learn KMeans is required for KMeansGumbelClusterer.")
-        self.k_range = k_range
-        self.n_init = n_init
-        self.max_iter = max_iter
-        self.random_state = random_state
-        self.temperature = temperature
-        self.use_silhouette = use_silhouette and (silhouette_score is not None)
-        self.use_ch = use_ch and (calinski_harabasz_score is not None)
-        self._labels: Optional[np.ndarray] = None
-        self._centers: Optional[np.ndarray] = None
-        self._k: int = 1
-        self._scores: Dict[str, float] = {}
-
-    def _choose_k(self, X: np.ndarray, ks: Sequence[int]) -> int:
-        best_k = ks[0] if len(ks) > 0 else 1
-        best_score = -np.inf
-        for k in ks:
-            if k < 1 or k > len(X):
-                continue
-            km = KMeans(n_clusters=k, n_init=self.n_init, max_iter=self.max_iter, random_state=self.random_state)
-            labels = km.fit_predict(X)
-            parts: List[float] = []
-            if self.use_silhouette and len(np.unique(labels)) > 1:
-                try:
-                    sil = silhouette_score(X, labels)
-                    parts.append(0.7 * sil)
-                except Exception:
-                    pass
-            if self.use_ch and len(np.unique(labels)) > 1:
-                try:
-                    ch = calinski_harabasz_score(X, labels)
-                    parts.append(0.3 * math.log(ch + 1.0))
-                except Exception:
-                    pass
-            score = sum(parts) if parts else float("-inf")
-            if score > best_score:
-                best_score, best_k = score, k
-        return int(best_k)
-
-    def fit_predict(self, X: np.ndarray) -> np.ndarray:
-        X = np.asarray(X)
-        ks = list(range(self.k_range[0], self.k_range[1] + 1))
-        chosen_k = self._choose_k(X, ks) if len(X) >= 3 else 1
-        self._k = max(1, min(int(chosen_k), len(X)))
-        km = KMeans(n_clusters=self._k, n_init=self.n_init, max_iter=self.max_iter, random_state=self.random_state)
-        hard_labels = km.fit_predict(X)
-        centers = km.cluster_centers_
-        d2 = np.sum((X[:, None, :] - centers[None, :, :]) ** 2, axis=-1)
-        _ = gumbel_softmax(-d2, temperature=self.temperature)
-        self._labels = hard_labels
-        self._centers = centers.astype(np.float32)
-        return self._labels
-
-    def labels_(self) -> np.ndarray:
-        if self._labels is None:
-            raise RuntimeError("KMeansGumbelClusterer used before fit_predict.")
-        return self._labels
-
-    def centers_(self) -> Optional[np.ndarray]:
-        return self._centers
-
-    def name(self) -> str:
-        return "KMeans+Gumbel"
+from utils.clustering import (
+    Clusterer,
+    DBSCANClusterer,
+    HDBSCANClusterer,
+    KMeansGumbelClusterer,
+    gumbel_softmax,
+    cluster_bars_by_axis
+)
 
 
 def _validate_xyxy(xyxy: Any) -> bool:
@@ -697,7 +536,7 @@ class ModularBaselineDetector:
                 logger.info("Dual-axis chart detected: computing two baselines...")
                 
                 # Cluster bars by position if dual-axis info doesn't have threshold
-                from .spatial_classification_enhanced import cluster_bars_by_axis
+                from utils.clustering import cluster_bars_by_axis
                 bar_clusters = cluster_bars_by_axis(chart_elements, w, dual_axis_info)
                 
                 # Compute primary baseline (left bars)

@@ -34,66 +34,146 @@ class ColorMappingService:
         self.max_value = max_value
         self.value_range = max_value - min_value
         
+    def calibrate_from_known_values(self, color_samples: List[Tuple[np.ndarray, float]]) -> None:
+        """
+        Calibrate using 3D RGB trajectory mapping.
+        
+        Learns the piecewise linear curve through RGB space that defines the color scale.
+        """
+        if not color_samples or len(color_samples) < 2:
+            return
+            
+        # 1. Extract mean RGB vectors for each sample
+        points = []
+        for color_sample, val in color_samples:
+            if color_sample.size > 0:
+                # Average BGR color (opencv uses BGR)
+                avg_bgr = np.mean(color_sample, axis=(0, 1))
+                points.append({
+                    'val': val,
+                    'vec': avg_bgr.astype(float) # [B, G, R]
+                })
+        
+        if len(points) < 2:
+            return
+
+        # 2. Sort by value to define the trajectory order
+        points.sort(key=lambda x: x['val'])
+        
+        # 3. Store calibration curve
+        self.calibration_curve = points
+        self.is_calibrated = True
+        
+        self.min_value = points[0]['val']
+        self.max_value = points[-1]['val']
+        self.value_range = self.max_value - self.min_value
+
     def map_color_to_value(self, cell_image: np.ndarray) -> float:
         """
-        Map the color of a cell to a numeric value.
+        Map color to value using orthogonal projection onto the calibrated 3D curve.
         
-        Args:
-            cell_image: Image array of the heatmap cell
-            
-        Returns:
-            Numeric value corresponding to the cell's color
+        Fallback hierarchy:
+        1. Calibrated 3D RGB curve projection (most accurate)
+        2. LAB lightness mapping (good for grayscale/intensity scales)
+        3. HSV hue mapping (good for colorscale heatmaps like red→blue)
+        4. HSV brightness (final fallback)
         """
         if cell_image.size == 0:
             return 0.0
             
-        # Convert to HSV for better color-based value estimation
-        hsv = cv2.cvtColor(cell_image, cv2.COLOR_BGR2HSV)
-        
-        # For different color scales, different approaches work better
-        if self.color_scale == 'viridis':
-            # For viridis, brightness (V) often correlates with value
-            avg_v = np.mean(hsv[:,:,2])
-            return self.min_value + (avg_v / 255.0) * self.value_range
-        elif self.color_scale == 'hot':
-            # For hot colormap, use a combination of HSV channels
-            avg_h = np.mean(hsv[:,:,0])
-            avg_s = np.mean(hsv[:,:,1])
-            avg_v = np.mean(hsv[:,:,2])
-            # Weight the value channel heavily, with some consideration for hue/saturation
-            weighted_value = (0.2 * (avg_h / 179.0) + 0.2 * (avg_s / 255.0) + 0.6 * (avg_v / 255.0))
-            return self.min_value + weighted_value * self.value_range
-        else:
-            # General approach: use brightness as proxy for value
-            avg_brightness = np.mean(hsv[:,:,2])
-            # Normalize to range [0, 1] then scale to our desired range
-            normalized = avg_brightness / 255.0
+        # Extract query vector
+        query_vec = np.mean(cell_image, axis=(0, 1)).astype(float) # [B, G, R]
+
+        # Tier 1: Calibrated curve projection
+        if hasattr(self, 'is_calibrated') and self.is_calibrated:
+            try:
+                return self._project_onto_curve(query_vec)
+            except Exception:
+                pass  # Fall through to fallbacks
+
+        # Tier 2: LAB lightness mapping (good for grayscale/intensity colorscales)
+        try:
+            lab = cv2.cvtColor(cell_image, cv2.COLOR_BGR2LAB)
+            avg_l = np.mean(lab[:,:,0])  # L channel (lightness)
+            normalized = avg_l / 255.0
             return self.min_value + normalized * self.value_range
-    
-    def calibrate_from_known_values(self, color_samples: List[Tuple[np.ndarray, float]]) -> None:
-        """
-        Calibrate the color mapping using known color-value pairs.
-        
-        Args:
-            color_samples: List of (color_sample, true_value) tuples
-        """
-        if not color_samples:
-            return
+        except Exception:
+            pass
+
+        # Tier 3: HSV hue mapping (good for rainbow/colorscale heatmaps)
+        try:
+            hsv = cv2.cvtColor(cell_image, cv2.COLOR_BGR2HSV)
+            avg_h = np.mean(hsv[:,:,0])  # H channel (hue, 0-179 in OpenCV)
+            avg_s = np.mean(hsv[:,:,1])  # S channel (saturation)
             
-        # Calculate the relationship between color intensity and actual values
-        intensities = []
-        true_values = []
+            # Only use hue if saturation is high enough (colored, not grayscale)
+            if avg_s > 30:  # Threshold for "has color"
+                # Normalize hue: OpenCV hue is 0-179
+                # Common heatmap: blue(120) -> cyan(90) -> green(60) -> yellow(30) -> red(0/180)
+                # We'll map hue linearly but handle the red wrap-around
+                
+                # Shift so that blue (120) is 0 and red (0/180) is 1
+                # hue_shift = (180 - hue) mod 180 gives: red=0, blue=60 (inverted)
+                # Better: hue_norm = (120 - hue) / 120 for blue→green→red
+                
+                if avg_h <= 120:
+                    # Blue(120) to Red(0): linear mapping
+                    hue_normalized = 1.0 - (avg_h / 120.0)
+                else:
+                    # Red wraps at 180, so hue 121-179 is also "red-ish"
+                    # Map 120-180 range to ~0 (close to red)
+                    hue_normalized = 1.0 - ((180 - avg_h) / 120.0)
+                    hue_normalized = max(0.0, min(1.0, hue_normalized))
+                
+                return self.min_value + hue_normalized * self.value_range
+        except Exception:
+            pass
+
+        # Tier 4: HSV brightness (final fallback)
+        try:
+            hsv = cv2.cvtColor(cell_image, cv2.COLOR_BGR2HSV)
+            avg_v = np.mean(hsv[:,:,2])
+            normalized = avg_v / 255.0
+            return self.min_value + normalized * self.value_range
+        except Exception:
+            return self.min_value  # Absolute fallback
+
+    def _project_onto_curve(self, query: np.ndarray) -> float:
+        """
+        Find closest point on the piecewise linear curve and return its interpolated value.
+        """
+        curve = self.calibration_curve
+        best_dist_sq = float('inf')
+        best_val = curve[0]['val']
         
-        for color_sample, true_value in color_samples:
-            if color_sample.size > 0:
-                hsv = cv2.cvtColor(color_sample, cv2.COLOR_BGR2HSV)
-                avg_brightness = np.mean(hsv[:,:,2])
-                intensities.append(avg_brightness)
-                true_values.append(true_value)
-        
-        if len(intensities) > 1:
-            # Fit a simple linear relationship
-            # In a real implementation, we'd use a more sophisticated model
-            self.min_value = min(true_values)
-            self.max_value = max(true_values)
-            self.value_range = self.max_value - self.min_value
+        # Check each segment
+        for i in range(len(curve) - 1):
+            p1 = curve[i]
+            p2 = curve[i+1]
+            
+            v = p2['vec'] - p1['vec'] # Segment vector
+            w = query - p1['vec']     # Vector from p1 to query
+            
+            # Project w onto v
+            # t = (w . v) / (v . v)
+            v_len_sq = np.dot(v, v)
+            if v_len_sq < 1e-6:
+                # Points are identical, treat as single point
+                t = 0.0
+            else:
+                t = np.dot(w, v) / v_len_sq
+                t = max(0.0, min(1.0, t)) # Clamp to segment
+            
+            # Closest point on segment
+            closest = p1['vec'] + t * v
+            
+            # Distance squared
+            d = closest - query
+            dist_sq = np.dot(d, d)
+            
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                # Linear interpolation of value
+                best_val = p1['val'] + t * (p2['val'] - p1['val'])
+                
+        return float(best_val)

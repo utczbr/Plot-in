@@ -113,8 +113,9 @@ class OrientationDetectionService:
             )
         
         # Extract dimensions
-        widths = np.array([el['xyxy'][2] - el['xyxy'][0] for el in elements])
-        heights = np.array([el['xyxy'][3] - el['xyxy'][1] for el in elements])
+        # Extract dimensions (Force float to avoid sequence/object types)
+        widths = np.array([float(el['xyxy'][2]) - float(el['xyxy'][0]) for el in elements], dtype=np.float64)
+        heights = np.array([float(el['xyxy'][3]) - float(el['xyxy'][1]) for el in elements], dtype=np.float64)
         
         # Calculate statistics
         mean_w = np.mean(widths)

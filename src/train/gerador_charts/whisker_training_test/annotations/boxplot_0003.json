@@ -1,0 +1,159 @@
+{
+  "chart_id": 3,
+  "image_file": "boxplot_0003.png",
+  "chart_type": "boxplot",
+  "orientation": "vertical",
+  "is_scientific": true,
+  "num_boxes": 7,
+  "boxes": [
+    {
+      "box_id": 0,
+      "q1": 23.0,
+      "q3": 27.1,
+      "iqr": 4.1,
+      "median": 25.2,
+      "median_confidence": 1.0,
+      "whisker_low": 23.0,
+      "whisker_high": 32.8,
+      "outliers": [
+        12.0,
+        36.7,
+        35.0
+      ],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 3,
+        "outliers_below_q1": 1,
+        "outliers_above_q3": 2,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 1.3902
+      }
+    },
+    {
+      "box_id": 1,
+      "q1": 7.4,
+      "q3": 11.925,
+      "iqr": 4.525,
+      "median": 9.55,
+      "median_confidence": 1.0,
+      "whisker_low": 7.4,
+      "whisker_high": 17.6,
+      "outliers": [
+        93.6,
+        65.5,
+        34.2,
+        23.2
+      ],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 4,
+        "outliers_below_q1": 0,
+        "outliers_above_q3": 4,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 1.2541
+      }
+    },
+    {
+      "box_id": 2,
+      "q1": 63.11,
+      "q3": 101.58,
+      "iqr": 38.47,
+      "median": 88.65,
+      "median_confidence": 1.0,
+      "whisker_low": 63.11,
+      "whisker_high": 105.0,
+      "outliers": [],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 0,
+        "outliers_below_q1": 0,
+        "outliers_above_q3": 0,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 0.0889
+      }
+    },
+    {
+      "box_id": 3,
+      "q1": 56.875,
+      "q3": 73.8,
+      "iqr": 16.925,
+      "median": 66.8,
+      "median_confidence": 1.0,
+      "whisker_low": 56.875,
+      "whisker_high": 91.4,
+      "outliers": [],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 0,
+        "outliers_below_q1": 0,
+        "outliers_above_q3": 0,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 1.0399
+      }
+    },
+    {
+      "box_id": 4,
+      "q1": 46.15,
+      "q3": 61.85,
+      "iqr": 15.7,
+      "median": 55.1,
+      "median_confidence": 1.0,
+      "whisker_low": 46.15,
+      "whisker_high": 76.9,
+      "outliers": [
+        89.9,
+        92.8
+      ],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 2,
+        "outliers_below_q1": 0,
+        "outliers_above_q3": 2,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 0.9586
+      }
+    },
+    {
+      "box_id": 5,
+      "q1": 22.3675,
+      "q3": 45.3825,
+      "iqr": 23.015,
+      "median": 28.615,
+      "median_confidence": 1.0,
+      "whisker_low": 22.3675,
+      "whisker_high": 70.3,
+      "outliers": [
+        -20.55,
+        -21.1,
+        -32.67
+      ],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 3,
+        "outliers_below_q1": 3,
+        "outliers_above_q3": 0,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 1.0827
+      }
+    },
+    {
+      "box_id": 6,
+      "q1": 41.2,
+      "q3": 95.6,
+      "iqr": 54.4,
+      "median": 89.0,
+      "median_confidence": 1.0,
+      "whisker_low": 41.2,
+      "whisker_high": 100.9,
+      "outliers": [],
+      "orientation": "vertical",
+      "features": {
+        "outlier_count": 0,
+        "outliers_below_q1": 0,
+        "outliers_above_q3": 0,
+        "whisker_low_ratio": 0.0,
+        "whisker_high_ratio": 0.0974
+      }
+    }
+  ]
+}

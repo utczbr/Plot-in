@@ -1,0 +1,298 @@
+{
+  "image_metadata": {
+    "image_id": "chart_01187",
+    "resolution": {
+      "width": 1050,
+      "height": 750
+    },
+    "chart_types": [
+      "bar"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "bar",
+    "orientation": "vertical",
+    "num_annotations": 13
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": null
+    },
+    "bar_info": [
+      {
+        "center": 8.005,
+        "height": 16.01,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 16.01,
+        "series_idx": 0,
+        "bar_idx": 0,
+        "axis": "primary"
+      },
+      {
+        "center": 11.55,
+        "height": 23.1,
+        "width": 0.7999999999999998,
+        "bottom": 0.0,
+        "top": 23.1,
+        "series_idx": 0,
+        "bar_idx": 1,
+        "axis": "primary"
+      }
+    ],
+    "keypoint_info": [],
+    "boxplot_metadata": {},
+    "pie_geometry": {},
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        389.83333333333326,
+        680.3333333333334,
+        732.5833333333333,
+        708.3333333333334
+      ],
+      "text": "Pharmacokinetic Profile"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        41.66666666666665,
+        276.95833333333337,
+        64.66666666666666,
+        485.70833333333337
+      ],
+      "text": "Birefringence (\u0394n)"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        486.52083333333326,
+        41.666666666666714,
+        635.8958333333333,
+        64.66666666666671
+      ],
+      "text": "Titer (ng/mL)"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        275.69696969696963,
+        73.00000000000004,
+        358.94696969696963,
+        93.00000000000004
+      ],
+      "text": "Group 1"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        763.469696969697,
+        73.00000000000004,
+        846.719696969697,
+        93.00000000000004
+      ],
+      "text": "Group 2"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        72.99999999999999,
+        292.4882910500719,
+        99.49999999999999,
+        312.4882910500719
+      ],
+      "text": "10"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        72.99999999999999,
+        390.9407699084412,
+        99.49999999999999,
+        410.9407699084412
+      ],
+      "text": "15"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        72.99999999999999,
+        489.3932487668105,
+        99.49999999999999,
+        509.3932487668105
+      ],
+      "text": "20"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        72.99999999999999,
+        587.8457276251797,
+        99.49999999999999,
+        607.8457276251797
+      ],
+      "text": "25"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        86.24999999999999,
+        95.58333333333337,
+        99.49999999999999,
+        115.58333333333337
+      ],
+      "text": "0"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        86.24999999999999,
+        194.03581219170263,
+        99.49999999999999,
+        214.03581219170263
+      ],
+      "text": "5"
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        642.5037878787879,
+        107.58333333333337,
+        967.685606060606,
+        562.4337856589995
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        154.73106060606054,
+        107.58333333333337,
+        479.91287878787875,
+        422.8281706378318
+      ]
+    }
+  ],
+  "baselines": [
+    {
+      "id": "baseline_0",
+      "y_pixel": 642.4166666666666,
+      "x_range": [
+        114.08333333333331,
+        1008.3333333333334
+      ],
+      "width": 894.25,
+      "type": "primary",
+      "bbox": [
+        114.08333333333331,
+        94.91666666666663,
+        1008.3333333333334,
+        642.4166666666666
+      ],
+      "axis_index": 0
+    }
+  ],
+  "bars_with_baseline": [
+    {
+      "xyxy": [
+        154.73106060606054,
+        327.1718293621682,
+        479.91287878787875,
+        642.4166666666666
+      ],
+      "data_value": 16.01,
+      "series_idx": 0,
+      "bar_index": 0,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        561.2083333333333,
+        187.56621434100055,
+        886.3901515151514,
+        642.4166666666666
+      ],
+      "data_value": 23.1,
+      "series_idx": 0,
+      "bar_index": 1,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    }
+  ],
+  "baseline_keypoints": [
+    {
+      "axis_index": 0,
+      "orientation": "vertical",
+      "baseline_coordinate": 642.4166666666666,
+      "type": "zero_line",
+      "axis_limits": {
+        "y_min": 0.0,
+        "y_max": 27.805292784329826
+      }
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 13,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

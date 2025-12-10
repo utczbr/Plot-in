@@ -96,3 +96,28 @@ MODE_CONFIGS = {
     'optimized': OPTIMIZED_MODE,
     'precise': PRECISE_MODE
 }
+
+@dataclass
+class ModelsConfig:
+    classification: str
+    detection: Dict[str, str]
+    ocr: Dict[str, str]
+
+MODELS_CONFIG = ModelsConfig(
+    classification='classification.onnx',
+    detection={
+        'bar': 'detect_bar.onnx',
+        'box': 'detect_box.onnx',
+        'line': 'detect_line.onnx',
+        'scatter': 'detect_scatter.onnx',
+        'histogram': 'detect_histogram.onnx',
+        'heatmap': 'detect_heatmap.onnx',
+        'pie': 'Pie_pose.onnx'
+    },
+    ocr={
+        'det': 'models/OCR/PP-OCRv5_server_det.onnx',
+        'rec': 'models/OCR/PP-OCRv5_server_rec.onnx',
+        'cls': 'models/OCR/PP-LCNet_x1_0_textline_ori.onnx',
+        'dict': 'models/OCR/PP-OCRv5_server_rec.yml'
+    }
+)

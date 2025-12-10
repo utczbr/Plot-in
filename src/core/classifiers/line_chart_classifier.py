@@ -37,7 +37,15 @@ class LineChartClassifier(BaseChartClassifier):
             # Thresholds
             'classification_threshold': 2.5,
             'edge_threshold_x': 0.20,
-            'edge_threshold_y': 0.85
+            'edge_threshold_y': 0.85,
+            
+            # NEW: Gaussian kernel weights (Phase 14)
+            'gaussian_kernel_weight': 1.2,  # Slight boost
+            'left_axis_weight': 5.0,
+            'right_axis_weight': 4.0,
+            'bottom_axis_weight': 5.0,
+            'top_title_weight': 4.0,
+            'center_plot_weight': 2.0
         }
     
     def classify(
@@ -172,6 +180,29 @@ class LineChartClassifier(BaseChartClassifier):
         rel_w, rel_h = feat['rel_w'], feat['rel_h']
         aspect = feat['aspect']
         is_numeric = feat['is_numeric']
+        
+        # === GAUSSIAN REGION SCORING (Phase 14) ===
+        gaussian_weights = {
+            'left_axis_weight': self.params.get('left_axis_weight', 5.0),
+            'right_axis_weight': self.params.get('right_axis_weight', 4.0),
+            'bottom_axis_weight': self.params.get('bottom_axis_weight', 5.0),
+            'top_title_weight': self.params.get('top_title_weight', 4.0),
+            'center_plot_weight': self.params.get('center_plot_weight', 2.0)
+        }
+        
+        region_scores = self._compute_gaussian_region_scores(
+            (nx, ny),
+            sigma_x=0.09,
+            sigma_y=0.09,
+            weights=gaussian_weights
+        )
+        
+        kernel_weight = self.params.get('gaussian_kernel_weight', 1.2)
+        
+        # Apply Gaussian scores
+        scores['scale_label'] += (region_scores['left_axis'] + region_scores['right_axis'] + region_scores['bottom_axis']) * kernel_weight
+        scores['axis_title'] += region_scores['top_title'] * kernel_weight
+        scores['scale_label'] -= region_scores['center_plot']
         
         # === SCALE LABEL SCORING (Primary for line charts) ===
         # Small size

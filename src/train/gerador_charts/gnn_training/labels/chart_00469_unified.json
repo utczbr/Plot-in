@@ -1,0 +1,370 @@
+{
+  "image_metadata": {
+    "image_id": "chart_00469",
+    "resolution": {
+      "width": 1050,
+      "height": 750
+    },
+    "chart_types": [
+      "bar"
+    ],
+    "theme": {},
+    "effects_applied": []
+  },
+  "chart_analysis": {
+    "chart_type": "bar",
+    "orientation": "vertical",
+    "num_annotations": 18
+  },
+  "chart_generation_metadata": {
+    "scale_axis_info": {
+      "primary_scale_axis": "y",
+      "secondary_scale_axis": null
+    },
+    "bar_info": [
+      {
+        "center": 778.0,
+        "height": 1556.0,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 1556.0,
+        "series_idx": 0,
+        "bar_idx": 0,
+        "axis": "primary"
+      },
+      {
+        "center": 781.5,
+        "height": 1563.0,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 1563.0,
+        "series_idx": 0,
+        "bar_idx": 1,
+        "axis": "primary"
+      },
+      {
+        "center": 520.0,
+        "height": 1040.0,
+        "width": 0.8,
+        "bottom": 0.0,
+        "top": 1040.0,
+        "series_idx": 0,
+        "bar_idx": 2,
+        "axis": "primary"
+      }
+    ],
+    "keypoint_info": [],
+    "boxplot_metadata": {},
+    "pie_geometry": {},
+    "series_info": {
+      "count": 1,
+      "names": [],
+      "stacking_mode": null,
+      "dual_axis": {}
+    },
+    "visual_style": {
+      "style": null,
+      "pattern": null,
+      "is_scientific": false
+    }
+  },
+  "raw_annotations": [
+    {
+      "class_id": "6",
+      "bbox": [
+        447.27083333333337,
+        680.3333333333334,
+        693.5208333333334,
+        708.3333333333334
+      ],
+      "text": "Innovation Pipeline"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        41.66666666666667,
+        234.52083333333337,
+        67.66666666666669,
+        528.1458333333334
+      ],
+      "text": "Average Order Value ($)"
+    },
+    {
+      "class_id": "2",
+      "bbox": [
+        542.4583333333334,
+        41.666666666666714,
+        598.3333333333334,
+        67.66666666666671
+      ],
+      "text": "SKU"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        524.5833333333333,
+        76.00000000000004,
+        616.2083333333333,
+        93.00000000000004
+      ],
+      "text": "Category 2"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        240.27083333333331,
+        76.00000000000004,
+        331.7708333333333,
+        93.00000000000004
+      ],
+      "text": "Category 1"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        809.0208333333333,
+        76.00000000000004,
+        900.5208333333333,
+        93.00000000000004
+      ],
+      "text": "Category 3"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        76.00000000000001,
+        430.6908646376017,
+        117.87500000000001,
+        447.6908646376017
+      ],
+      "text": "1000"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        76.00000000000001,
+        497.4123708984554,
+        117.87500000000001,
+        514.4123708984554
+      ],
+      "text": "1200"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        76.00000000000001,
+        630.8553834201628,
+        117.87500000000001,
+        647.8553834201628
+      ],
+      "text": "1600"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        76.12500000000001,
+        564.1338771593091,
+        117.87500000000001,
+        581.1338771593091
+      ],
+      "text": "1400"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        86.37500000000001,
+        163.80483959418706,
+        117.87500000000001,
+        180.80483959418706
+      ],
+      "text": "200"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        86.37500000000001,
+        297.2478521158944,
+        117.87500000000001,
+        314.2478521158944
+      ],
+      "text": "600"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        86.37500000000001,
+        363.96935837674806,
+        117.87500000000001,
+        380.96935837674806
+      ],
+      "text": "800"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        86.50000000000001,
+        230.52634585504072,
+        117.87500000000001,
+        247.52634585504072
+      ],
+      "text": "400"
+    },
+    {
+      "class_id": "8",
+      "bbox": [
+        107.37500000000001,
+        97.08333333333337,
+        117.87500000000001,
+        114.08333333333337
+      ],
+      "text": "0"
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        456.64583333333326,
+        107.58333333333337,
+        684.1458333333333,
+        629.0119047619048
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        172.27083333333331,
+        107.58333333333337,
+        399.77083333333326,
+        626.6766520427749
+      ]
+    },
+    {
+      "class_id": "1",
+      "bbox": [
+        741.0208333333333,
+        107.58333333333337,
+        968.5208333333333,
+        454.53516588977243
+      ]
+    }
+  ],
+  "baselines": [
+    {
+      "id": "baseline_0",
+      "y_pixel": 642.4166666666666,
+      "x_range": [
+        132.45833333333334,
+        1008.3333333333334
+      ],
+      "width": 875.875,
+      "type": "primary",
+      "bbox": [
+        132.45833333333334,
+        94.91666666666663,
+        1008.3333333333334,
+        642.4166666666666
+      ],
+      "axis_index": 0
+    }
+  ],
+  "bars_with_baseline": [
+    {
+      "xyxy": [
+        172.27083333333331,
+        123.32334795722511,
+        399.7708333333333,
+        642.4166666666666
+      ],
+      "data_value": 1556.0,
+      "series_idx": 0,
+      "bar_index": 0,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        456.64583333333326,
+        120.98809523809518,
+        684.1458333333333,
+        642.4166666666666
+      ],
+      "data_value": 1563.0,
+      "series_idx": 0,
+      "bar_index": 1,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    },
+    {
+      "xyxy": [
+        741.0208333333333,
+        295.46483411022757,
+        968.5208333333333,
+        642.4166666666666
+      ],
+      "data_value": 1040.0,
+      "series_idx": 0,
+      "bar_index": 2,
+      "baseline_id": "baseline_0",
+      "baseline_distance": 0.0
+    }
+  ],
+  "baseline_keypoints": [
+    {
+      "axis_index": 0,
+      "orientation": "vertical",
+      "baseline_coordinate": 642.4166666666666,
+      "type": "zero_line",
+      "axis_limits": {
+        "y_min": 0.0,
+        "y_max": 1641.15
+      }
+    }
+  ],
+  "annotations_by_element": {
+    "data_elements": {
+      "bars": [],
+      "datapoints": [],
+      "boxes": [],
+      "medianlines": [],
+      "outliers": [],
+      "wedges": [],
+      "line_segments": [],
+      "area_boundaries": [],
+      "cells": []
+    },
+    "text_elements": {
+      "chart_title": [],
+      "axis_titles": [],
+      "data_labels": [],
+      "legend": []
+    },
+    "scale_elements": {
+      "scale_labels": [],
+      "tick_labels": []
+    },
+    "statistical_elements": {
+      "error_bars": [],
+      "significance_markers": [],
+      "range_indicators": []
+    },
+    "additional_elements": {
+      "colorbar": [],
+      "connector_lines": []
+    }
+  },
+  "ocr_ground_truth": [],
+  "statistics": {
+    "total_annotations": 18,
+    "annotation_counts_by_type": {
+      "bars": 0,
+      "datapoints": 0,
+      "boxes": 0,
+      "wedges": 0,
+      "line_segments": 0,
+      "cells": 0,
+      "scale_labels": 0,
+      "tick_labels": 0,
+      "text_annotations": 0
+    },
+    "bar_info": {}
+  }
+}

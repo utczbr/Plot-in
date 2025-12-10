@@ -40,7 +40,15 @@ class BarChartClassifier(BaseChartClassifier):
             
             # Decision thresholds
             'classification_threshold': 2.0,
-            'confidence_margin_factor': 0.4
+            'confidence_margin_factor': 0.4,
+            
+            # NEW: Gaussian kernel weights (Phase 14)
+            'gaussian_kernel_weight': 1.0,  # Default for bar
+            'left_axis_weight': 5.0,
+            'right_axis_weight': 4.0,
+            'bottom_axis_weight': 6.0,  # Boosted for tick labels
+            'top_title_weight': 4.0,
+            'center_plot_weight': 3.0  # Penalty for center labels
         }
     
     def classify(
@@ -52,17 +60,17 @@ class BarChartClassifier(BaseChartClassifier):
         orientation: Orientation
     ) -> ClassificationResult:
         """
-        Bar chart specific classification with context-aware scoring
+        Bar chart specific classification with adaptive thresholding.
         """
         bars = chart_elements
         if not self.validate_inputs(axis_labels, bars):
             return self._empty_result()
         
-        # Extract bar-specific features
+        # Extract bar-specific features (includes distance features)
         label_features = self._extract_bar_features(axis_labels, img_width, img_height)
         bar_context = self._compute_bar_context(bars, img_width, img_height, orientation)
         
-        # Classification with bar-specific logic
+        # Classification with adaptive thresholding
         classified = {'scale_label': [], 'tick_label': [], 'axis_title': []}
         all_scores = []
         
@@ -70,23 +78,33 @@ class BarChartClassifier(BaseChartClassifier):
             scores = self._compute_bar_scores(feat, bar_context, orientation)
             all_scores.append(scores)
             
-            # Decision logic
             best_class = max(scores, key=scores.get)
-            threshold = self.params['classification_threshold']
+            
+            # IMPROVEMENT: Adaptive threshold based on margin analysis
+            sorted_scores = sorted(scores.values(), reverse=True)
+            margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else float('inf')
+            
+            base_threshold = self.params['classification_threshold']
+            if margin < 0.5:  # Ambiguous
+                threshold = base_threshold * 1.25
+            elif margin > 2.0:  # Clear
+                threshold = base_threshold * 0.9
+            else:
+                threshold = base_threshold
             
             if scores[best_class] > threshold:
                 classified[best_class].append(feat['label'])
             else:
-                # Default for bars: numeric = scale, non-numeric = tick
-                if feat['is_numeric']:
-                    classified['scale_label'].append(feat['label'])
-                else:
-                    classified['tick_label'].append(feat['label'])
+                # IMPROVEMENT: Enhanced fallback
+                self._apply_fallback_classification(feat, classified)
         
         # Post-process: align tick labels with bars
         classified['tick_label'] = self._align_ticks_with_bars(
             classified['tick_label'], bars, orientation, img_width, img_height
         )
+        
+        # IMPROVEMENT: Apply constraint-based post-processing
+        classified = self._apply_constraints(classified, label_features)
         
         confidence = self._compute_confidence(all_scores)
         
@@ -108,7 +126,57 @@ class BarChartClassifier(BaseChartClassifier):
             metadata=metadata
         )
     
+    def _apply_fallback_classification(self, feat: Dict, classified: Dict):
+        """Multi-stage fallback when primary classification is ambiguous."""
+        min_edge_dist = feat.get('min_edge_dist', 0.5)
+        
+        if min_edge_dist < 0.15:
+            classified['scale_label'].append(feat['label'])
+        elif min_edge_dist > 0.3:
+            classified['tick_label'].append(feat['label'])
+        elif feat.get('is_small', False):
+            classified['scale_label'].append(feat['label'])
+        elif feat['is_numeric']:
+            classified['scale_label'].append(feat['label'])
+        else:
+            classified['tick_label'].append(feat['label'])
+    
+    def _apply_constraints(self, classified: Dict, features: List[Dict]) -> Dict:
+        """Apply domain-specific constraints to refine classifications."""
+        label_to_feat = {tuple(f['label']['xyxy']): f for f in features}
+        
+        refined_scale = []
+        refined_tick = []
+        swaps = []
+        
+        for label in classified.get('scale_label', []):
+            feat = label_to_feat.get(tuple(label['xyxy']))
+            if feat and feat.get('min_edge_dist', 0) >= 0.25:
+                swaps.append((label, 'scale_to_tick'))
+            else:
+                refined_scale.append(label)
+        
+        for label in classified.get('tick_label', []):
+            feat = label_to_feat.get(tuple(label['xyxy']))
+            if feat and feat.get('min_edge_dist', 0.5) < 0.1:
+                swaps.append((label, 'tick_to_scale'))
+            else:
+                refined_tick.append(label)
+        
+        for label, swap_type in swaps:
+            if swap_type == 'scale_to_tick':
+                refined_tick.append(label)
+            else:
+                refined_scale.append(label)
+        
+        return {
+            'scale_label': refined_scale,
+            'tick_label': refined_tick,
+            'axis_title': classified.get('axis_title', [])
+        }
+    
     def _extract_bar_features(self, labels: List[Dict], w: int, h: int) -> List[Dict]:
+        """Extract comprehensive features including distance metrics."""
         features = []
         for label in labels:
             x1, y1, x2, y2 = label['xyxy']
@@ -116,17 +184,38 @@ class BarChartClassifier(BaseChartClassifier):
             width, height = x2 - x1, y2 - y1
             
             text = label.get('text', '')
-            is_num = is_numeric(text)
+            is_num = is_numeric(text)  # FIX: Call function properly
+            
+            # Normalized positions
+            nx, ny = cx / w, cy / h
+            
+            # IMPROVEMENT: Continuous distance features
+            dist_left = nx
+            dist_right = 1.0 - nx
+            dist_top = ny
+            dist_bottom = 1.0 - ny
+            min_edge_dist = min(dist_left, dist_right, dist_top, dist_bottom)
+            
+            rel_w = width / w
+            rel_h = height / h
+            is_small = (rel_w < self.params['scale_size_max_width'] and 
+                       rel_h < self.params['scale_size_max_height'])
             
             features.append({
                 'label': label,
                 'cx': cx, 'cy': cy,
-                'nx': cx / w, 'ny': cy / h,
+                'nx': nx, 'ny': ny,
                 'width': width, 'height': height,
-                'rel_w': width / w, 'rel_h': height / h,
+                'rel_w': rel_w, 'rel_h': rel_h,
                 'aspect': width / (height + 1e-6),
-                'is_numeric': is_numeric,
-                'text': text
+                'is_numeric': is_num,  # FIX: Use computed value, not function
+                'text': text,
+                'dist_left': dist_left,
+                'dist_right': dist_right,
+                'dist_top': dist_top,
+                'dist_bottom': dist_bottom,
+                'min_edge_dist': min_edge_dist,
+                'is_small': is_small
             })
         return features
     
@@ -182,6 +271,31 @@ class BarChartClassifier(BaseChartClassifier):
         aspect = feat['aspect']
         is_numeric = feat['is_numeric']
         
+        # === GAUSSIAN REGION SCORING (Phase 14) ===
+        gaussian_weights = {
+            'left_axis_weight': self.params.get('left_axis_weight', 5.0),
+            'right_axis_weight': self.params.get('right_axis_weight', 4.0),
+            'bottom_axis_weight': self.params.get('bottom_axis_weight', 6.0),
+            'top_title_weight': self.params.get('top_title_weight', 4.0),
+            'center_plot_weight': self.params.get('center_plot_weight', 3.0)
+        }
+        
+        region_scores = self._compute_gaussian_region_scores(
+            (nx, ny),
+            sigma_x=0.09,
+            sigma_y=0.09,
+            weights=gaussian_weights
+        )
+        
+        kernel_weight = self.params.get('gaussian_kernel_weight', 1.0)
+        
+        # Apply Gaussian scores
+        scores['scale_label'] += (region_scores['left_axis'] + region_scores['right_axis']) * kernel_weight
+        scores['tick_label'] += region_scores['bottom_axis'] * kernel_weight  # Ticks at bottom for bar
+        scores['axis_title'] += region_scores['top_title'] * kernel_weight
+        scores['scale_label'] -= region_scores['center_plot']  # Penalty
+        scores['tick_label'] -= region_scores['center_plot'] * 0.5
+        
         # === SCALE LABEL SCORING ===
         # Small size
         if rel_w < self.params['scale_size_max_width'] and rel_h < self.params['scale_size_max_height']:
@@ -200,6 +314,11 @@ class BarChartClassifier(BaseChartClassifier):
         # Numeric boost
         if is_numeric:
             scores['scale_label'] += self.params['numeric_boost']
+        
+        # IMPROVEMENT: Continuous edge scoring
+        min_edge_dist = feat.get('min_edge_dist', 0.5)
+        edge_score = max(0, (0.2 - min_edge_dist) / 0.2)
+        scores['scale_label'] += edge_score * 2.0
         
         # === TICK LABEL SCORING ===
         if orientation == Orientation.VERTICAL:

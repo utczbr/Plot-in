@@ -83,7 +83,8 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
             if result:
                 results.append(result)
         except Exception as e:
-            logging.error(f"Failed to process {image_path}: {e}")
+            import traceback
+            logging.error(f"Failed to process {image_path}: {e}\n{traceback.format_exc()}")
 
     # 5. Save Consolidated Results
     consolidated_path = Path(output_dir) / "_consolidated_results.json"
@@ -101,7 +102,9 @@ def main():
     parser.add_argument('--models-dir', default='models', help='Models directory')
     parser.add_argument('--ocr', default='Paddle', choices=['Paddle', 'EasyOCR'], help='OCR engine')
     parser.add_argument('--ocr-accuracy', default='Optimized', choices=['Fast', 'Optimized', 'Precise'], help='OCR accuracy')
-    parser.add_argument('--calibration', default='PROSAC', choices=['Linear', 'PROSAC'], help='Calibration method')
+    parser.add_argument('--calibration', default='PROSAC', 
+                        choices=['Linear', 'PROSAC', 'neural', 'log', 'visual', 'fast'],
+                        help='Calibration method (neural recommended for log-scale/non-linear axes)')
     parser.add_argument('--annotated', action='store_true', help='Save annotated images')
     parser.add_argument('--language', default='en', help='Comma-separated list of languages for OCR')
     

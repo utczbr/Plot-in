@@ -46,15 +46,27 @@ def validate_and_correct_box_values(box_info: Dict) -> Tuple[Dict, List[str]]:
                 box_info['whisker_high'] = w_high
 
         # V5: Outliers outside whisker range
+        # Enhanced heuristic: if many outliers are "invalid", suspect whisker detection error
         valid_outliers = []
+        invalid_outliers = []
+        
         for o in outliers:
             if o < w_low or o > w_high:
                 valid_outliers.append(o)
             else:
+                invalid_outliers.append(o)
                 errors.append(f"Invalid outlier {o:.2f} inside [{w_low:.2f}, {w_high:.2f}]")
-
-        # Update with corrected values
-        box_info['outliers'] = valid_outliers
+        
+        # Heuristic: If >50% of outliers are "invalid", whisker detection likely failed
+        if len(outliers) > 0 and len(invalid_outliers) / len(outliers) > 0.5:
+            box_info['whisker_detection_suspect'] = True
+            box_info['outliers'] = outliers  # Keep ALL outliers, flag for review
+            errors.append(
+                f"SUSPECT: {len(invalid_outliers)}/{len(outliers)} outliers inside whiskers - "
+                f"likely whisker detection failure"
+            )
+        else:
+            box_info['outliers'] = valid_outliers
 
     box_info['validation_errors'] = errors
 

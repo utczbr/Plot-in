@@ -502,8 +502,13 @@ def main():
     parser = argparse.ArgumentParser(description='Deep value comparison: analysis vs ground truth')
     parser.add_argument('--analysis-dir', type=str, required=True,
                         help='Directory containing *_analysis.json files')
+    # Determine default labels directory relative to this script
+    # Script is in src/train/gerador_charts/test_generation
+    # Labels are in src/train/labels
+    base_dir = Path(__file__).resolve().parent.parent.parent / 'labels'
+    
     parser.add_argument('--labels-dir', type=str,
-                        default='/home/stuart/Documentos/OCR/LYAA-fine-tuning/src/train/labels',
+                        default=str(base_dir),
                         help='Directory containing *_unified.json ground truth files')
     parser.add_argument('--report-file', type=str, default=None,
                         help='Output JSON file for detailed report')

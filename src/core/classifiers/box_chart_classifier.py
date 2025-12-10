@@ -33,8 +33,21 @@ class BoxChartClassifier(BaseChartClassifier):
             'title_aspect_min': 6.5,
             
             # Thresholds
-            'classification_threshold': 2.2,
-            'edge_threshold': 0.22
+            'classification_threshold': 2.5,  # Increased as requested (was 2.2)
+            'edge_threshold': 0.22,
+            
+            # NEW: Gaussian kernel weights (Phase 14)
+            'gaussian_kernel_weight': 1.0,
+            'left_axis_weight': 5.0,
+            'right_axis_weight': 4.0,
+            'bottom_axis_weight': 5.0,
+            'top_title_weight': 4.0,
+            'center_plot_weight': 2.5,
+            
+            # User Recommended Updates
+            'tick_bottom_vertical_weight': 7.0,  # New param for vertical boxt plots
+            'numeric_boost': 2.5,  # Reduced from 3.5
+            'scale_edge_weight': 5.0,  # Reduced from 6.0
         }
     
     def classify(
@@ -46,17 +59,17 @@ class BoxChartClassifier(BaseChartClassifier):
         orientation: Orientation
     ) -> ClassificationResult:
         """
-        Box plot specific classification
+        Box plot specific classification with adaptive thresholding.
         """
         boxes = chart_elements
         if not self.validate_inputs(axis_labels, boxes):
             return self._empty_result()
         
-        # Extract box-specific features
+        # Extract box-specific features (now includes distance features)
         label_features = self._extract_box_features(axis_labels, img_width, img_height)
         box_context = self._compute_box_context(boxes, img_width, img_height, orientation)
         
-        # Classification
+        # Classification with adaptive thresholding
         classified = {'scale_label': [], 'tick_label': [], 'axis_title': []}
         all_scores = []
         
@@ -65,32 +78,35 @@ class BoxChartClassifier(BaseChartClassifier):
             all_scores.append(scores)
             
             best_class = max(scores, key=scores.get)
-            threshold = self.params['classification_threshold']
+            
+            # IMPROVEMENT: Adaptive threshold based on margin analysis
+            sorted_scores = sorted(scores.values(), reverse=True)
+            margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else float('inf')
+            
+            base_threshold = self.params['classification_threshold']
+            if margin < 0.5:  # Ambiguous case
+                threshold = base_threshold * 1.3  # Require higher confidence
+            elif margin > 2.0:  # Clear case
+                threshold = base_threshold * 0.9  # Allow lower threshold
+            else:
+                threshold = base_threshold
             
             if scores[best_class] > threshold:
                 classified[best_class].append(feat['label'])
             else:
-                # Box default: numeric = scale, non-numeric = tick
-                if feat['is_numeric']:
-                    classified['scale_label'].append(feat['label'])
-                else:
-                    classified['tick_label'].append(feat['label'])
+                # IMPROVEMENT: Enhanced fallback with constraint checking (now context-aware)
+                self._apply_fallback_classification(feat, classified, box_context)
         
-        # Post-process: align tick labels with boxes (similar to bar classifier)
-        # Use the BoxElementAssociator for consistent architecture with other chart types
+        # Post-process: align tick labels with boxes
         from extractors.box_associator import BoxElementAssociator
         associator = BoxElementAssociator()
         classified['tick_label'] = associator.align_tick_labels_with_boxes(
             classified['tick_label'], boxes, orientation, img_width, img_height
         )
         
-        # Post-process: align tick labels with boxes (similar to bar classifier)
-        # Use the BoxElementAssociator for consistent architecture with other chart types
-        from extractors.box_associator import BoxElementAssociator
-        associator = BoxElementAssociator()
-        classified['tick_label'] = associator.align_tick_labels_with_boxes(
-            classified['tick_label'], boxes, orientation, img_width, img_height
-        )
+        # IMPROVEMENT: Apply constraint-based post-processing
+        # Pass box_context for relative positioning checks
+        classified = self._apply_constraints(classified, label_features, img_width, img_height, box_context)
         
         confidence = self._compute_confidence(all_scores)
         
@@ -109,7 +125,120 @@ class BoxChartClassifier(BaseChartClassifier):
             metadata=metadata
         )
     
+    def _apply_fallback_classification(self, feat: Dict, classified: Dict, box_context: Dict = None):
+        """
+        Apply multi-stage fallback when primary classification is ambiguous.
+        Uses position (relative to boxes), size, and content features hierarchically.
+        """
+        # Stage 0: Priority bottom check for vertical plots
+        # Robust: Check if label is below the lowest box
+        is_below_boxes = False
+        if box_context and 'extent' in box_context:
+            box_bottom = box_context['extent']['bottom']
+            # If label center is below box bottom (with small margin)
+            if feat['cy'] > box_bottom + 5:
+                is_below_boxes = True
+        
+        # Use either absolute position (backup) or relative position (primary)
+        if is_below_boxes or feat.get('ny', 0) > 0.82:
+            classified['tick_label'].append(feat['label'])
+            return
+            
+        # Stage 1: Position-based fallback (continuous distance)
+        min_edge_dist = feat.get('min_edge_dist', 0.5)
+        
+        if min_edge_dist < 0.15:  # Very close to edge
+            classified['scale_label'].append(feat['label'])
+            return
+        elif min_edge_dist > 0.3:  # Far from edges
+            classified['tick_label'].append(feat['label'])
+            return
+        
+        # Stage 2: Size-based fallback
+        is_small = feat.get('is_small', False)
+        if is_small:
+            classified['scale_label'].append(feat['label'])
+            return
+        
+        # Stage 3: Content-based fallback (original logic)
+        if feat['is_numeric']:
+            classified['scale_label'].append(feat['label'])
+        else:
+            classified['tick_label'].append(feat['label'])
+    
+    def _apply_constraints(self, classified: Dict, features: List[Dict], 
+                           img_width: int, img_height: int, box_context: Dict = None) -> Dict:
+        """
+        Apply domain-specific constraints to refine classifications.
+        
+        Constraints:
+        1. Scale labels should be on axis edges (min_edge_dist < 0.2)
+        2. Tick labels should NOT be on edges AND should align with elements
+        """
+        # Build feature lookup
+        label_to_feat = {}
+        for f in features:
+            xyxy = tuple(f['label']['xyxy'])
+            label_to_feat[xyxy] = f
+        
+        refined_scale = []
+        refined_tick = []
+        ambiguous = []
+        
+        # Check scale labels
+        for label in classified.get('scale_label', []):
+            xyxy = tuple(label['xyxy'])
+            feat = label_to_feat.get(xyxy)
+            if feat and feat.get('min_edge_dist', 0) >= 0.25:  # Violates edge constraint
+                ambiguous.append((feat, label, 'scale'))
+            else:
+                refined_scale.append(label)
+        
+        # Check tick labels
+        for label in classified.get('tick_label', []):
+            xyxy = tuple(label['xyxy'])
+            feat = label_to_feat.get(xyxy)
+            if feat:
+                ny = feat.get('ny', 0)
+                cy = feat.get('cy', 0)
+                min_edge_dist = feat.get('min_edge_dist', 0.5)
+                
+                # Check if truly below boxes
+                is_below_boxes = False
+                if box_context and 'extent' in box_context:
+                    if cy > box_context['extent']['bottom']:
+                        is_below_boxes = True
+                
+                # IMPROVEMENT: Stricter edge constraint for tick labels, especially at bottom
+                # If NOT below boxes and on edge -> swap to scale
+                if not is_below_boxes and ny > 0.8 and min_edge_dist < 0.25:
+                    ambiguous.append((feat, label, 'tick'))
+                elif not is_below_boxes and min_edge_dist < 0.1:  # General edge constraint
+                    ambiguous.append((feat, label, 'tick'))
+                else:
+                    refined_tick.append(label)
+            else:
+                refined_tick.append(label)
+        
+        # Resolve ambiguous cases
+        for feat, label, original_type in ambiguous:
+            if original_type == 'scale':
+                # Was scale but not on edge -> should be tick
+                refined_tick.append(label)
+            else:
+                # Was tick but too close to edge -> should be scale
+                refined_scale.append(label)
+        
+        return {
+            'scale_label': refined_scale,
+            'tick_label': refined_tick,
+            'axis_title': classified.get('axis_title', [])
+        }
+    
     def _extract_box_features(self, labels: List[Dict], w: int, h: int) -> List[Dict]:
+        """
+        Extract comprehensive features including continuous distance metrics.
+        """
         features = []
         for label in labels:
             x1, y1, x2, y2 = label['xyxy']
@@ -117,17 +246,40 @@ class BoxChartClassifier(BaseChartClassifier):
             width, height = x2 - x1, y2 - y1
             
             text = label.get('text', '')
-            is_num = is_numeric(text)
+            is_num = is_numeric(text)  # FIX: Properly call the function
+            
+            # Normalized positions
+            nx, ny = cx / w, cy / h
+            
+            # IMPROVEMENT: Continuous distance features (not binary)
+            dist_left = nx
+            dist_right = 1.0 - nx
+            dist_top = ny
+            dist_bottom = 1.0 - ny
+            min_edge_dist = min(dist_left, dist_right, dist_top, dist_bottom)
+            
+            # Size analysis
+            rel_w = width / w
+            rel_h = height / h
+            is_small = (rel_w < self.params['scale_size_max_width'] and 
+                       rel_h < self.params['scale_size_max_height'])
             
             features.append({
                 'label': label,
                 'cx': cx, 'cy': cy,
-                'nx': cx / w, 'ny': cy / h,
+                'nx': nx, 'ny': ny,
                 'width': width, 'height': height,
-                'rel_w': width / w, 'rel_h': height / h,
+                'rel_w': rel_w, 'rel_h': rel_h,
                 'aspect': width / (height + 1e-6),
-                'is_numeric': is_numeric,
-                'text': text
+                'is_numeric': is_num,  # FIX: Use the computed is_num, not the function
+                'text': text,
+                # NEW: Distance features
+                'dist_left': dist_left,
+                'dist_right': dist_right,
+                'dist_top': dist_top,
+                'dist_bottom': dist_bottom,
+                'min_edge_dist': min_edge_dist,
+                'is_small': is_small
             })
         return features
     
@@ -183,6 +335,35 @@ class BoxChartClassifier(BaseChartClassifier):
         aspect = feat['aspect']
         is_numeric = feat['is_numeric']
         
+        # === GAUSSIAN REGION SCORING (Phase 14) ===
+        gaussian_weights = {
+            'left_axis_weight': self.params.get('left_axis_weight', 5.0),
+            'right_axis_weight': self.params.get('right_axis_weight', 4.0),
+            'bottom_axis_weight': self.params.get('bottom_axis_weight', 5.0),
+            'top_title_weight': self.params.get('top_title_weight', 4.0),
+            'center_plot_weight': self.params.get('center_plot_weight', 2.5)
+        }
+        
+        region_scores = self._compute_gaussian_region_scores(
+            (nx, ny),
+            sigma_x=0.09,
+            sigma_y=0.09,
+            weights=gaussian_weights
+        )
+        
+        kernel_weight = self.params.get('gaussian_kernel_weight', 1.0)
+        
+        # Apply Gaussian scores
+        if orientation == Orientation.VERTICAL:
+            scores['scale_label'] += (region_scores['left_axis'] + region_scores['right_axis']) * kernel_weight
+            scores['tick_label'] += region_scores['bottom_axis'] * kernel_weight
+        else:
+            scores['scale_label'] += region_scores['bottom_axis'] * kernel_weight
+            scores['tick_label'] += region_scores['left_axis'] * kernel_weight
+        
+        scores['axis_title'] += region_scores['top_title'] * kernel_weight
+        scores['scale_label'] -= region_scores['center_plot']
+        
         # === SCALE LABEL SCORING ===
         # For box plots:
         # - Vertical: Y-axis has scale (left/right)
@@ -208,6 +389,11 @@ class BoxChartClassifier(BaseChartClassifier):
         if is_numeric:
             scores['scale_label'] += self.params['numeric_boost']
         
+        # IMPROVEMENT: Continuous edge scoring (smooth gradient instead of cliff)
+        min_edge_dist = feat.get('min_edge_dist', 0.5)
+        edge_score = max(0, (0.2 - min_edge_dist) / 0.2)  # Normalize to [0, 1]
+        scores['scale_label'] += edge_score * 2.0  # Additional edge-based score
+        
         # === TICK LABEL SCORING ===
         # For box plots:
         # - Vertical: X-axis has ticks (bottom, categories)
@@ -218,10 +404,26 @@ class BoxChartClassifier(BaseChartClassifier):
             if ny > 0.78:
                 scores['tick_label'] += self.params['tick_alignment_weight']
             
+            # IMPROVEMENT: Increased boost for very low (bottom) labels in vertical plots
+            # Use relative checks if available, falling back to absolute
+            is_below_boxes = False
+            if box_ctx and 'extent' in box_ctx:
+                 if feat['cy'] > box_ctx['extent']['bottom']:
+                     is_below_boxes = True
+            
+            if is_below_boxes or ny > 0.82:
+                scores['tick_label'] += self.params.get('tick_bottom_vertical_weight', 7.0)
+                # Reduce scale score to avoid Gaussian interference from left axis
+                scores['scale_label'] -= region_scores.get('left_axis', 0) * 0.5
+            
             # Alignment with box centers
             if box_ctx:
                 alignment_score = self._compute_box_alignment(feat, box_ctx, Orientation.VERTICAL)
                 scores['tick_label'] += alignment_score * self.params['box_spacing_weight']
+                
+                # Extra boost for good alignment
+                if alignment_score > 0.6:
+                    scores['tick_label'] += 3.0
         else:  # horizontal
             # Left region for tick labels
             if nx < 0.22:

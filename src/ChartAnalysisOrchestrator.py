@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Type
 import numpy as np
 
 from core.classifiers.production_classifier import ProductionSpatialClassifier
+from core.classifiers.heatmap_chart_classifier import HeatmapChartClassifier
+from core.classifiers.pie_chart_classifier import PieChartClassifier
 
 from handlers.base_handler import (
     BaseHandler,
@@ -97,12 +99,14 @@ class ChartAnalysisOrchestrator:
 
         # Grid chart handlers (e.g., heatmap) require color mapping service
         handlers['heatmap'] = HeatmapHandler(
+            classifier=HeatmapChartClassifier(logger=self.logger),
             color_mapper=self.color_mapping_service,
             logger=self.logger
         )
 
         # Polar chart handlers (e.g., pie) require legend matching service
         handlers['pie'] = PieHandler(
+            classifier=PieChartClassifier(logger=self.logger),
             legend_matcher=self.legend_matching_service,
             logger=self.logger
         )

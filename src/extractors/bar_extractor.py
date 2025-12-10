@@ -13,6 +13,79 @@ from extractors.bar_associator import RobustBarAssociator
 from services.orientation_detection_service import OrientationDetectionService
 from extractors.significance_associator import SignificanceMarkerAssociator
 from extractors.error_bar_validator import ErrorBarValidator
+from services.orientation_service import Orientation
+
+
+def _compute_value_uncertainty(
+    estimated_value: float,
+    pixel_dimension: float,
+    scale_model,
+    r_squared: Optional[float],
+    detection_confidence: float,
+    pixel_uncertainty: float = 1.0
+) -> Tuple[float, float, float]:
+    """
+    Compute uncertainty for bar value extraction.
+    
+    Uncertainty sources:
+    1. Bounding box precision (±pixel_uncertainty pixels)
+    2. Calibration quality (R² from scale model)
+    3. Detection confidence
+    
+    Args:
+        estimated_value: The extracted value
+        pixel_dimension: Bar height/width in pixels
+        scale_model: Calibration function (pixel -> value)
+        r_squared: Calibration R² (None if unavailable)
+        detection_confidence: Bar detection confidence [0, 1]
+        pixel_uncertainty: Base pixel precision (default 1.0 px)
+    
+    Returns:
+        Tuple of (uncertainty, lower_bound, upper_bound)
+    """
+    if estimated_value is None or scale_model is None:
+        return (None, None, None)
+    
+    try:
+        # 1. Propagate pixel uncertainty through scale model
+        # Estimate slope from small perturbation
+        test_pixel = 100.0
+        delta = 1.0
+        val_at_test = float(scale_model(test_pixel))
+        val_at_delta = float(scale_model(test_pixel + delta))
+        slope = abs(val_at_delta - val_at_test) / delta
+        
+        # Pixel-level uncertainty contribution
+        pixel_contribution = slope * pixel_uncertainty
+        
+        # 2. Calibration quality contribution
+        # Lower R² means higher uncertainty
+        if r_squared is not None and r_squared > 0:
+            # Scale uncertainty inversely with R²
+            # At R²=1.0: multiplier=1.0, at R²=0.5: multiplier=1.41
+            calibration_multiplier = 1.0 / np.sqrt(max(r_squared, 0.1))
+        else:
+            calibration_multiplier = 2.0  # High uncertainty if no R²
+        
+        # 3. Detection confidence contribution
+        # Lower confidence means higher uncertainty
+        confidence_multiplier = 1.0 / max(detection_confidence, 0.3)
+        
+        # Combined uncertainty (root sum of squares approach)
+        base_uncertainty = pixel_contribution * calibration_multiplier
+        total_uncertainty = base_uncertainty * np.sqrt(confidence_multiplier)
+        
+        # 95% confidence interval (approximately 2 sigma)
+        margin = 1.96 * total_uncertainty
+        lower_bound = estimated_value - margin
+        upper_bound = estimated_value + margin
+        
+        return (float(total_uncertainty), float(lower_bound), float(upper_bound))
+        
+    except Exception as e:
+        logging.debug(f"Uncertainty computation failed: {e}")
+        return (None, None, None)
+
 
 class BarExtractor(BaseExtractor):
     def __init__(self):
@@ -76,7 +149,7 @@ class BarExtractor(BaseExtractor):
         )
         
         orientation = orientation_result.orientation
-        is_vertical = (orientation == 'vertical')
+        is_vertical = (orientation == Orientation.VERTICAL)
 
         self.logger.info(
             f"Detected {orientation} orientation (confidence: {orientation_result.confidence:.2f}, "
@@ -190,6 +263,8 @@ class BarExtractor(BaseExtractor):
                 'confidence': bar.get('conf', 0.0),
                 'pixel_dimension': pixel_dimension,
                 'estimated_value': estimated_value,
+                'uncertainty': None,  # NEW: uncertainty (1-sigma)
+                'confidence_interval_95': None,  # NEW: 95% confidence interval [lower, upper]
                 'orientation': orientation,
                 'text_label': bar.get('text', ''),
                 'data_label': None,
@@ -201,6 +276,19 @@ class BarExtractor(BaseExtractor):
                 'tick_label': None,
                 'association_errors': bar.get('association_errors', [])
             }
+            
+            # Compute uncertainty (NEW)
+            if estimated_value is not None and scale_model_to_use is not None:
+                uncertainty, lower_bound, upper_bound = _compute_value_uncertainty(
+                    estimated_value=float(estimated_value),
+                    pixel_dimension=float(pixel_dimension),
+                    scale_model=scale_model_to_use,
+                    r_squared=float(r_squared) if r_squared is not None else None,
+                    detection_confidence=float(bar.get('conf', 0.5))
+                )
+                bar_info['uncertainty'] = uncertainty
+                if lower_bound is not None and upper_bound is not None:
+                    bar_info['confidence_interval_95'] = [lower_bound, upper_bound]
 
             # Data labels
             assoc_data_label = bar.get('associated_data_label', {}).get('label') if 'associated_data_label' in bar else None

@@ -10,6 +10,8 @@ from .calibration_base import BaseCalibration
 from .calibration_fast import FastCalibration
 from .calibration_adaptive import RANSACCalibration
 from .calibration_precise import PROSACCalibration
+from .visual_tick_detector import VisualTickCalibration
+from .calibration_neural import NeuralCalibration, LogCalibration
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,9 @@ class CalibrationFactory:
             'max_trials', 'residual_threshold', 'min_inliers', 'random_state',
             'lo_iters', 'prosac_growth', 'early_termination_ratio', 'convergence_threshold'
         },
+        'visual': {'edge_threshold', 'min_tick_spacing', 'max_tick_spacing', 'min_ticks'},
+        'neural': {'hidden_dim', 'max_epochs', 'learning_rate', 'early_stop_patience'},
+        'log': set(),  # No parameters
     }
     
     @staticmethod
@@ -56,6 +61,12 @@ class CalibrationFactory:
             engine_type_lower = 'ransac'
         elif engine_type_lower in ('prosac', 'precise'):
             engine_type_lower = 'prosac'
+        elif engine_type_lower in ('visual', 'tick', 'visual_tick'):
+            engine_type_lower = 'visual'
+        elif engine_type_lower in ('neural', 'adaptive_neural', 'mlp'):
+            engine_type_lower = 'neural'
+        elif engine_type_lower in ('log', 'logarithmic'):
+            engine_type_lower = 'log'
         
         if engine_type_lower not in CalibrationFactory._VALID_PARAMS:
             raise ValueError(f"Unknown calibration engine: {engine_type}. Valid types: {list(CalibrationFactory._VALID_PARAMS.keys())}")
@@ -77,5 +88,11 @@ class CalibrationFactory:
             return RANSACCalibration(**kwargs)
         elif engine_type_lower == 'prosac':
             return PROSACCalibration(**kwargs)
+        elif engine_type_lower == 'visual':
+            return VisualTickCalibration(**kwargs)
+        elif engine_type_lower == 'neural':
+            return NeuralCalibration(**kwargs)
+        elif engine_type_lower == 'log':
+            return LogCalibration(**kwargs)
         
         raise ValueError(f"Engine creation not implemented for: {engine_type_lower}")

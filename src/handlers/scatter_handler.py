@@ -7,7 +7,8 @@ due to all numeric labels being classified as title_label instead of scale_label
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import BaseChartHandler, ExtractionResult
+from handlers.base_handler import ExtractionResult
+from handlers.legacy import BaseChartHandler
 
 
 class ScatterHandler(BaseChartHandler):
@@ -42,21 +43,20 @@ class ScatterHandler(BaseChartHandler):
         cal_y = calibration.get('y')
         
         # Fallback logic for dual-axis mapping
-        if not cal_x and not cal_y:
+        if not cal_x or not cal_y:
             cal_primary = calibration.get('primary')
-            cal_secondary = calibration.get('secondary')
+            cal_secondary = calibration.get('secondary') or cal_primary
             
             if orientation == 'vertical':
-                cal_y = cal_primary
-                cal_x = cal_secondary if cal_secondary else cal_primary
+                cal_y = cal_y or cal_primary
+                cal_x = cal_x or cal_secondary
             else:
-                cal_x = cal_primary
-                cal_y = cal_secondary if cal_secondary else cal_primary
+                cal_x = cal_x or cal_primary
+                cal_y = cal_y or cal_secondary
         
-        if not cal_x:
-            cal_x = cal_y
-        if not cal_y:
-            cal_y = calibration.get('primary') or calibration.get('x')
+        # Final safety net
+        if not cal_x: cal_x = cal_y
+        if not cal_y: cal_y = cal_x
             
         # Resolve model functions
         func_x = self._resolve_model_func(cal_x)

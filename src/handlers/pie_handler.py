@@ -4,7 +4,7 @@ Pie chart handler implementing polar coordinate processing.
 This handler processes pie charts by detecting slices using keypoint detection
 and calculating angles and values for each slice.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import numpy as np
 import cv2
 from handlers.base_handler import PolarChartHandler, ExtractionResult, ChartCoordinateSystem
@@ -15,6 +15,10 @@ class PieHandler(PolarChartHandler):
     """Pie chart handler with polar coordinate processing."""
 
     COORDINATE_SYSTEM = ChartCoordinateSystem.POLAR
+
+    def __init__(self, classifier=None, legend_matcher=None, **kwargs):
+        super().__init__(legend_matcher=legend_matcher, **kwargs)
+        self.classifier = classifier
 
     def get_chart_type(self) -> str:
         return "pie"
@@ -28,9 +32,9 @@ class PieHandler(PolarChartHandler):
         orientation: Orientation,
         **kwargs
     ) -> ExtractionResult:
-        """Process pie chart and extract slice values."""
+        """Process pie chart and extract slice values using geometric analysis."""
         try:
-            # Extract pie slices from detections - these might come as keypoints from Pie_pose model
+            # Extract pie slices
             pie_slices = detections.get('pie_slice', []) or detections.get('slice', []) or chart_elements
             
             if not pie_slices:
@@ -42,34 +46,103 @@ class PieHandler(PolarChartHandler):
                     orientation=orientation
                 )
 
-            # Process pie slices to extract values
+            h, w = image.shape[:2]
+
+            # 1. Classify Labels
+            classified_labels = {'legend_labels': [], 'data_labels': []}
+            if self.classifier:
+                clf_result = self.classifier.classify(axis_labels, pie_slices, w, h)
+                classified_labels = clf_result.metadata
+                self.logger.info(f"Pie classification: {len(classified_labels['legend_labels'])} legends, {len(classified_labels['data_labels'])} data labels")
+
+            # 2. Robust Center Detection
+            center_point = self._find_pie_center_robust(pie_slices, w, h)
+            self.logger.info(f"Detected Pie Center: {center_point}")
+
+            # 3. Geometric Analysis (Angles)
+            slice_data = []
+            for slice_det in pie_slices:
+                bbox = slice_det['xyxy']
+                cx = (bbox[0] + bbox[2]) / 2
+                cy = (bbox[1] + bbox[3]) / 2
+                
+                # Angle relative to center (0 to 360, clockwise from East)
+                dx = cx - center_point[0]
+                dy = cy - center_point[1]
+                angle_rad = np.arctan2(dy, dx)
+                angle_deg = np.degrees(angle_rad)
+                if angle_deg < 0:
+                    angle_deg += 360
+                
+                slice_data.append({
+                    'bbox': bbox,
+                    'center': (cx, cy),
+                    'mid_angle': angle_deg,
+                    'det': slice_det
+                })
+
+            # Sort slices by angle
+            slice_data.sort(key=lambda x: x['mid_angle'])
+
+            # 4. Calculate Spans and Values
             elements = []
-            center_point = self._find_pie_center(image, pie_slices)
-            
-            for i, slice_det in enumerate(pie_slices):
-                try:
-                    # Calculate slice properties based on its geometric features
-                    angle_start, angle_end, value = self._calculate_slice_properties(
-                        image, slice_det, center_point
+            n = len(slice_data)
+            for i in range(n):
+                curr = slice_data[i]
+                next_slice = slice_data[(i + 1) % n]
+                
+                # Calculate span to next slice
+                diff = next_slice['mid_angle'] - curr['mid_angle']
+                if diff < 0:
+                    diff += 360
+                
+                # Check for exploded slices (large gap)
+                # If gap is too large relative to expected (360/n), it might be an exploded gap
+                # Heuristic: If we have many slices, a gap > 90 might be wrong, but for now trust the centroids
+                # Better: Inferred span is the distance between centroids. 
+                # Ideally we want boundary angles, but without keypoints, centroid diff is the best proxy for "share of 360"
+                # IF we assume the slices fill the circle.
+                
+                # Refined Logic: The span captured by a slice is roughly the arc between
+                # the midpoints of the gaps to its neighbors.
+                # Simplified: Value is proportional to the angular distance between neighbors.
+                
+                # Let's use the average of half-distance to prev and half-distance to next
+                prev_slice = slice_data[(i - 1 + n) % n]
+                dist_prev = curr['mid_angle'] - prev_slice['mid_angle']
+                if dist_prev < 0: dist_prev += 360
+                
+                dist_next = next_angle = next_slice['mid_angle']
+                if next_angle < curr['mid_angle']:
+                    next_angle += 360
+                dist_next = next_angle - curr['mid_angle']
+                
+                estimated_span = (dist_prev + dist_next) / 2
+                if estimated_span > 0:
+                    value = estimated_span / 360.0
+                else:
+                    value = 0.0
+
+                # Override with Data Label if available
+                # TODO: Implement spatial matching for data label override
+                
+                # Match Legend
+                label = "Unknown"
+                if self.legend_matcher:
+                    # Pass filtered legend labels
+                    label = self.legend_matcher.match_slice_to_legend(
+                        curr['det'], 
+                        classified_labels.get('legend_labels', [])
                     )
-                    
-                    # Determine label from legend matching if available
-                    label = self._match_slice_to_legend(slice_det, axis_labels) if self.legend_matcher else f"Slice {i+1}"
-                    
-                    elements.append({
-                        'type': 'pie_slice',
-                        'bbox': slice_det['xyxy'],
-                        'start_angle': angle_start,
-                        'end_angle': angle_end,
-                        'central_angle': angle_end - angle_start,
-                        'value': value,
-                        'label': label,
-                        'confidence': slice_det.get('conf', 1.0),
-                        'center': center_point
-                    })
-                except Exception as e:
-                    self.logger.warning(f"Error processing pie slice: {e}")
-                    continue
+
+                elements.append({
+                    'type': 'pie_slice',
+                    'bbox': curr['bbox'],
+                    'value': float(value),
+                    'label': label,
+                    'angle': curr['mid_angle'],
+                    'confidence': curr['det'].get('conf', 1.0)
+                })
 
             return ExtractionResult(
                 chart_type=self.get_chart_type(),
@@ -78,88 +151,53 @@ class PieHandler(PolarChartHandler):
                 diagnostics={'slice_count': len(pie_slices)},
                 orientation=orientation
             )
+
         except Exception as e:
             self.logger.error(f"Error in PieHandler.process: {e}")
             return ExtractionResult.from_error(self.get_chart_type(), e)
 
-    def _find_pie_center(self, image: np.ndarray, slices: List[Dict]) -> tuple[float, float]:
-        """Find the center point of the pie chart."""
-        # Estimate center as the average of all slice bounding box centers
-        if not slices:
-            h, w = image.shape[:2]
-            return (w / 2, h / 2)  # Default to image center
+    def _find_pie_center_robust(self, slices: List[Dict], w: int, h: int) -> Tuple[float, float]:
+        """Find center robustly handling exploded slices using MAD outlier removal."""
+        points = []
+        for s in slices:
+            bbox = s['xyxy']
+            points.append([(bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2])
         
-        total_x, total_y = 0.0, 0.0
-        count = 0
-        
-        for slice_det in slices:
-            x1, y1, x2, y2 = slice_det['xyxy']
-            center_x = (x1 + x2) / 2
-            center_y = (y1 + y2) / 2
-            total_x += center_x
-            total_y += center_y
-            count += 1
-        
-        return (total_x / count, total_y / count) if count > 0 else (image.shape[1]/2, image.shape[0]/2)
-
-    def _calculate_slice_properties(self, image: np.ndarray, slice_det: Dict[str, Any], 
-                                 center: tuple[float, float]) -> tuple[float, float, float]:
-        """Calculate start angle, end angle, and value for a pie slice."""
-        # Extract bounding box
-        x1, y1, x2, y2 = slice_det['xyxy']
-        
-        # Calculate average color to estimate value (for basic implementation)
-        h, w = image.shape[:2]
-        x1, y1 = max(0, int(x1)), max(0, int(y1))
-        x2, y2 = min(w, int(x2)), min(h, int(y2))
-        
-        if x2 <= x1 or y2 <= y1:
-            return 0, 0, 0.0
-        
-        slice_img = image[y1:y2, x1:x2]
-        
-        # Estimate value from average color intensity (simplified)
-        gray = cv2.cvtColor(slice_img, cv2.COLOR_BGR2GRAY)
-        avg_intensity = np.mean(gray)
-        # Normalize to 0-1 range
-        value = avg_intensity / 255.0
-        
-        # For angles, we'll use a simplified approach
-        # In a real implementation, we'd use the keypoint information from Pie_pose model
-        # For now, we'll distribute slices evenly
-        # This is a placeholder - in real implementation, angles would come from keypoint analysis
-        bbox_center_x, bbox_center_y = (x1 + x2) / 2, (y1 + y2) / 2
-        
-        # Calculate angle from center to bounding box center
-        dx = bbox_center_x - center[0]
-        dy = bbox_center_y - center[1]
-        angle = np.arctan2(dy, dx) * (180 / np.pi)  # Convert to degrees
-        
-        # Assign a fixed angular width for simplicity (in a real implementation, this would be calculated from keypoint data)
-        slice_width = 360.0 / len([s for s in [slice_det]])  # This is a simplified placeholder
-        
-        start_angle = angle - slice_width / 2
-        end_angle = angle + slice_width / 2
-        
-        # Normalize angles to 0-360 range
-        start_angle = start_angle % 360
-        end_angle = end_angle % 360
-        
-        return start_angle, end_angle, float(value)
+        points = np.array(points)
+        if len(points) < 3:
+            if len(points) == 0:
+                return (w / 2, h / 2) # Default to image center if no slices
+            return tuple(np.mean(points, axis=0))
+            
+        # Iterative refinement
+        mask = np.ones(len(points), dtype=bool)
+        for _ in range(3): # 3 iterations max
+            current_center = np.mean(points[mask], axis=0)
+            dists = np.linalg.norm(points - current_center, axis=1)
+            
+            non_outlier_dists = dists[mask]
+            if len(non_outlier_dists) == 0: break
+            
+            median_dist = np.median(non_outlier_dists)
+            mad = np.median(np.abs(non_outlier_dists - median_dist))
+            
+            if mad < 1e-6: break # Converged
+            
+            # Threshold: 3 * MAD
+            new_mask = dists < (median_dist + 3 * mad)
+            if np.sum(new_mask) < 2: break # Don't remove too many
+            
+            if np.array_equal(mask, new_mask):
+                break
+            mask = new_mask
+            
+        return tuple(np.mean(points[mask], axis=0))
 
     def _match_slice_to_legend(self, slice_det: Dict[str, Any], axis_labels: List[Dict]) -> str:
-        """Match a slice to its corresponding legend label."""
-        if self.legend_matcher:
-            try:
-                return self.legend_matcher.match_slice_to_legend(slice_det, axis_labels)
-            except:
-                pass
-        
-        # Fallback: return a generic label
-        return f"Slice {len(axis_labels) + 1}"
+         # ... existing implementation or delegate to service ...
+         if self.legend_matcher:
+             return self.legend_matcher.match_slice_to_legend(slice_det, axis_labels)
+         return "Slice"
 
-    def extract_values(self, img, detections, calibration,
-                      baselines, orientation) -> List[Dict]:
-        """Extract pie values - this method is kept for compatibility."""
-        # This method is not used in the new architecture but kept for potential compatibility
-        return []
+    def extract_values(self, img, detections, calibration, baselines, orientation) -> List[Dict]:
+         return []

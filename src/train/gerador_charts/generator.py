@@ -817,20 +817,22 @@ GENERATION_CONFIG = {
   },
 
     "scenario_weights": {
-        "single": 80,
-        "overlay": 0,
-        "multi": 20,
+        "single": 100,   # Single panel charts
+        "overlay": 0,   # No overlays
+        "multi": 0,    # Multi-panel important for GNN (multiple baselines)
     },
 
+    # GNN TRAINING MODE: Only bar charts enabled
+    # To restore all chart types, set all weights back to ~12 and enabled: True
     "chart_types": {
-        "bar":       {"weight": 13, "enabled": True},
-        "line":      {"weight": 13, "enabled": True},
-        "scatter":   {"weight": 13, "enabled": True},
-        "box":       {"weight": 13,  "enabled": True},
-        "pie":       {"weight": 12, "enabled": True},
-        "area":      {"weight": 12, "enabled": True},
-        "histogram": {"weight": 12, "enabled": True},
-        "heatmap":   {"weight": 12,  "enabled": True},
+        "bar":       {"weight": 100, "enabled": True},   # ONLY BAR CHARTS
+        "line":      {"weight": 0, "enabled": False},
+        "scatter":   {"weight": 0, "enabled": False},
+        "box":       {"weight": 0, "enabled": False},
+        "pie":       {"weight": 0, "enabled": False},
+        "area":      {"weight": 0, "enabled": False},
+        "histogram": {"weight": 0, "enabled": False},
+        "heatmap":   {"weight": 0, "enabled": False},
     },
     
     "bar_chart_config": {
@@ -2869,6 +2871,231 @@ def get_detailed_annotations(fig, chart_info_map, cls_map, img_w, img_h, raw_ann
     
     return detailed_metadata
 
+
+# ===================================================================================
+# ==                    GNN TRAINING DATA GENERATION FUNCTIONS                     ==
+# ===================================================================================
+
+def add_graph_topology_metadata(fig, detailed_metadata, img_h):
+    """
+    Augments metadata with Graph structure: Baselines and Bar-to-Baseline links.
+    Used for training Graph Neural Networks (GNN) for chart understanding.
+    
+    Adds to detailed_metadata:
+    - "baselines": List of baseline objects with y_pixel, x_range, type
+    - "bars_with_baseline": List of bars with pixel xyxy and baseline_id
+    
+    This is CRITICAL for GNN training - it provides the ground truth
+    bar-to-baseline grouping without manual annotation.
+    """
+    renderer = fig.canvas.get_renderer()
+    
+    # Initialize graph sections
+    detailed_metadata["baselines"] = []
+    detailed_metadata["bars_with_baseline"] = []
+    ax_to_baseline = {}
+    
+    # 1. Identify Baselines (Axis Spines) and collect axis transforms
+    axis_transforms = {}
+    for i, ax in enumerate(fig.axes):
+        if not ax.get_visible():
+            continue
+            
+        try:
+            bbox = ax.get_window_extent(renderer)
+            
+            # Calculate baseline Y-coordinate (bottom spine)
+            # Matplotlib (0,0) is bottom-left, Image (0,0) is top-left
+            baseline_y_pixel = img_h - bbox.y0
+            
+            baseline_id = f"baseline_{i}"
+            ax_to_baseline[ax] = baseline_id
+            axis_transforms[i] = ax.transData  # Store transform for bar conversion
+            
+            # Detect dual-axis (secondary axes often share same bbox)
+            is_secondary = False
+            if i > 0:
+                try:
+                    first_bbox = fig.axes[0].get_window_extent(renderer)
+                    is_secondary = (abs(bbox.x0 - first_bbox.x0) < 5 and 
+                                   abs(bbox.x1 - first_bbox.x1) < 5)
+                except:
+                    pass
+            
+            detailed_metadata["baselines"].append({
+                "id": baseline_id,
+                "y_pixel": float(baseline_y_pixel),
+                "x_range": [float(bbox.x0), float(bbox.x1)],
+                "width": float(bbox.width),
+                "type": "secondary" if is_secondary else "primary",
+                "bbox": [float(bbox.x0), float(img_h - bbox.y1), 
+                        float(bbox.x1), float(img_h - bbox.y0)],
+                "axis_index": i
+            })
+            
+        except Exception as e:
+            if GENERATION_CONFIG.get('debug_mode'):
+                print(f"DEBUG: Could not process axis {i} for baseline: {e}")
+
+    # 2. Convert bar_info (data coords) to pixel coords and link to baselines
+    bar_info_list = detailed_metadata.get("bar_info", [])
+    
+    if bar_info_list and detailed_metadata["baselines"]:
+        # Get the primary axis for coordinate transformation
+        primary_ax = fig.axes[0] if fig.axes else None
+        
+        if primary_ax:
+            for bar_idx, bar_info in enumerate(bar_info_list):
+                try:
+                    # Extract data coordinates from bar_info
+                    # bar_info fields:
+                    #   - bar_idx: The X position (category index: 0, 1, 2...)
+                    #   - width: Bar width in X-axis data units (~0.8)
+                    #   - bottom: Y value at bar bottom (usually 0)
+                    #   - top: Y value at bar top (the actual data value)
+                    #   - center: Y-axis midpoint (NOT X position!)
+                    
+                    # X position from bar_idx (the category index)
+                    x_position = bar_info.get("bar_idx", bar_idx)
+                    bar_width = bar_info.get("width", 0.8)
+                    
+                    # Y values from bottom and top
+                    bottom = bar_info.get("bottom", 0)
+                    top = bar_info.get("top", bar_info.get("height", 0))
+                    
+                    # Calculate data-space corners
+                    data_x0 = x_position - bar_width / 2
+                    data_x1 = x_position + bar_width / 2
+                    data_y0 = bottom
+                    data_y1 = top
+                    
+                    # Transform data coords to pixel coords
+                    # transData converts (data_x, data_y) -> (pixel_x, pixel_y)
+                    pixel_bottom_left = primary_ax.transData.transform((data_x0, data_y0))
+                    pixel_top_right = primary_ax.transData.transform((data_x1, data_y1))
+                    
+                    # Convert matplotlib coords (origin bottom-left) to image coords (origin top-left)
+                    px0 = float(pixel_bottom_left[0])
+                    py1 = float(img_h - pixel_bottom_left[1])  # Bottom in image coords
+                    px1 = float(pixel_top_right[0])
+                    py0 = float(img_h - pixel_top_right[1])    # Top in image coords
+                    
+                    # Ensure proper ordering (y0 < y1)
+                    if py0 > py1:
+                        py0, py1 = py1, py0
+                    
+                    # Create pixel xyxy bounding box
+                    xyxy = [px0, py0, px1, py1]
+                    
+                    # Calculate bar center for baseline matching
+                    bar_cx = (px0 + px1) / 2
+                    bar_cy = (py0 + py1) / 2
+                    bar_bottom_y = py1  # Bottom of bar in image coords
+                    
+                    # Find the best matching baseline
+                    best_baseline = None
+                    min_dist = float('inf')
+                    
+                    for baseline in detailed_metadata["baselines"]:
+                        # Check X-containment (bar center within axis width)
+                        x_min, x_max = baseline['x_range']
+                        if x_min <= bar_cx <= x_max:
+                            # Distance from bar bottom to baseline
+                            dist = abs(bar_bottom_y - baseline['y_pixel'])
+                            
+                            if dist < min_dist:
+                                min_dist = dist
+                                best_baseline = baseline['id']
+                    
+                    # Skip bars that fall outside the plot area (invalid coords)
+                    # This can happen when axis limits don't match bar count
+                    if best_baseline is None:
+                        # Bar center is outside all baseline x_ranges - skip it
+                        if GENERATION_CONFIG.get('debug_mode'):
+                            print(f"DEBUG: Skipping bar {bar_idx} - center {bar_cx:.0f} outside baselines")
+                        continue
+                    
+                    # Add bar with pixel coordinates and baseline link
+                    bar_entry = {
+                        "xyxy": xyxy,
+                        "data_value": float(bar_info.get("value", top)),
+                        "series_idx": bar_info.get("series_idx", 0),
+                        "bar_index": bar_idx,
+                        "baseline_id": best_baseline,
+                        "baseline_distance": float(min_dist) if best_baseline else None
+                    }
+                    detailed_metadata["bars_with_baseline"].append(bar_entry)
+                    
+                except Exception as e:
+                    if GENERATION_CONFIG.get('debug_mode'):
+                        print(f"DEBUG: Could not convert bar {bar_idx} to pixels: {e}")
+    
+    if GENERATION_CONFIG.get('debug_mode'):
+        print(f"DEBUG: GNN metadata - {len(detailed_metadata['baselines'])} baselines, {len(detailed_metadata['bars_with_baseline'])} bars linked")
+                
+    return detailed_metadata
+
+
+def extract_true_baseline_location(fig, detailed_metadata, img_h):
+    """
+    Calculates the exact pixel coordinate of the logical baseline (y=0 or x=0).
+    Used to train SOTA Keypoint Detectors (ChartOCR-style).
+    
+    This is SUPERIOR to manual annotation because matplotlib knows the 
+    coordinate to 64-bit float precision. Manually clicking has ~2-5px error.
+    
+    Returns:
+        List of baseline annotations with exact pixel coordinates
+    """
+    baseline_annotations = []
+
+    for i, ax in enumerate(fig.axes):
+        if not ax.get_visible(): 
+            continue
+
+        orientation = detailed_metadata.get("orientation", "vertical")
+        
+        try:
+            # Project (0, 0) from Data Space to Pixel Space
+            # This is the "God View" - exact location of the zero line
+            origin_pixel = ax.transData.transform((0, 0))
+            origin_x_px = origin_pixel[0]
+            origin_y_px = img_h - origin_pixel[1]  # Flip Y for image coords
+            
+            # Get axis limits to check if 0 is within range
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            
+            if orientation == "vertical":
+                # For vertical bars, baseline is horizontal at Y = origin_y_px
+                # Check if y=0 is within the axis range
+                if ylim[0] <= 0 <= ylim[1] and 0 <= origin_y_px <= img_h:
+                    baseline_annotations.append({
+                        "axis_index": i,
+                        "orientation": "vertical",
+                        "baseline_coordinate": float(origin_y_px),
+                        "type": "zero_line",
+                        "axis_limits": {"y_min": float(ylim[0]), "y_max": float(ylim[1])}
+                    })
+            else:
+                # For horizontal bars, baseline is vertical at X = origin_x_px
+                img_w = detailed_metadata.get("resolution", [800, 600])[0]
+                if xlim[0] <= 0 <= xlim[1] and 0 <= origin_x_px <= img_w:
+                    baseline_annotations.append({
+                        "axis_index": i,
+                        "orientation": "horizontal",
+                        "baseline_coordinate": float(origin_x_px),
+                        "type": "zero_line",
+                        "axis_limits": {"x_min": float(xlim[0]), "x_max": float(xlim[1])}
+                    })
+
+        except Exception as e:
+            if GENERATION_CONFIG.get('debug_mode'):
+                print(f"DEBUG: Could not project baseline for axis {i}: {e}")
+
+    return baseline_annotations
+
+
 def create_unified_annotation(fig, chart_info_map, cls_map, img_w, img_h, annotations):
     """
     Create comprehensive unified JSON with complete chart generation metadata.
@@ -3146,6 +3373,18 @@ def create_unified_annotation(fig, chart_info_map, cls_map, img_w, img_h, annota
     # Add raw annotations
     detailed_metadata["raw_annotations"] = annotations
 
+    # =========================================================================
+    # GNN TRAINING DATA: Add graph topology (bar-to-baseline links)
+    # =========================================================================
+    detailed_metadata = add_graph_topology_metadata(fig, detailed_metadata, img_h)
+    
+    # =========================================================================
+    # KEYPOINT TRAINING DATA: Extract true baseline locations
+    # =========================================================================
+    detailed_metadata["baseline_keypoints"] = extract_true_baseline_location(
+        fig, detailed_metadata, img_h
+    )
+
     return detailed_metadata
 
 class HeatmapQualityValidator:
@@ -3353,9 +3592,10 @@ def monitor_generation_quality(num_samples=100):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default=None)
-    parser.add_argument('--num', type=int, default=None)
+    parser = argparse.ArgumentParser(description='Generate synthetic chart training data')
+    parser.add_argument('--config', type=str, default=None, help='Path to config file')
+    parser.add_argument('--num', type=int, default=None, help='Number of images to generate')
+    parser.add_argument('--output', '-o', type=str, default=None, help='Output directory')
     args = parser.parse_args()
 
     if args.config:
@@ -3369,6 +3609,9 @@ def main():
 
     if args.num:
         cfg['num_images'] = args.num
+    
+    if args.output:
+        cfg['output_dir'] = args.output
 
     random.seed(cfg['seed'])
     np.random.seed(cfg['seed'])
@@ -3865,7 +4108,12 @@ def main():
             "style": unified_json.get("style"),
             "pattern": unified_json.get("pattern"),
             "is_scientific": unified_json.get("is_scientific", False),
-            "raw_annotations": unified_json.get("raw_annotations", [])
+            "raw_annotations": unified_json.get("raw_annotations", []),
+            
+            # GNN TRAINING FIELDS - bar-to-baseline graph topology
+            "baselines": unified_json.get("baselines", []),
+            "bars_with_baseline": unified_json.get("bars_with_baseline", []),
+            "baseline_keypoints": unified_json.get("baseline_keypoints", [])
         }
 
         # 2. Create OCR JSON with OCR annotations

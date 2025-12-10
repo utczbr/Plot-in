@@ -183,12 +183,25 @@ class ImprovedPixelBasedDetector:
         # Smooth to reduce noise
         gradient_smoothed = gaussian_filter1d(gradient_abs, sigma=2.0)
 
-        # Find peaks
+        # Compute adaptive peak detection parameters
+        signal_range = np.max(gradient_smoothed) - np.min(gradient_smoothed)
+        signal_std = np.std(gradient_smoothed)
+        
+        # Box dimension for scaling
+        box_size = abs(y2 - y1) if orientation == 'vertical' else abs(x2 - x1)
+        
+        # Adaptive prominence: scale with signal strength, min 5 to avoid noise
+        adaptive_prominence = max(5.0, signal_range * 0.08, signal_std * 2.0)
+        
+        # Adaptive distance: scale with box size, min 2
+        adaptive_distance = max(2, int(box_size * 0.015))
+        
+        # Find peaks with adaptive parameters
         peaks, properties = find_peaks(
             gradient_smoothed,
-            prominence=10,
-            width=1,
-            distance=3
+            prominence=adaptive_prominence,
+            width=(1, max(3, int(box_size * 0.05))),  # Adaptive width range
+            distance=adaptive_distance
         )
 
         if len(peaks) == 0:
@@ -242,7 +255,8 @@ class ImprovedPixelBasedDetector:
         if median_candidates:
             median_candidates.sort(key=lambda x: x[1], reverse=True)  # Sort by prominence
             median_pixel = median_candidates[0][0]
-            median_confidence = min(1.0, median_candidates[0][1] / 50.0)
+            # Normalize confidence relative to signal statistics (not magic number)
+            median_confidence = min(1.0, median_candidates[0][1] / (3.0 * signal_std + 1e-6))
 
         # ✅ CORRECTED: Select FURTHEST whiskers in each direction
         whisker_low_pixel = None

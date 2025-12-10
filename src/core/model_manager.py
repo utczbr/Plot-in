@@ -7,6 +7,8 @@ import onnxruntime as ort
 import logging
 
 
+from .config import MODELS_CONFIG
+
 class ModelManager:
     """Thread-safe singleton for model management"""
     _instance = None
@@ -31,16 +33,9 @@ class ModelManager:
                 return self._models
             
             self._models = {}
-            model_files = {
-                'classification': 'classification.onnx',
-                'bar': 'detect_bar.onnx',
-                'box': 'detect_box.onnx',
-                'line': 'detect_line.onnx',
-                'scatter': 'detect_scatter.onnx',
-                'histogram': 'detect_histogram.onnx',
-                'heatmap': 'detect_heatmap.onnx',  # NEW
-                'pie': 'Pie_pose.onnx'          # NEW
-            }
+            # Flatten dictionary for loading
+            model_files = {'classification': MODELS_CONFIG.classification}
+            model_files.update(MODELS_CONFIG.detection)
             
             for model_name, filename in model_files.items():
                 model_path = Path(models_dir) / filename

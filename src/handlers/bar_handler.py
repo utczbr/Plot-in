@@ -8,7 +8,8 @@ configuration and value extraction.
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import BaseChartHandler, ExtractionResult
+from handlers.base_handler import ExtractionResult
+from handlers.legacy import BaseChartHandler
 
 # NEW: Import BarExtractor to use the new topological association
 from extractors.bar_extractor import BarExtractor

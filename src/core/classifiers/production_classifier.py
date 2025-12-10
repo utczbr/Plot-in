@@ -9,6 +9,8 @@ from .line_chart_classifier import LineChartClassifier
 from .scatter_chart_classifier import ScatterChartClassifier
 from .box_chart_classifier import BoxChartClassifier
 from .histogram_chart_classifier import HistogramChartClassifier
+from .heatmap_chart_classifier import HeatmapChartClassifier
+from .pie_chart_classifier import PieChartClassifier
 from .base_classifier import ClassificationResult, BaseChartClassifier
 from services.orientation_service import Orientation
 
@@ -165,7 +167,10 @@ class ProductionSpatialClassifier:
             'line': {**default, **LineChartClassifier.get_default_params()},
             'scatter': {**default, **ScatterChartClassifier.get_default_params()},
             'box': {**default, **BoxChartClassifier.get_default_params()},
-            'histogram': {**default, **HistogramChartClassifier.get_default_params()}
+            'histogram': {**default, **HistogramChartClassifier.get_default_params()},
+            'histogram': {**default, **HistogramChartClassifier.get_default_params()},
+            'heatmap': {**default, **HeatmapChartClassifier.get_default_params()},
+            'pie': {**default, **PieChartClassifier.get_default_params()}
         }
     
     def _select_parameters(
@@ -203,7 +208,10 @@ class ProductionSpatialClassifier:
             'line': LineChartClassifier,
             'scatter': ScatterChartClassifier,
             'box': BoxChartClassifier,
-            'histogram': HistogramChartClassifier
+            'histogram': HistogramChartClassifier,
+            'histogram': HistogramChartClassifier,
+            'heatmap': HeatmapChartClassifier,
+            'pie': PieChartClassifier
         }
         
         classifier_class = classifier_map.get(chart_type)

@@ -13,7 +13,8 @@ from handlers.types import OldExtractionResult
 from services.orientation_service import Orientation, OrientationService
 from services.dual_axis_service import DualAxisDetectionService, DualAxisDecision
 from services.meta_clustering_service import MetaClusteringService
-from core.enums import ChartType
+# ChartType import moved to method level to avoid circular dependency
+# from core.enums import ChartType
 
 # Import baseline detection components
 try:
@@ -199,7 +200,7 @@ class BaseChartHandler(ABC):
                     min_samples=rec.parameters.get('min_samples'),
                     metric=rec.parameters.get('metric', 'euclidean')
                 )
-            except:
+            except Exception:
                 # Fallback clusterer implementation
                 from sklearn.cluster import DBSCAN
                 class FallbackClusterer:
@@ -215,7 +216,7 @@ class BaseChartHandler(ABC):
                     min_samples=rec.parameters['min_samples'],
                     metric=rec.parameters.get('metric', 'euclidean')
                 )
-            except:
+            except Exception:
                 # Fallback
                 from sklearn.cluster import DBSCAN
                 class FallbackClusterer:
@@ -231,7 +232,7 @@ class BaseChartHandler(ABC):
                     n_init=rec.parameters.get('n_init', 10),
                     temperature=rec.parameters.get('temperature', 0.7)
                 )
-            except:
+            except Exception:
                 # Fallback to regular KMeans
                 from sklearn.cluster import KMeans
                 class FallbackClusterer:
@@ -305,7 +306,7 @@ class BaseChartHandler(ABC):
                 dbscan_eps_px=0.04 * image.shape[0],  # Default for bars
                 stack_band_frac=0.02  # Stack-aware aggregation
             )
-        except:
+        except Exception:
             # Fallback config
             class FallbackConfig:
                 def __init__(self):
@@ -321,18 +322,19 @@ class BaseChartHandler(ABC):
             try:
                 config.hdbscan_min_cluster_size = 3
                 config.hdbscan_min_samples = 1
-            except:
+            except Exception:
                 pass  # Use defaults
 
         try:
             detector = ModularBaselineDetector(config=config)
-        except:
+        except Exception:
             # Fallback detector
             class FallbackDetector:
                 def detect(self, **kwargs):
                     return {'baselines': []}
             detector = FallbackDetector()
 
+        from core.enums import ChartType
         # ✅ FIX: Pass the actual CalibrationResult, not DetectorCalibrationInput wrapper
         result = detector.detect(
             img=image,

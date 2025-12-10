@@ -93,6 +93,11 @@ def merge_json_files(base_filename, labels_dir="labels"):
         # ===== RAW ANNOTATIONS (XYXY) =====
         "raw_annotations": detailed.get("raw_annotations", []),
 
+        # ===== GNN TRAINING DATA (Bar-to-Baseline Graph Topology) =====
+        "baselines": detailed.get("baselines", []),
+        "bars_with_baseline": detailed.get("bars_with_baseline", []),
+        "baseline_keypoints": detailed.get("baseline_keypoints", []),
+
         # ===== ELEMENT-SPECIFIC ANNOTATIONS =====
         "annotations_by_element": {
             # Visual Data Elements

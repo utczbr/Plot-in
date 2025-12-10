@@ -18,7 +18,7 @@ class ScatterChartClassifier(BaseChartClassifier):
             # Scatter-specific thresholds
             'scale_size_max_width': 0.075,
             'scale_size_max_height': 0.04,
-            'numeric_boost': 5.0,
+            'numeric_boost': 7.0,  # INCREASED: Scatter labels are almost always numeric
             
             # Position weights
             'left_edge_weight': 7.0,
@@ -26,7 +26,7 @@ class ScatterChartClassifier(BaseChartClassifier):
             'bottom_edge_weight': 6.5,
             
             # Scatter-specific
-            'point_cloud_proximity_weight': 5.0,
+            'point_cloud_proximity_weight': 3.0,  # REDUCED: Less false positives near dense clusters
             'dual_axis_support': True,
             
             # Title detection
@@ -35,7 +35,16 @@ class ScatterChartClassifier(BaseChartClassifier):
             
             # Thresholds
             'classification_threshold': 3.0,
-            'edge_threshold': 0.18
+            'edge_threshold': 0.25,  # INCREASED: Wider tolerance for tight layouts
+            
+            # NEW: Gaussian kernel weights (Phase 14)
+            'gaussian_kernel_weight': 1.5,  # 1.5x boost for scatter
+            'center_penalty': 0.0,  # DISABLED: Scatter can have internal axes
+            'left_axis_weight': 6.0,
+            'right_axis_weight': 5.0,
+            'bottom_axis_weight': 5.0,
+            'top_title_weight': 4.0,
+            'center_plot_weight': 0.0  # DISABLED
         }
     
     def classify(
@@ -176,7 +185,39 @@ class ScatterChartClassifier(BaseChartClassifier):
         aspect = feat['aspect']
         is_numeric = feat['is_numeric']
         
-        # === SCALE LABEL SCORING (Dominant in scatter plots) ===
+        # === GAUSSIAN REGION SCORING (Phase 14) ===
+        gaussian_weights = {
+            'left_axis_weight': self.params.get('left_axis_weight', 6.0),
+            'right_axis_weight': self.params.get('right_axis_weight', 5.0),
+            'bottom_axis_weight': self.params.get('bottom_axis_weight', 5.0),
+            'top_title_weight': self.params.get('top_title_weight', 4.0),
+            'center_plot_weight': self.params.get('center_plot_weight', 0.0)  # Disabled for scatter
+        }
+        
+        region_scores = self._compute_gaussian_region_scores(
+            (nx, ny),
+            sigma_x=0.09,
+            sigma_y=0.09,
+            weights=gaussian_weights
+        )
+        
+        kernel_weight = self.params.get('gaussian_kernel_weight', 1.5)
+        
+        # Apply Gaussian scores to scale_label
+        gaussian_scale = (
+            region_scores['left_axis'] + 
+            region_scores['right_axis'] + 
+            region_scores['bottom_axis']
+        ) * kernel_weight
+        scores['scale_label'] += gaussian_scale
+        
+        # Apply Gaussian to title
+        scores['axis_title'] += region_scores['top_title'] * kernel_weight
+        
+        # Center penalty (disabled via center_plot_weight=0 for scatter)
+        scores['scale_label'] -= region_scores['center_plot']
+        
+        # === SCALE LABEL SCORING (Original + Enhanced) ===
         # Small size
         if rel_w < self.params['scale_size_max_width'] and rel_h < self.params['scale_size_max_height']:
             scores['scale_label'] += 5.0
@@ -198,11 +239,6 @@ class ScatterChartClassifier(BaseChartClassifier):
         if scatter_ctx:
             proximity_score = self._compute_point_cloud_proximity(feat, scatter_ctx)
             scores['scale_label'] += proximity_score * self.params['point_cloud_proximity_weight']
-        
-        # Dual-axis penalty for center positions
-        center_dist = np.sqrt((nx - 0.5)**2 + (ny - 0.5)**2)
-        if center_dist < 0.3:
-            scores['scale_label'] -= 2.0
         
         # === TICK LABEL SCORING (Not used in scatter) ===
         scores['tick_label'] = 0.0
@@ -259,34 +295,173 @@ class ScatterChartClassifier(BaseChartClassifier):
     def _separate_xy_scales_scatter(
         self, scale_labels: List[Dict], w: int, h: int, scatter_ctx: Dict
     ) -> Tuple[List[Dict], List[Dict]]:
-        """Separate into X and Y scales using scatter-specific logic"""
+        """
+        Separate into X and Y scales using robust geometric clustering.
+        Replaces naïve hard thresholds with alignment detection.
+        """
+        if not scale_labels:
+            self.logger.warning("No scale labels provided to sensitive separation")
+            return [], []
+        
+        self.logger.info(f"Separating {len(scale_labels)} labels into X/Y axes")
+
         x_scales = []
         y_scales = []
         
-        extent = scatter_ctx.get('extent', {})
-        
-        for label in scale_labels:
+        # 1. Collect Centroids
+        points = []
+        for i, label in enumerate(scale_labels):
             x1, y1, x2, y2 = label['xyxy']
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-            nx, ny = cx / w, cy / h
+            points.append({'cx': cx, 'cy': cy, 'label': label, 'idx': i})
             
-            # X-axis: bottom region and below point cloud
-            if ny > 0.75 or (extent and cy > extent.get('bottom', h)):
-                label['axis'] = 'x'
-                x_scales.append(label)
-            # Y-axis: left/right edges
-            elif nx < 0.20 or nx > 0.80:
-                label['axis'] = 'y'
-                y_scales.append(label)
-            else:
-                # Fallback
-                if ny > nx:
-                    label['axis'] = 'x'
-                    x_scales.append(label)
-                else:
-                    label['axis'] = 'y'
-                    y_scales.append(label)
+        # 2. Score affinity to X-axis (Horizontal) vs Y-axis (Vertical)
+        # X-axis labels form a horizontal line: cy ~= constant
+        # Y-axis labels form a vertical line: cx ~= constant
         
+        # We can simply group by finding the dominant Horizontal line (bottom usually)
+        # and dominant Vertical line (left usually)
+        
+        # Simple RANSAC-like line finding:
+        # Bin 'cy' values to find potential X-axis rows
+        cy_vals = [p['cy'] for p in points]
+        cx_vals = [p['cx'] for p in points]
+        
+        # Initial Assignments based on alignment
+        # Detect rows (potential X axes)
+        # We assume X axis is usually at bottom
+        y_bins = {}
+        bin_size = h * 0.05 # 5% height tolerance
+        for p in points:
+            bin_idx = int(p['cy'] / bin_size)
+            if bin_idx not in y_bins: y_bins[bin_idx] = []
+            y_bins[bin_idx].append(p)
+            
+        # Find dominant bottom row
+        best_x_row = []
+        max_y_val = -1
+        
+        for b_idx, row_points in y_bins.items():
+            # Filter: Must have mostly distinct X values (spread out horizontally)
+            if len(row_points) < 2: continue
+            
+            # Check if it's the "lowest" (max cy) significant row
+            avg_cy = np.mean([p['cy'] for p in row_points])
+            
+            # Prefer rows lower in image (higher y) for standard charts
+            # Heuristic: Score = count * 10 + (position_score)
+            # We want to favor rows with MANY points (the axis) over rows with 1-2 points (artifacts)
+            # taking into account that the axis is usually near the bottom.
+            
+            # Current score
+            current_count = len(row_points)
+            best_count = len(best_x_row)
+            
+            # If strictly more points (with some buffer against noise), take it
+            if current_count > best_count:
+                max_y_val = avg_cy
+                best_x_row = row_points
+            elif current_count == best_count:
+                 # If counts are equal, prefer the one lower in image (higher y)
+                 if avg_cy > max_y_val:
+                     max_y_val = avg_cy
+                     best_x_row = row_points
+
+        self.logger.debug(f"Best X-row candidate: {len(best_x_row)} points at cy~={max_y_val:.1f}")
+
+        # Detect columns (potential Y axes)
+        # We assume Y axis is usually at left
+        x_bins = {}
+        bin_size_w = w * 0.05
+        for p in points:
+            bin_idx = int(p['cx'] / bin_size_w)
+            if bin_idx not in x_bins: x_bins[bin_idx] = []
+            x_bins[bin_idx].append(p)
+            
+        # Find dominant left column
+        best_y_col = []
+        min_x_val = w * 999
+        
+        for b_idx, col_points in x_bins.items():
+            if len(col_points) < 2: continue
+            
+            avg_cx = np.mean([p['cx'] for p in col_points])
+            
+            # Prefer columns further left (lower x)
+            # Similar logic for Y-axis (prefer Left)
+            current_count = len(col_points)
+            best_count = len(best_y_col)
+            
+            if current_count > best_count:
+                min_x_val = avg_cx
+                best_y_col = col_points
+            elif current_count == best_count:
+                # If equal, prefer left-most
+                if avg_cx < min_x_val:
+                     min_x_val = avg_cx
+                     best_y_col = col_points
+
+        self.logger.debug(f"Best Y-col candidate: {len(best_y_col)} points at cx~={min_x_val:.1f}")
+                
+        # 3. Assign and Resolve Conflicts
+        assigned_indices = set()
+        
+        # Limit X candidates to those with high cy (bottom 40% usually, or just below plot)
+        # Limit Y candidates to those with low cx (left 40% usually)
+        
+        # But wait, scientific plots might have axes in center.
+        # Let's rely on the "Line" quality.
+        
+        # Assign best row to X
+        for p in best_x_row:
+            p['label']['axis'] = 'x'
+            x_scales.append(p['label'])
+            assigned_indices.add(p['idx'])
+            
+        # Assign best col to Y
+        for p in best_y_col:
+            if p['idx'] in assigned_indices:
+                # Conflict (Corner point?): Assign to based on monotonicity or exclude
+                # Usually corner point is 0. If it fits both, we might duplicate or pick one.
+                # For now, let's keep it in X if already there? 
+                # Better: Check aspect ratio of the label text?
+                # or check local neighbors.
+                pass
+            else:
+                p['label']['axis'] = 'y'
+                y_scales.append(p['label'])
+                assigned_indices.add(p['idx'])
+                
+        # 4. Handle remaining/outlier points
+        # If we missed some, try to assign to closest group if close enough
+        for p in points:
+            if p['idx'] in assigned_indices: continue
+            
+            # Distance to X-line (cy = max_y_val)
+            dist_to_x = abs(p['cy'] - max_y_val) if max_y_val > 0 else 9999
+            
+            # Distance to Y-line (cx = min_x_val)
+            dist_to_y = abs(p['cx'] - min_x_val) if min_x_val < 9999 else 9999
+            
+            threshold = h * 0.05
+            
+            if dist_to_x < threshold and dist_to_x < dist_to_y:
+                p['label']['axis'] = 'x'
+                x_scales.append(p['label'])
+            elif dist_to_y < threshold:
+                p['label']['axis'] = 'y'
+                y_scales.append(p['label'])
+            else:
+                 # Fallback to old positional logic for strays
+                 nx, ny = p['cx']/w, p['cy']/h
+                 if ny > 0.75: 
+                     p['label']['axis'] = 'x'
+                     x_scales.append(p['label'])
+                 elif nx < 0.2:
+                     p['label']['axis'] = 'y'
+                     y_scales.append(p['label'])
+        
+        self.logger.info(f"Separation Result: X={len(x_scales)}, Y={len(y_scales)} labels")
         return x_scales, y_scales
     
     

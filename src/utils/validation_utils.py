@@ -1,22 +1,20 @@
 """
 Centralized validation utilities for chart analysis.
 """
-from typing import Optional, Union
+from typing import Optional
+import re
 
 def is_numeric(text: Optional[str]) -> bool:
     """
-    Check if text represents a numeric value.
-    Handles common chart formatting like commas, percentages, and currency symbols.
+    Check if text represents a numeric value using strict regex.
+    Ignores labels with letters (e.g., 'G1', 'Item A') to avoid false positives for scales.
     """
     if not text:
         return False
-    try:
-        # Remove common non-numeric characters found in chart labels
-        text_clean = text.replace(',', '').replace('%', '').replace('$', '').replace(' ', '').strip()
-        float(text_clean)
-        return True
-    except (ValueError, TypeError):
-        return False
+    # Regex: Optional sign, digits, optional decimal part. 
+    # Allows for simple numbers but rejects 'G1', '10kg' etc.
+    # Note: Does NOT handle scientific notation or comma separators based on strict user request.
+    return bool(re.match(r'^\s*[-+]?(?:\d{1,3}(?:[.,]\d{3})*|\d*)(?:[.,]\d+)?(?:[eE][-+]?\d+)?\s*$', text.strip()))
 
 def clean_numeric_text(text: Optional[str]) -> Optional[float]:
     """

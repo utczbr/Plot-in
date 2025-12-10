@@ -7,7 +7,8 @@ due to missing append in BoxExtractor.
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import BaseChartHandler, ExtractionResult, ChartCoordinateSystem
+from handlers.base_handler import ExtractionResult, ChartCoordinateSystem
+from handlers.legacy import BaseChartHandler
 from extractors.box_extractor import BoxExtractor, group_box_plot_elements
 from services.meta_clustering_service import ClusteringRecommendation
 
@@ -161,9 +162,9 @@ class BoxHandler(BaseChartHandler):
             calibrations = self._calibrate_axes(classified, dual_decision, orientation)
 
             for axis_id, cal in calibrations.items():
-                if hasattr(cal, 'r_squared') and cal.r_squared < self.CRITICAL_R2:
+                if hasattr(cal, 'r_squared') and cal.r_squared < self.FAILURE_R2:
                     errors.append(f"{axis_id} calibration catastrophic: R²={getattr(cal, 'r_squared', 0):.3f}")
-                elif hasattr(cal, 'r_squared') and cal.r_squared < self.FAILURE_R2:
+                elif hasattr(cal, 'r_squared') and cal.r_squared < self.CRITICAL_R2:
                     warnings.append(f"{axis_id} calibration quality low: R²={getattr(cal, 'r_squared', 0):.3f}")
 
             if errors:

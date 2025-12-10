@@ -229,7 +229,7 @@ class ChartAnalysisPipeline(BasePipeline):
             return 'vertical'
             
         service = OrientationDetectionService()
-        result = service.detect(elements, img.shape[1], img.shape[0], chart_type)
+        result = service.detect(elements, img.shape[1], img.shape[0], chart_type=chart_type)
         return result.orientation
 
     def _process_ocr(self, img: np.ndarray, detections: Dict):

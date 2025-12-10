@@ -1,0 +1,77 @@
+{
+  "ocr_engine": "EasyOCR",
+  "ocr_accuracy": "Precise",
+  "spatial_method": "LYLLA",
+  "calibration_method": "PROSAC",
+  "ocr_whitelists": {
+    "scale_label": "0123456789.,-eE+",
+    "axis_title": "",
+    "bar_label": "",
+    "chart_title": "",
+    "legend": "",
+    "data_label": "0123456789.,-+%",
+    "other": ""
+  },
+  "ocr_settings": {
+    "easyocr_gpu": true,
+    "easyocr_contrast_ths": 0.0,
+    "easyocr_adjust_contrast": 0.5,
+    "easyocr_min_size": 10,
+    "tesseract_psm": 6,
+    "tesseract_oem": 3,
+    "scale_factor": 3.0,
+    "retry_on_suspicious": true,
+    "aggressive_preprocessing": false,
+    "languages": [
+      "en",
+      "pt"
+    ]
+  },
+  "detection_thresholds": {
+    "classification": 0.8,
+    "bar_detection": 0.6,
+    "box_detection": 0.6,
+    "line_detection": 0.6,
+    "scatter_detection": 0.6,
+    "nms_threshold": 0.55
+  },
+  "calibration_settings": {
+    "min_r_squared": 0.95,
+    "outlier_threshold_std": 2.0,
+    "min_scale_labels": 2,
+    "baseline_validation_tolerance": 0.2
+  },
+  "bar_label_settings": {
+    "max_horizontal_distance_factor": 1.0,
+    "max_vertical_distance_factor": 1.5,
+    "score_threshold": 2.0,
+    "use_sorted_assignment": true
+  },
+  "image_processing": {
+    "clahe_clip_limit": 1.0,
+    "clahe_grid_size": 8,
+    "bilateral_filter_d": 5,
+    "bilateral_filter_sigma_color": 50,
+    "bilateral_filter_sigma_space": 50
+  },
+  "output_settings": {
+    "save_annotated_image": true,
+    "save_json": true,
+    "json_indent": 4,
+    "include_debug_info": false,
+    "image_quality": 95
+  },
+  "performance": {
+    "batch_workers": 4,
+    "ocr_workers": 4,
+    "use_gpu": true
+  },
+  "nn_classifier": {
+    "enabled": false,
+    "model_path": "models/chart_classifier_nn.npy"
+  },
+  "calibration": {
+    "method": "auto",
+    "use_robust_gd": true
+  }
+}

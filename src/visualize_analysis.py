@@ -1,4 +1,3 @@
-
 import json
 import sys
 import argparse
@@ -9,7 +8,7 @@ import glob
 from pathlib import Path
 
 def random_color():
-    return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+    return (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))
 
 def is_normalized(bbox):
     """Check if a bounding box is normalized (all values between 0 and 1)."""
@@ -18,7 +17,7 @@ def is_normalized(bbox):
 def get_bbox(item, img_width, img_height):
     """
     Extract and normalize bounding box from item.
-    Returns (x0, y0, x1, y1) or None.
+    Returns [x0, y0, x1, y1] or None.
     """
     bbox = None
     if 'xyxy' in item:
@@ -29,11 +28,7 @@ def get_bbox(item, img_width, img_height):
     if not bbox:
         return None
 
-    # Handle [x, y, w, h] format if detected (heuristic: usually w, h < img dimensions if not normalized, 
-    # but here we mostly see xyxy. Let's assume xyxy for now based on files seen).
-    # However, some files might strictly be xyxy.
-    
-    # Check normalization
+    # Check normalization and scaling
     if is_normalized(bbox):
         return [
             bbox[0] * img_width,
@@ -44,206 +39,237 @@ def get_bbox(item, img_width, img_height):
     
     return bbox
 
-def draw_bbox(draw, bbox, color, width=2, label=None, font=None):
-    # bbox format: [x0, y0, x1, y1]
-    # Ensure coordinates are integers
+def get_pixel_from_value(value, coeffs):
+    """
+    Converts a data value to a pixel coordinate using the linear coefficients.
+    Equation assumed: Value = Coeff[0] * Pixel + Coeff[1]
+    Therefore: Pixel = (Value - Coeff[1]) / Coeff[0]
+    """
     try:
-        bbox = [int(c) for c in bbox]
-        draw.rectangle(bbox, outline=color, width=width)
-        if label and font:
-            # Draw text background
-            text_bbox = draw.textbbox((bbox[0], bbox[1]), label, font=font)
-            draw.rectangle(text_bbox, fill=color)
-            draw.text((bbox[0], bbox[1]), label, fill="white", font=font)
-    except Exception as e:
-        print(f"Warning: Failed to draw bbox {bbox}: {e}")
+        slope = coeffs[0]
+        intercept = coeffs[1]
+        if abs(slope) < 1e-9: return None # Avoid division by zero
+        return (value - intercept) / slope
+    except Exception:
+        return None
+
+def draw_boxplot_element(draw, elem, bbox, coeffs, orientation="vertical", color="red", width=2):
+    """
+    Draws the anatomical parts of a box plot: Medians, Whiskers, and Outliers.
+    """
+    x0, y0, x1, y1 = bbox
+    
+    # Calculate center of the box width/height depending on orientation
+    if orientation == "vertical":
+        center_axis = (x0 + x1) / 2
+        box_min_pixel, box_max_pixel = min(y0, y1), max(y0, y1)
+    else:
+        center_axis = (y0 + y1) / 2
+        box_min_pixel, box_max_pixel = min(x0, x1), max(x0, x1)
+
+    # 1. Draw Median
+    median_val = elem.get('median')
+    median_pixel = elem.get('median_pixel')
+    
+    # If explicit pixel not found, calculate from value using calibration
+    if median_pixel is None and median_val is not None and coeffs:
+        median_pixel = get_pixel_from_value(median_val, coeffs)
+        
+    if median_pixel is not None:
+        if orientation == "vertical":
+            draw.line([(x0, median_pixel), (x1, median_pixel)], fill="yellow", width=width+1)
+        else:
+            draw.line([(median_pixel, y0), (median_pixel, y1)], fill="yellow", width=width+1)
+
+    # 2. Draw Whiskers (Lines extending from box to min/max)
+    # The box itself (xyxy) usually represents Q1 to Q3. 
+    # Whiskers extend from Q1/Q3 to whisker_low/whisker_high.
+    
+    w_low_val = elem.get('whisker_low')
+    w_high_val = elem.get('whisker_high')
+    
+    if coeffs:
+        # Convert values to pixels
+        p_low = get_pixel_from_value(w_low_val, coeffs) if w_low_val is not None else None
+        p_high = get_pixel_from_value(w_high_val, coeffs) if w_high_val is not None else None
+        
+        # Determine which pixel is 'top' and 'bottom' visually implies sorting, 
+        # but the line drawing just needs two points.
+        
+        # Draw Whisker Stems
+        if orientation == "vertical":
+            # Connect box top/bottom to whiskers
+            # Find closest box edge to the whisker pixel to decide where to draw from
+            # (Simple heuristic: High value whisker connects to top or bottom depending on axis direction)
+            
+            for p in [p_low, p_high]:
+                if p is None: continue
+                # Draw line from center of box to whisker point
+                # Clamp to nearest box edge (y0 or y1)
+                dist_y0 = abs(p - y0)
+                dist_y1 = abs(p - y1)
+                nearest_edge = y0 if dist_y0 < dist_y1 else y1
+                
+                # Stem
+                draw.line([(center_axis, nearest_edge), (center_axis, p)], fill=color, width=width)
+                # Cap (horizontal line at whisker end)
+                cap_width = (x1 - x0) * 0.5
+                draw.line([(center_axis - cap_width/2, p), (center_axis + cap_width/2, p)], fill=color, width=width)
+
+        else: # Horizontal
+            for p in [p_low, p_high]:
+                if p is None: continue
+                dist_x0 = abs(p - x0)
+                dist_x1 = abs(p - x1)
+                nearest_edge = x0 if dist_x0 < dist_x1 else x1
+                
+                # Stem
+                draw.line([(nearest_edge, center_axis), (p, center_axis)], fill=color, width=width)
+                # Cap
+                cap_height = (y1 - y0) * 0.5
+                draw.line([(p, center_axis - cap_height/2), (p, center_axis + cap_height/2)], fill=color, width=width)
+
+    # 3. Draw Outliers
+    outliers = elem.get('outliers', [])
+    if outliers and coeffs:
+        for out_val in outliers:
+            p_out = get_pixel_from_value(out_val, coeffs)
+            if p_out is not None:
+                r = 3 # radius
+                if orientation == "vertical":
+                    cx, cy = center_axis, p_out
+                else:
+                    cx, cy = p_out, center_axis
+                
+                draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline="blue", width=2)
+
 
 def process_file(image_path, json_path, output_path):
-    print(f"Processing {json_path} -> {output_path}")
+    print(f"Processing {json_path}")
     
     if not os.path.exists(image_path):
-        print(f"Error: Image file not found at {image_path}")
+        print(f"  Error: Image not found: {image_path}")
         return False
         
-    if not os.path.exists(json_path):
-        print(f"Error: JSON file not found at {json_path}")
-        return False
-
     try:
         with open(json_path, 'r') as f:
             data = json.load(f)
     except Exception as e:
-        print(f"Error loading JSON: {e}")
+        print(f"  Error loading JSON: {e}")
         return False
         
     try:
         image = Image.open(image_path).convert("RGB")
         width, height = image.size
-        # Increase limit for large images if necessary, though basic charts should be fine
-        Image.MAX_IMAGE_PIXELS = None 
-        
         draw = ImageDraw.Draw(image)
         
-        # Try to load a font, fall back to default if necessary
         try:
-            # Try a common font
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
-        except IOError:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
+        except:
             font = ImageFont.load_default()
 
-        # 1. Visualize Detections (Raw YOLO detections)
-        if 'detections' in data:
-            for det_type, det_list in data['detections'].items():
-                color = random_color()
-                for det in det_list:
-                    bbox = get_bbox(det, width, height)
-                    if bbox:
-                        conf = det.get('conf', 0.0)
-                        label = f"{det_type}: {conf:.2f}"
-                        # Draw thin box for raw detections
-                        draw_bbox(draw, bbox, color, width=1, label=None, font=font)
-
-        # 2. Visualize Elements (Extracted data points/bars/slices)
+        # --- PREPARATION: Get Global Metadata ---
+        chart_type = data.get('chart_type', 'unknown')
+        coeffs = None
+        if 'calibration' in data and 'primary' in data['calibration']:
+             coeffs = data['calibration']['primary'].get('coeffs')
+        
+        # --- 1. VISUALIZE ELEMENTS (The Box Plots) ---
         if 'elements' in data:
-            color = (0, 255, 0) # Green for extracted elements
-            for elem in data['elements']:
+            for i, elem in enumerate(data['elements']):
                 bbox = get_bbox(elem, width, height)
-                
-                if bbox:
-                    # Construct label based on available fields
-                    vals = []
-                    if 'estimated_value' in elem:
-                         vals.append(f"val:{elem['estimated_value']:.1f}")
-                    if 'value' in elem:
-                         vals.append(f"val:{elem['value']:.2f}")
-                    if 'x' in elem:
-                        vals.append(f"x:{elem['x']:.1f}")
-                    if 'y' in elem:
-                        vals.append(f"y:{elem['y']:.1f}")
-                    if 'label' in elem:
-                        vals.append(f"lbl:{elem['label']}")
-                    
-                    label = ", ".join(vals)
-                    draw_bbox(draw, bbox, color, width=3, label=label, font=font)
-                    
-                    # Draw center point if available
-                    if 'center' in elem:
-                        cx, cy = elem['center']
-                        # Normalize if needed (though usually absolute in these files)
-                        # Heuristic: if cx < 1.0 and width > 100, assume normalized
-                        if cx <= 1.0 and cx > 0 and width > 100:
-                            cx *= width
-                            cy *= height
-                            
-                        r = 3
-                        draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill='red', outline='white')
+                if not bbox: continue
 
-        # 3. Visualize Scale Labels (Text)
-        if 'metadata' in data and \
-           'label_classification' in data['metadata'] and \
-           'scale_labels' in data['metadata']['label_classification']:
+                color = (0, 255, 0) # Green for the main box
+                
+                # Draw the main Interquartile Box (Q1-Q3)
+                # Using a slightly thinner line to not obscure details, or semi-transparent logic if we had alpha
+                draw.rectangle(bbox, outline=color, width=3)
+                
+                # Annotate Index
+                draw.text((bbox[0], bbox[1]-15), f"#{elem.get('index', i)}", fill=color, font=font)
+
+                # Special Logic for Box Plots to draw whiskers and medians
+                if chart_type == 'box':
+                    orientation = elem.get('orientation', 'vertical')
+                    draw_boxplot_element(draw, elem, bbox, coeffs, orientation, color=color)
+
+        # --- 2. VISUALIZE LABELS (Ticks/Text) ---
+        if 'metadata' in data and 'label_classification' in data['metadata']:
+            labels = data['metadata']['label_classification'].get('scale_labels', []) + \
+                     data['metadata']['label_classification'].get('tick_labels', [])
             
-            scale_labels = data['metadata']['label_classification']['scale_labels']
-            color = (0, 0, 255) # Blue for text
-            for lbl in scale_labels:
+            for lbl in labels:
                 bbox = get_bbox(lbl, width, height)
                 if bbox:
-                    text = lbl.get('text', '')
-                    cleaned = lbl.get('cleaned_value', '')
-                    axis = lbl.get('axis', '?')
-                    
-                    label = f"{axis}: {text}"
-                    if cleaned != '':
-                        label += f" -> {cleaned}"
-                        
-                    draw_bbox(draw, bbox, color, width=2, label=label, font=font)
+                    # Draw text box
+                    draw.rectangle(bbox, outline="blue", width=1)
+                    if 'text' in lbl:
+                         # Draw tiny text nearby
+                         draw.text((bbox[0], bbox[3]), lbl['text'], fill="blue", font=font)
 
         image.save(output_path)
+        print(f"  Saved to {output_path}")
         return True
 
     except Exception as e:
-        print(f"Error processing image {image_path}: {e}")
+        print(f"  Error processing image: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description='Visualize chart analysis JSON on image.')
-    parser.add_argument('image_source', help='Path to image file OR directory of images')
-    parser.add_argument('json_source', help='Path to analysis JSON file OR directory of JSON files')
-    parser.add_argument('output_dir', help='Path/Directory to save annotated images')
+    parser = argparse.ArgumentParser(description='Visualize robust chart analysis.')
+    parser.add_argument('image_source', help='Path to image or directory')
+    parser.add_argument('json_source', help='Path to JSON or directory')
+    parser.add_argument('output_dir', help='Output directory')
     
     args = parser.parse_args()
     
-    # Mode detection
-    is_batch = os.path.isdir(args.json_source)
-    
-    if is_batch:
-        if not os.path.isdir(args.image_source):
-             print("Error: If json_source is a directory, image_source must also be a directory.")
-             sys.exit(1)
-             
-        if not os.path.exists(args.output_dir):
-            os.makedirs(args.output_dir)
-            
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    # Determine if batch or single file
+    if os.path.isdir(args.json_source):
         json_files = glob.glob(os.path.join(args.json_source, "*.json"))
-        print(f"Found {len(json_files)} JSON files in {args.json_source}")
-        
-        success_count = 0
-        for json_file in json_files:
-            try:
-                # 1. Try to find image filename from JSON content
-                image_filename = None
-                with open(json_file, 'r') as f:
-                    data = json.load(f)
-                    if 'image_file' in data:
-                        image_filename = data['image_file']
-                
-                # 2. Fallback: derive from JSON filename if not in content
-                if not image_filename:
-                    # Assumes chart_00001_analysis.json -> chart_00001.png
-                    stem = Path(json_file).stem
-                    if stem.endswith('_analysis'):
-                        image_filename = stem.replace('_analysis', '') + ".png"
-                    else:
-                        image_filename = stem + ".png"
-                        
-                image_path = os.path.join(args.image_source, image_filename)
-                
-                # Validate image exists, try other extensions if needed?
-                if not os.path.exists(image_path):
-                     # Try jpg?
-                     base = os.path.splitext(image_path)[0]
-                     for ext in ['.jpg', '.jpeg', '.bmp']:
-                         if os.path.exists(base + ext):
-                             image_path = base + ext
-                             break
-                
-                stem = Path(json_file).stem
-                output_filename = f"{stem}_annotated.png"
-                output_path = os.path.join(args.output_dir, output_filename)
-                
-                if process_file(image_path, json_file, output_path):
-                    success_count += 1
-                    
-            except Exception as e:
-                print(f"Failed to setup processing for {json_file}: {e}")
-                
-        print(f"Batch processing complete. Successfully processed {success_count}/{len(json_files)} files.")
-        
+        is_dir_mode = True
     else:
-        # Single file mode
-        # json_source is file, image_source is file. output_dir is interpreted as file path unless directory exists
-        # Actually to keep it simple, if output_dir ends in .png use it, else append filename
+        json_files = [args.json_source]
+        is_dir_mode = False
+
+    for json_file in json_files:
+        # Determine image path
+        if is_dir_mode:
+            # Simple heuristic mapping for batch mode
+            stem = Path(json_file).stem
+            # Remove _analysis suffix if present to find image
+            img_stem = stem.replace('_analysis', '')
+            
+            # Look for image in image_source directory
+            found = False
+            for ext in ['.png', '.jpg', '.jpeg']:
+                img_path = os.path.join(args.image_source, img_stem + ext)
+                if os.path.exists(img_path):
+                    found = True
+                    break
+            
+            if not found:
+                # Try finding exact filename inside JSON
+                try:
+                    with open(json_file) as f:
+                        j = json.load(f)
+                        if 'image_file' in j:
+                            img_path = os.path.join(args.image_source, j['image_file'])
+                except:
+                    pass
+        else:
+            img_path = args.image_source
+
+        # Output path
+        stem = Path(json_file).stem
+        out_path = os.path.join(args.output_dir, f"{stem}_visualized.png")
         
-        output_path = args.output_dir
-        if os.path.isdir(args.output_dir) or not args.output_dir.lower().endswith(('.png', '.jpg')):
-             if not os.path.exists(args.output_dir):
-                 os.makedirs(args.output_dir)
-             stem = Path(args.json_source).stem
-             output_path = os.path.join(args.output_dir, f"{stem}_annotated.png")
-             
-        process_file(args.image_source, args.json_source, output_path)
+        process_file(img_path, json_file, out_path)
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,7 @@
 
 ```bash
 # From project root
-cd /home/stuart/Documentos/OCR/LYAA-fine-tuning
+# cd /path/to/LYAA-fine-tuning
 
 # Activate virtual environment
 source venv/bin/activate
@@ -21,7 +21,7 @@ python demos/integration_demo.py
 If PyQt6 issues persist, you can test the core modules without GUI:
 
 ```bash
-cd /home/stuart/Documentos/OCR/LYAA-fine-tuning/src
+cd src
 
 python3 << 'EOF'
 # Test ThreadSafetyManager
@@ -121,7 +121,7 @@ If you get `ModuleNotFoundError: No module named 'core'`:
 
 **Solution:** Make sure you're running from the `src` directory:
 ```bash
-cd /home/stuart/Documentos/OCR/LYAA-fine-tuning/src
+cd src
 python demos/integration_demo.py
 ```
 

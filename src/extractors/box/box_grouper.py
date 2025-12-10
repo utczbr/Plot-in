@@ -62,11 +62,31 @@ def group_box_plot_elements(boxes: List[Dict],
         box_height = y2 - y1
         
         # Stage 1: Intersection-based grouping for range_indicator and median_line
-        # First try intersection, then fall back to proximity-based grouping
-        for indicator in range_indicators:
-            if compute_aabb_intersection(box['xyxy'], indicator['xyxy']):
-                group['range_indicator'] = indicator
-                break  # Use first intersecting indicator
+        # Collect ALL intersecting indicators (may have separate upper/lower whiskers)
+        intersecting_indicators = [
+            indicator for indicator in range_indicators
+            if compute_aabb_intersection(box['xyxy'], indicator['xyxy'])
+        ]
+        
+        if len(intersecting_indicators) == 1:
+            # Single whisker element - standard case
+            group['range_indicator'] = intersecting_indicators[0]
+        elif len(intersecting_indicators) >= 2:
+            # Multiple whisker elements detected - merge them
+            # Compute bounding box covering all whisker elements
+            all_x1 = min(ind['xyxy'][0] for ind in intersecting_indicators)
+            all_y1 = min(ind['xyxy'][1] for ind in intersecting_indicators)
+            all_x2 = max(ind['xyxy'][2] for ind in intersecting_indicators)
+            all_y2 = max(ind['xyxy'][3] for ind in intersecting_indicators)
+            
+            # Create merged indicator
+            merged_indicator = {
+                'xyxy': (all_x1, all_y1, all_x2, all_y2),
+                'confidence': max(ind.get('confidence', 1.0) for ind in intersecting_indicators),
+                'merged_from': len(intersecting_indicators)
+            }
+            group['range_indicator'] = merged_indicator
+        # else: no intersection, will fall through to proximity-based
         
         # If no intersecting indicator found, use proximity-based assignment
         if group['range_indicator'] is None:

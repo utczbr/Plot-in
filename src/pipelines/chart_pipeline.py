@@ -5,26 +5,23 @@ import numpy as np
 import logging
 import json
 from pathlib import Path
-from typing import Dict, Optional, Any, List, Union
+from typing import Dict, Optional, Any, List, Union, Tuple
 
 from .base_pipeline import BasePipeline
+from .types import PipelineResult
 from core.model_manager import ModelManager
+from core.chart_registry import get_chart_element_key, normalize_chart_type
 from utils import run_inference_on_image, sanitize_for_json
 from services.orientation_detection_service import OrientationDetectionService
+from services.orientation_service import Orientation
 from ChartAnalysisOrchestrator import ChartAnalysisOrchestrator
 from visual.visualization_service import VisualizationService
 from visual.box_plot_visualizer import BoxPlotVisualizer
+from handlers.types import HandlerContext
 
 # Class maps
 from core.class_maps import (
     CLASS_MAP_CLASSIFICATION,
-    CLASS_MAP_BAR,
-    CLASS_MAP_BOX,
-    CLASS_MAP_LINE_OBJ,
-    CLASS_MAP_SCATTER,
-    CLASS_MAP_HISTOGRAM,
-    CLASS_MAP_HEATMAP,
-    CLASS_MAP_PIE,
     get_class_map,
 )
 
@@ -52,6 +49,7 @@ class ChartAnalysisPipeline(BasePipeline):
         self.models_manager = models_manager
         self.ocr_engine = ocr_engine
         self.calibration_engine = calibration_engine
+        self.orchestrator = None
         
         # Ensure classifiers and detectors are ready
         # self.models_manager.load_models() # Assumed to be managed externally or lazy loaded
@@ -60,7 +58,7 @@ class ChartAnalysisPipeline(BasePipeline):
             image_input: Union[str, Path], 
             output_dir: Optional[Union[str, Path]] = None,
             annotated: bool = False,
-            advanced_settings: Optional[Dict] = None) -> Optional[Dict]:
+            advanced_settings: Optional[Dict] = None) -> Optional[PipelineResult]:
         """
         Run the analysis pipeline on a single image.
         
@@ -83,46 +81,43 @@ class ChartAnalysisPipeline(BasePipeline):
             return None
             
         # 2. Classification
-        chart_type = self._classify_chart_type(img)
+        chart_type = self._classify_chart_type(img, advanced_settings)
+        chart_type = normalize_chart_type(chart_type)
         self.logger.info(f"Classified as: {chart_type}")
         
         # 3. Detection
-        detections = self._detect_elements(img, chart_type)
+        detections = self._detect_elements(img, chart_type, advanced_settings)
         if not detections:
             self.logger.warning("No detections found.")
             # We continue even if empty, orchestrator handles it
             
         # 4. Orientation
         orientation = self._detect_orientation(img, chart_type, detections)
-        self.logger.info(f"Orientation: {orientation}")
+        self.logger.info(f"Orientation: {orientation.value}")
         
         # 5. OCR on Axis Labels
         self._process_ocr(img, detections)
         
         # 6. Orchestration (Logic & Calibration)
-        orchestrator = ChartAnalysisOrchestrator(
-            calibration_service=self.calibration_engine,
-            logger=logging.getLogger("Orchestrator")
-        )
-        
-        # Map chart type to element key
-        chart_element_map = {
-            'bar': 'bar', 'box': 'box', 'line': 'data_point',
-            'scatter': 'data_point', 'histogram': 'bar',
-            'heatmap': 'cell', 'pie': 'slice'
-        }
-        element_key = chart_element_map.get(chart_type, 'bar')
+        if self.orchestrator is None:
+            self.orchestrator = ChartAnalysisOrchestrator(
+                calibration_service=self.calibration_engine,
+                logger=logging.getLogger("Orchestrator"),
+            )
+
+        element_key = get_chart_element_key(chart_type)
         chart_elements = detections.get(element_key, [])
         axis_labels = detections.get('axis_labels', [])
-        
-        result = orchestrator.process_chart(
+
+        context = HandlerContext(
             image=img,
             chart_type=chart_type,
             detections=detections,
             axis_labels=axis_labels,
             chart_elements=chart_elements,
-            orientation=orientation
+            orientation=orientation,
         )
+        result = self.orchestrator.process_chart(context=context)
         
         # 7. Format Result
         if result.errors:
@@ -137,7 +132,7 @@ class ChartAnalysisPipeline(BasePipeline):
             
         return final_result
 
-    def _classify_chart_type(self, img: np.ndarray) -> str:
+    def _classify_chart_type(self, img: np.ndarray, advanced_settings: Optional[Dict] = None) -> str:
         """Determines the type of the chart."""
         model = self.models_manager.get_model('classification')
         if not model:
@@ -145,16 +140,30 @@ class ChartAnalysisPipeline(BasePipeline):
             return 'bar' # Default
             
         try:
-            dets = run_inference_on_image(model, img, 0.25, CLASS_MAP_CLASSIFICATION)
+            conf_threshold = self._resolve_float_setting(
+                advanced_settings,
+                keys=('classification_confidence',),
+                default=0.25,
+            )
+            dets = run_inference_on_image(model, img, conf_threshold, CLASS_MAP_CLASSIFICATION)
             if dets:
-                det = max(dets, key=lambda x: x['conf'])
-                return CLASS_MAP_CLASSIFICATION.get(det['cls'], 'bar')
+                # Prefer the best *specific* chart class. The generic 'chart' class is ambiguous.
+                for det in sorted(dets, key=lambda x: x['conf'], reverse=True):
+                    candidate = CLASS_MAP_CLASSIFICATION.get(det['cls'], 'bar')
+                    if candidate != 'chart':
+                        return normalize_chart_type(candidate)
+                self.logger.warning("Classification only produced generic 'chart'; defaulting to 'bar'.")
         except Exception as e:
             self.logger.error(f"Classification error: {e}")
             
         return 'bar'
 
-    def _detect_elements(self, img: np.ndarray, chart_type: str) -> Dict[str, List[Dict]]:
+    def _detect_elements(
+        self,
+        img: np.ndarray,
+        chart_type: str,
+        advanced_settings: Optional[Dict] = None,
+    ) -> Dict[str, List[Dict]]:
         """Runs object detection for the specific chart type."""
         model = self.models_manager.get_model(chart_type)
         if not model:
@@ -166,12 +175,30 @@ class ChartAnalysisPipeline(BasePipeline):
         # Adaptive thresholds
         conf_thresh = 0.25 if chart_type == 'box' else (0.2 if chart_type == 'histogram' else 0.4)
         nms_thresh = 0.7 if chart_type == 'box' else 0.45
+
+        if isinstance(advanced_settings, dict):
+            det_conf = advanced_settings.get('detection_confidence_overrides', {})
+            det_nms = advanced_settings.get('detection_nms_overrides', {})
+            if isinstance(det_conf, dict) and chart_type in det_conf:
+                try:
+                    conf_thresh = float(det_conf[chart_type])
+                except (TypeError, ValueError):
+                    self.logger.warning(
+                        f"Invalid detection confidence override for {chart_type}: {det_conf[chart_type]!r}"
+                    )
+            if isinstance(det_nms, dict) and chart_type in det_nms:
+                try:
+                    nms_thresh = float(det_nms[chart_type])
+                except (TypeError, ValueError):
+                    self.logger.warning(
+                        f"Invalid NMS override for {chart_type}: {det_nms[chart_type]!r}"
+                    )
         
         raw_dets = run_inference_on_image(model, img, conf_thresh, class_map, nms_threshold=nms_thresh)
         
         # Fallback logic for histograms
         if chart_type == 'histogram':
-             raw_dets = self._histogram_fallback(raw_dets, img, class_map)
+             raw_dets = self._histogram_fallback(raw_dets, img, class_map, advanced_settings)
 
         # Organize by class
         organized = {name: [] for name in class_map.values()}
@@ -186,8 +213,20 @@ class ChartAnalysisPipeline(BasePipeline):
                 
         return organized
 
-    def _histogram_fallback(self, current_dets, img, class_map):
+    def _histogram_fallback(
+        self,
+        current_dets,
+        img,
+        class_map,
+        advanced_settings: Optional[Dict] = None,
+    ):
         """Specific fallback logic for histograms if no bars found."""
+        fallback_conf = self._resolve_float_setting(
+            advanced_settings,
+            keys=('histogram_fallback_confidence',),
+            default=0.1,
+        )
+
         # Check if any bars detected
         has_bars = any(class_map.get(d['cls']) == 'bar' for d in current_dets)
         
@@ -195,7 +234,7 @@ class ChartAnalysisPipeline(BasePipeline):
             self.logger.warning("No bars in histogram, trying fallback...")
             # Try lower threshold
             model = self.models_manager.get_model('histogram')
-            lower_dets = run_inference_on_image(model, img, 0.1, class_map)
+            lower_dets = run_inference_on_image(model, img, fallback_conf, class_map)
             
             if any(class_map.get(d['cls']) == 'bar' for d in lower_dets):
                 return lower_dets
@@ -205,7 +244,7 @@ class ChartAnalysisPipeline(BasePipeline):
             bar_model = self.models_manager.get_model('bar')
             if bar_model:
                 bar_map = get_class_map('bar')
-                bar_dets = run_inference_on_image(bar_model, img, 0.1, bar_map)
+                bar_dets = run_inference_on_image(bar_model, img, fallback_conf, bar_map)
                 # Filter only bars and convert cls ID
                 fallback_bars = []
                 for d in bar_dets:
@@ -219,14 +258,14 @@ class ChartAnalysisPipeline(BasePipeline):
                     
         return current_dets
 
-    def _detect_orientation(self, img: np.ndarray, chart_type: str, detections: Dict) -> str:
+    def _detect_orientation(self, img: np.ndarray, chart_type: str, detections: Dict) -> Orientation:
         """Detects chart orientation."""
         if chart_type not in ['bar', 'histogram', 'box']:
-            return 'vertical' # Default or not-applicable
+            return Orientation.VERTICAL
             
         elements = detections.get('bar', []) or detections.get('box', [])
         if not elements:
-            return 'vertical'
+            return Orientation.VERTICAL
             
         service = OrientationDetectionService()
         result = service.detect(elements, img.shape[1], img.shape[0], chart_type=chart_type)
@@ -260,7 +299,7 @@ class ChartAnalysisPipeline(BasePipeline):
         except Exception as e:
             self.logger.error(f"OCR failed: {e}")
 
-    def _format_result(self, orchestration_result, image_path, detections):
+    def _format_result(self, orchestration_result, image_path, detections) -> PipelineResult:
         """Formats the final output dictionary."""
         # Handle baselines formatting
         baselines = []
@@ -277,16 +316,39 @@ class ChartAnalysisPipeline(BasePipeline):
             else:
                 calib[k] = None
 
+        orientation_value = (
+            orchestration_result.orientation.value
+            if hasattr(orchestration_result.orientation, 'value')
+            else str(orchestration_result.orientation)
+        )
+
         return {
             'image_file': image_path.name,
             'chart_type': orchestration_result.chart_type,
-            'orientation': str(orchestration_result.orientation),
+            'orientation': orientation_value,
             'elements': orchestration_result.elements,
             'calibration': calib,
             'baselines': baselines,
             'metadata': orchestration_result.diagnostics,
             'detections': detections
         }
+
+    @staticmethod
+    def _resolve_float_setting(
+        settings: Optional[Dict[str, Any]],
+        keys: Tuple[str, ...],
+        default: float,
+    ) -> float:
+        """Read a numeric setting safely with fallback."""
+        if not isinstance(settings, dict):
+            return default
+        for key in keys:
+            if key in settings:
+                try:
+                    return float(settings[key])
+                except (TypeError, ValueError):
+                    continue
+        return default
 
     def _save_results(self, result: Dict, img: np.ndarray, output_dir: Path, annotated: bool):
         """Saves JSON and optional annotated image."""

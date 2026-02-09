@@ -245,7 +245,82 @@ python src/analysis.py \
 
 ---
 
+## Isolated A/B Evaluation (Baseline vs Candidate)
+
+Use this when validating a single improvement practice in isolation (for example OCR tuning, detector swap for one chart type, or router strategy behind a feature flag).
+
+### Option 1: Run evaluator for both prediction folders and compare
+
+```bash
+python src/evaluation/isolated_ab_runner.py \
+  --gt-dir src/train/gt \
+  --baseline-pred-dir src/train/baseline_output \
+  --candidate-pred-dir src/train/candidate_output \
+  --output-report src/evaluation/reports/ab_report.json
+```
+
+### Option 2: Compare precomputed evaluation outputs
+
+```bash
+python src/evaluation/isolated_ab_runner.py \
+  --baseline-results src/evaluation/reports/baseline_evaluation.json \
+  --candidate-results src/evaluation/reports/candidate_evaluation.json \
+  --output-report src/evaluation/reports/ab_report.json
+```
+
+### Option 3: Manifest-Driven Benchmark Subset (ChartQA/PlotQA style)
+
+Use this mode when your benchmark provides sample metadata (JSON/JSONL) and you want the runner to map records into `<sample_id>_gt.json` and `<sample_id>_analysis.json` pairs.
+
+```bash
+python src/evaluation/isolated_ab_runner.py \
+  --benchmark-manifest src/evaluation/examples/chart_manifest.jsonl \
+  --benchmark-format auto \
+  --manifest-gt-root src/train/labels \
+  --manifest-gt-format unified_json \
+  --manifest-baseline-root src/train/analysis_output \
+  --manifest-candidate-root src/train/analysis_output \
+  --manifest-allow-same-pred-roots \
+  --manifest-missing-policy error \
+  --manifest-max-samples 20 \
+  --output-report src/evaluation/reports/ab_manifest_report.json
+```
+
+Sample ID resolution order:
+- `sample_id`
+- `imgname`
+- `image`
+- `image_path`
+- `image_index` (stringified)
+
+### Acceptance Gate Defaults
+
+- `max_detection_f1_drop = 0.01`
+- `max_failure_rate_increase = 0.00`
+- `min_relaxed_accuracy_gain = 0.00`
+
+Override thresholds with:
+
+```bash
+--max-detection-f1-drop <float> \
+--max-failure-rate-increase <float> \
+--min-relaxed-accuracy-gain <float>
+```
+
+The generated report includes:
+- baseline and candidate summaries
+- metric deltas with direction-aware improvement
+- hard-failure rate comparison
+- pass/fail status for acceptance gates
+
+---
+
 ## Troubleshooting
+
+### "FileNotFoundError: benchmarks/chartqa_manifest.jsonl"
+
+This repository does not include a top-level `benchmarks/` folder by default.
+Use `src/evaluation/examples/chart_manifest.jsonl` or pass your own manifest path.
 
 ### Models Not Found
 ```bash

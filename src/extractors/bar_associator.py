@@ -267,7 +267,7 @@ class RobustBarAssociator:
             )
         return None
     
-    def associate_elements(
+    def _associate_elements_legacy(
         self,
         bars: List[Dict],
         error_bars: List[Dict],

@@ -5,9 +5,12 @@ Common types, enums and data classes for chart handlers.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
 from services.orientation_service import Orientation
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class ChartCoordinateSystem(Enum):
@@ -52,6 +55,27 @@ class ExtractionResult:
             coordinate_system=ChartCoordinateSystem.CARTESIAN,  # Default fallback
             errors=[f"{type(error).__name__}: {str(error)}"]
         )
+
+
+@dataclass(frozen=True)
+class HandlerContext:
+    """
+    Canonical handler input contract enforced at orchestrator boundaries.
+
+    Attributes:
+        image: Source image in BGR format.
+        chart_type: Normalized chart type string.
+        detections: Raw detector outputs grouped by class name.
+        axis_labels: Axis label detections (with OCR text when available).
+        chart_elements: Primary chart elements for the specific chart type.
+        orientation: Normalized orientation enum.
+    """
+    image: "np.ndarray"
+    chart_type: str
+    detections: Dict[str, Any]
+    axis_labels: List[Dict[str, Any]]
+    chart_elements: List[Dict[str, Any]]
+    orientation: Orientation
 
 
 @dataclass

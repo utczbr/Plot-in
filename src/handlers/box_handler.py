@@ -7,13 +7,12 @@ due to missing append in BoxExtractor.
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import ExtractionResult, ChartCoordinateSystem
-from handlers.legacy import BaseChartHandler
+from handlers.base_handler import ExtractionResult, ChartCoordinateSystem, CartesianExtractionHandler
 from extractors.box_extractor import BoxExtractor, group_box_plot_elements
 from services.meta_clustering_service import ClusteringRecommendation
 
 
-class BoxHandler(BaseChartHandler):
+class BoxHandler(CartesianExtractionHandler):
     """
     Box plot handler.
     CRITICAL FIX: Complete implementation of box extraction to address 0% extraction rate.
@@ -185,7 +184,7 @@ class BoxHandler(BaseChartHandler):
         # Stage 6: Data extraction (chart-specific)
         try:
             elements = self.extract_values(
-                image, detections, calibrations, baselines, orientation.value
+                image, detections, calibrations, baselines, orientation
             )
         except Exception as e:
             errors.append(f"Value extraction failed: {e}")

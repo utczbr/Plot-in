@@ -36,6 +36,7 @@ ENV/
 .vscode/
 
 # Project specific
+docs/
 models/
 !src/models/
 runs/
@@ -45,3 +46,9 @@ tests/
 output/
 *_annotated.png
 *_analysis.json
+
+src/Critic.md
+src/verify_histogram_classifier.py
+
+src/ui/rendering/icons/guideicon.pdf
+src/train/gerador_charts/*

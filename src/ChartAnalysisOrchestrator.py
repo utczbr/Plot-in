@@ -9,12 +9,13 @@ ARCHITECTURAL CHANGES:
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 import numpy as np
 
 from core.classifiers.production_classifier import ProductionSpatialClassifier
 from core.classifiers.heatmap_chart_classifier import HeatmapChartClassifier
 from core.classifiers.pie_chart_classifier import PieChartClassifier
+from core.chart_registry import normalize_chart_type
 
 from handlers.base_handler import (
     BaseHandler,
@@ -22,8 +23,9 @@ from handlers.base_handler import (
     GridChartHandler,
     PolarChartHandler,
     ExtractionResult,
-    ChartCoordinateSystem
+    ChartCoordinateSystem,
 )
+from handlers.types import HandlerContext
 
 # Import all handler implementations
 from handlers.bar_handler import BarHandler
@@ -51,6 +53,25 @@ class ChartAnalysisOrchestrator:
     - The orchestrator injects only relevant services during handler initialization
     """
 
+    _HANDLER_REGISTRY: Dict[str, Type[BaseHandler]] = {
+        "bar": BarHandler,
+        "scatter": ScatterHandler,
+        "line": LineHandler,
+        "box": BoxHandler,
+        "histogram": HistogramHandler,
+        "heatmap": HeatmapHandler,
+        "pie": PieHandler,
+    }
+
+    _HANDLER_EXTRAS: Dict[str, Callable[["ChartAnalysisOrchestrator"], Dict[str, Any]]] = {
+        "heatmap": lambda self: {
+            "classifier": HeatmapChartClassifier(logger=self.logger),
+        },
+        "pie": lambda self: {
+            "classifier": PieChartClassifier(logger=self.logger),
+        },
+    }
+
     def __init__(self,
                  calibration_service,
                  logger: Optional[logging.Logger] = None):
@@ -62,7 +83,8 @@ class ChartAnalysisOrchestrator:
             logger: Optional logger for tracking analysis
         """
         self.calibration_service = calibration_service
-        self.spatial_classifier = ProductionSpatialClassifier(hyperparams_path=Path('lylaa_hypertuning_results.json'))
+        hyperparams_path = Path(__file__).resolve().parent / 'lylaa_hypertuning_results.json'
+        self.spatial_classifier = ProductionSpatialClassifier(hyperparams_path=hyperparams_path)
         self.logger = logger or logging.getLogger(__name__)
 
         # Initialize shared services
@@ -79,47 +101,49 @@ class ChartAnalysisOrchestrator:
         self.logger.info("ChartAnalysisOrchestrator initialized with all handlers")
 
     def _initialize_handlers(self) -> Dict[str, BaseHandler]:
-        """Initialize handlers with appropriate services based on their type."""
-        handlers = {}
-
-        # Cartesian chart handlers require calibration, spatial classifier, and optional services
-        cartesian_params = {
-            'calibration_service': self.calibration_service,
-            'spatial_classifier': self.spatial_classifier,
-            'dual_axis_service': self.dual_axis_service,
-            'meta_clustering_service': self.meta_clustering_service,
-            'logger': self.logger
-        }
-
-        handlers['bar'] = BarHandler(**cartesian_params)
-        handlers['scatter'] = ScatterHandler(**cartesian_params)
-        handlers['line'] = LineHandler(**cartesian_params)
-        handlers['box'] = BoxHandler(**cartesian_params)
-        handlers['histogram'] = HistogramHandler(**cartesian_params)
-
-        # Grid chart handlers (e.g., heatmap) require color mapping service
-        handlers['heatmap'] = HeatmapHandler(
-            classifier=HeatmapChartClassifier(logger=self.logger),
-            color_mapper=self.color_mapping_service,
-            logger=self.logger
-        )
-
-        # Polar chart handlers (e.g., pie) require legend matching service
-        handlers['pie'] = PieHandler(
-            classifier=PieChartClassifier(logger=self.logger),
-            legend_matcher=self.legend_matching_service,
-            logger=self.logger
-        )
-
+        """Initialize handlers using class registry + subclass-based DI."""
+        handlers: Dict[str, BaseHandler] = {}
+        for chart_type, handler_cls in self._HANDLER_REGISTRY.items():
+            handlers[chart_type] = self._build_handler(chart_type, handler_cls)
         return handlers
 
+    def _build_handler(self, chart_type: str, handler_cls: Type[BaseHandler]) -> BaseHandler:
+        """Build a handler instance using DI rules based on handler hierarchy."""
+        extras_factory = self._HANDLER_EXTRAS.get(chart_type)
+        extras = extras_factory(self) if extras_factory else {}
+
+        if issubclass(handler_cls, CartesianChartHandler):
+            kwargs: Dict[str, Any] = {
+                "calibration_service": self.calibration_service,
+                "spatial_classifier": self.spatial_classifier,
+                "dual_axis_service": self.dual_axis_service,
+                "meta_clustering_service": self.meta_clustering_service,
+                "logger": self.logger,
+            }
+        elif issubclass(handler_cls, GridChartHandler):
+            kwargs = {
+                "color_mapper": self.color_mapping_service,
+                "logger": self.logger,
+            }
+        elif issubclass(handler_cls, PolarChartHandler):
+            kwargs = {
+                "legend_matcher": self.legend_matching_service,
+                "logger": self.logger,
+            }
+        else:
+            kwargs = {"logger": self.logger}
+
+        kwargs.update(extras)
+        return handler_cls(**kwargs)
+
     def process_chart(self,
-                     image: np.ndarray,
-                     chart_type: str,
-                     detections: Dict[str, Any],
-                     axis_labels: list,
-                     chart_elements: list,
-                     orientation: str = 'vertical') -> ExtractionResult:
+                     image: Optional[np.ndarray] = None,
+                     chart_type: str = 'bar',
+                     detections: Optional[Dict[str, Any]] = None,
+                     axis_labels: Optional[list] = None,
+                     chart_elements: Optional[list] = None,
+                     orientation: Any = 'vertical',
+                     context: Optional[HandlerContext] = None) -> ExtractionResult:
         """
         Process a single chart using the appropriate handler.
 
@@ -134,6 +158,22 @@ class ChartAnalysisOrchestrator:
         Returns:
             ExtractionResult with processed values and diagnostics
         """
+        if context is not None:
+            image = context.image
+            chart_type = context.chart_type
+            detections = context.detections
+            axis_labels = context.axis_labels
+            chart_elements = context.chart_elements
+            orientation = context.orientation
+
+        if image is None:
+            raise ValueError("image is required for process_chart")
+
+        detections = detections or {}
+        axis_labels = axis_labels or []
+        chart_elements = chart_elements or []
+        chart_type = normalize_chart_type(chart_type)
+
         self.logger.info(f"Processing {chart_type} chart with {orientation} orientation")
 
         # Validate orientation
@@ -172,29 +212,18 @@ class ChartAnalysisOrchestrator:
 
         # Process with handler
         try:
-            handler_result = handler.process(
+            result = handler.process(
                 image=image,
                 detections=detections,
                 axis_labels=axis_labels,
                 chart_elements=chart_elements,
                 orientation=orientation_enum
             )
-            
-            # Handle both old and new result types
-            if hasattr(handler_result, 'orientation'):  # New result type
-                result = handler_result
-            else:  # Old result type, convert to new format
-                from handlers.base_handler import ExtractionResult, ChartCoordinateSystem
-                result = ExtractionResult(
-                    chart_type=handler_result.chart_type,
-                    coordinate_system=ChartCoordinateSystem.CARTESIAN,
-                    elements=handler_result.elements,
-                    baselines=handler_result.baselines,
-                    calibration=handler_result.calibration,
-                    diagnostics=handler_result.diagnostics,
-                    errors=handler_result.errors,
-                    warnings=handler_result.warnings,
-                    orientation=orientation_enum
+
+            if not isinstance(result, ExtractionResult):
+                raise TypeError(
+                    f"Handler {handler.__class__.__name__} returned unexpected type: "
+                    f"{type(result).__name__}. Expected ExtractionResult."
                 )
 
             # CRITICAL FIX: Check for errors returned from the handler

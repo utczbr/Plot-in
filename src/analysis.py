@@ -12,8 +12,15 @@ from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
 from pipelines.chart_pipeline import ChartAnalysisPipeline
 
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    logging.warning("EasyOCR module not found. OCR capabilities will be limited.")
+
 def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'Paddle',
-                          ocr_accuracy: str = 'Optimized', spatial_method: str = 'LYLLA',
+                          ocr_accuracy: str = 'Optimized',
                           calibration_method: str = 'PROSAC', models_dir: str = 'models',
                           annotated: bool = False, languages: list = ['en']):
     input_path = Path(input_dir)
@@ -22,7 +29,11 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
     
     # 1. Initialize Components
     model_manager = ModelManager()
-    models = model_manager.load_models(models_dir)
+    try:
+        models = model_manager.load_models(models_dir)
+    except Exception as exc:
+        logging.error("Failed to load models from %s: %s", models_dir, exc)
+        return []
     if not models:
         logging.error("No models could be loaded. Exiting.")
         return []

@@ -10,11 +10,40 @@ Supported backends:
 from .engines.ocr_fast import FastOCREngine
 from .engines.ocr_optimized import OptimizedOCREngine
 from .engines.ocr_precise import PreciseOCREngine
-from .engines.ocr_paddle_onnx import PaddleOCREngine
-from .engines.ocr_paddle_full import PaddleOCRFullPipeline
 from .compat.unified_ocr_bridge import create_unified_ocr_engine
 from .orchestrator.unified_ocr_system_v2 import QualityMode
 from typing import Optional
+
+
+def _raise_optional_dependency_error(engine_name: str, exc: ModuleNotFoundError) -> None:
+    missing = exc.name or "unknown"
+    if missing == "yaml":
+        raise RuntimeError(
+            f"{engine_name} requires PyYAML. Install with "
+            f"`pip install PyYAML` or install all project dependencies "
+            f"from `src/requirements.txt` (or `src/requirements-mac.txt`)."
+        ) from exc
+    raise RuntimeError(
+        f"{engine_name} is unavailable because dependency '{missing}' is missing. "
+        f"Install project dependencies from `src/requirements.txt` "
+        f"(or `src/requirements-mac.txt`)."
+    ) from exc
+
+
+def _import_paddle_onnx_engine():
+    try:
+        from .engines.ocr_paddle_onnx import PaddleOCREngine
+    except ModuleNotFoundError as exc:
+        _raise_optional_dependency_error("Paddle OCR ONNX engine", exc)
+    return PaddleOCREngine
+
+
+def _import_paddle_full_engine():
+    try:
+        from .engines.ocr_paddle_full import PaddleOCRFullPipeline
+    except ModuleNotFoundError as exc:
+        _raise_optional_dependency_error("Paddle OCR full pipeline", exc)
+    return PaddleOCRFullPipeline
 
 
 class OCREngineFactory:
@@ -111,6 +140,8 @@ class OCREngineFactory:
             return PreciseOCREngine(reader)
         
         elif mode == 'paddle_onnx':
+            PaddleOCREngine = _import_paddle_onnx_engine()
+
             # Validate required parameters for PaddleOCR
             required = ['det_model_path', 'rec_model_path', 'dict_path']
             if not all(kwargs.get(p) for p in required):
@@ -132,6 +163,8 @@ class OCREngineFactory:
             )
 
         elif mode == 'paddle_full':
+            PaddleOCRFullPipeline = _import_paddle_full_engine()
+
             # Validate required paths
             required = ['doc_ori_model_path', 'unwarp_model_path', 'det_model_path',
                         'textline_ori_model_path', 'rec_model_path', 'dict_path']

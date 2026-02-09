@@ -6,16 +6,15 @@ the 1,500+ lines of baseline detection logic, while providing bar-specific
 configuration and value extraction.
 """
 from typing import List, Dict, Any
-import numpy as np
 
-from handlers.base_handler import ExtractionResult
-from handlers.legacy import BaseChartHandler
+from handlers.base_handler import CartesianExtractionHandler
+from services.orientation_service import Orientation, OrientationService
 
 # NEW: Import BarExtractor to use the new topological association
 from extractors.bar_extractor import BarExtractor
 
 
-class BarHandler(BaseChartHandler):
+class BarHandler(CartesianExtractionHandler):
     """Bar chart handler with composition (NOT re-implementation)."""
     
     def get_chart_type(self) -> str:
@@ -25,13 +24,19 @@ class BarHandler(BaseChartHandler):
                       baselines, orientation) -> List[Dict]:
         """Extract bar values using baseline and calibration."""
         from extractors.bar_extractor import BarExtractor
+
+        try:
+            orientation_enum = OrientationService.from_any(orientation)
+        except ValueError:
+            self.logger.warning("Invalid orientation '%s' for bar extraction. Defaulting to vertical.", orientation)
+            orientation_enum = Orientation.VERTICAL
         
         bars = detections.get('bar', [])
         if not bars:
             return []
         
         baseline_coord = None
-        axis_id = 'y' if orientation == 'vertical' else 'x'
+        axis_id = 'y' if orientation_enum == Orientation.VERTICAL else 'x'
         for baseline in baselines.baselines:
             if baseline.axis_id == axis_id:
                 baseline_coord = baseline.value

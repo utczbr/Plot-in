@@ -23,7 +23,7 @@ Horizontal bar charts often have their baseline (representing zero value) at a f
 
 ## Decision Outcome
 
-**Chosen Option:** Option 3 - Zero-Crossing Baseline Snapping in `CalibrationAdapter`
+**Chosen Option:** Option 3 - Zero-Crossing Baseline Snapping in baseline detector flow
 
 **Rationale:**
 Zero-crossing baseline snapping directly leverages the already established axis calibration. By calculating the data coordinate corresponding to a display coordinate of zero (or vice-versa) and forcing the baseline to this point, we ensure that the extracted values are consistent with the chart's scale. This approach is more robust than relying solely on OCR for a "0" label and more precise than simple heuristics.
@@ -41,7 +41,13 @@ Zero-crossing baseline snapping directly leverages the already established axis 
 
 ## Implementation Details
 
-**Code Location:** `src/services/calibration_adapter.py` (specifically, the `snap_to_zero` method or similar logic)
+**Code Location (current runtime path):**
+- `src/core/baseline/detector.py` (`ModularBaselineDetector.detect`)
+- `src/core/baseline/zero_crossing.py` (zero-crossing and fallback interpolation)
+- `src/core/baseline_detection.py` (compatibility facade)
+
+**Note on `CalibrationAdapter`:**
+- `src/services/calibration_adapter.py` remains available as an adapter utility, but it is not the active runtime path for baseline snapping in the current architecture.
 
 **Configuration:**
 *   Enabled by default for horizontal bar charts.

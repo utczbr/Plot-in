@@ -6,15 +6,13 @@ the 1,500+ lines of baseline detection logic, while providing histogram-specific
 configuration and value extraction.
 """
 from typing import List, Dict, Any
-import numpy as np
 
-from handlers.base_handler import BaseChartHandler, ExtractionResult
-
-# NEW: Import HistogramExtractor to use the existing extraction logic
+from handlers.base_handler import CartesianExtractionHandler
+from services.orientation_service import Orientation, OrientationService
 from extractors.histogram_extractor import HistogramExtractor
 
 
-class HistogramHandler(BaseChartHandler):
+class HistogramHandler(CartesianExtractionHandler):
     """Histogram chart handler with composition (NOT re-implementation)."""
     
     def get_chart_type(self) -> str:
@@ -24,25 +22,25 @@ class HistogramHandler(BaseChartHandler):
                       baselines, orientation) -> List[Dict]:
         """Extract histogram values using baseline and calibration."""
         from extractors.histogram_extractor import HistogramExtractor
-        
-        # DEBUG: Log what's in detections
-        self.logger.info(f"DEBUG: detections keys = {detections.keys()}")
-        self.logger.info(f"DEBUG: detections content = {detections}")
+
+        try:
+            orientation_enum = OrientationService.from_any(orientation)
+        except ValueError:
+            self.logger.warning(
+                "Invalid orientation '%s' for histogram extraction. Defaulting to vertical.",
+                orientation,
+            )
+            orientation_enum = Orientation.VERTICAL
         
         # Try multiple possible keys for histogram bins
         bars = detections.get('bar', []) or detections.get('histogram', []) or detections.get('data', [])
-        
-        self.logger.info(f"DEBUG: Found {len(bars)} histogram bars using key")
+
         if not bars:
             self.logger.warning(f"No histogram bars found in detections. Available keys: {list(detections.keys())}")
             return []
         
-        # Additional debug logging for histogram handler
-        if bars:
-            self.logger.info(f"Histogram handler: Sample bars data = {bars[0] if bars else 'None'}")
-        
         baseline_coord = None
-        axis_id = 'y' if orientation == 'vertical' else 'x'
+        axis_id = 'y' if orientation_enum == Orientation.VERTICAL else 'x'
         for baseline in baselines.baselines:
             if baseline.axis_id == axis_id:
                 baseline_coord = baseline.value
@@ -61,14 +59,9 @@ class HistogramHandler(BaseChartHandler):
             self.logger.warning("Missing baseline or calibration for histogram extraction")
             return []
         
-        # NEW: Use HistogramExtractor with axis_labels
         extractor = HistogramExtractor()
         h, w = img.shape[:2]
-        
-        # The axis_labels need to be the properly classified tick_labels
-        # Get them from the label_classification metadata provided by the orchestrator
-        axis_labels = detections.get('axis_labels', [])
-        
+
         # Pass the bars to the extractor - they should already be in the detections['bar']
         extraction_result = extractor.extract(
             img=img,
@@ -80,8 +73,6 @@ class HistogramHandler(BaseChartHandler):
             x_scale_model=x_cal_model
             # Note: axis_labels parameter not supported in HistogramExtractor
         )
-        
-        self.logger.info(f"DEBUG: Histogram extractor returned {len(extraction_result.get('bars', []))} bars")
-        
+
         # Return list of histogram bin dictionaries
         return extraction_result.get('bars', [])

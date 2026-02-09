@@ -21,12 +21,16 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 from typing import List, Tuple, Optional, Dict, Union, Any
-import yaml
 import logging
 from pathlib import Path
 from ..ocr_base import BaseOCRLegacy as BaseOCREngine
 from concurrent.futures import ThreadPoolExecutor
 import time
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 
 class PaddleOCRFullPipeline(BaseOCREngine):
@@ -206,6 +210,11 @@ class PaddleOCRFullPipeline(BaseOCREngine):
 
         try:
             if path.suffix in ['.yaml', '.yml']:
+                if yaml is None:
+                    raise RuntimeError(
+                        "PyYAML is required to load YAML dictionaries for PaddleOCR. "
+                        "Install with `pip install PyYAML` or use a plain text dictionary file."
+                    )
                 with open(dict_path, 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)
                     if isinstance(config, dict):

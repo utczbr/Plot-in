@@ -8,12 +8,23 @@ from PyQt6.QtWidgets import (
     QPushButton, QFileDialog, QMessageBox, QScrollArea, QFrame, QSlider, QTabWidget,
     QCheckBox, QSplitter, QProgressBar, QGridLayout, QGroupBox, QDialog, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR, QSize
 import multiprocessing
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
-from PyQt6.QtGui import QPixmap, QImage, QKeyEvent, QCloseEvent, QFont, QGuiApplication, QPixmapCache
+from PyQt6.QtGui import (
+    QPixmap,
+    QImage,
+    QKeyEvent,
+    QCloseEvent,
+    QFont,
+    QGuiApplication,
+    QPixmapCache,
+    QIcon,
+    QPainter,
+    QColor,
+)
 import os
 from PIL import Image, ImageDraw, ImageQt
 import numpy as np
@@ -21,15 +32,16 @@ import json
 from pathlib import Path
 import gc
 import logging
-from typing import Optional
+from typing import Optional, Any, Dict, List, Tuple
 from core.app_context import ApplicationContext
 from services.service_container import create_service_container
 
 # Import from new modular structure
 from core.model_manager import ModelManager
-from core.config import MODE_CONFIGS
+from core.config import MODE_CONFIGS, MODELS_CONFIG
 from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
+from utils import sanitize_for_json
 import analysis  # Keep for backward compatibility where needed
 
 from visual.settings_dialog import SettingsDialog, save_settings_to_file, load_settings_from_file
@@ -37,17 +49,191 @@ from visual.profiling import PerformanceMonitor, timed
 
 CONFIG_FILE = "gui_config.json"
 
+
+def _extract_calibration_r2(calibration_entry: Any) -> Optional[float]:
+    if calibration_entry is None:
+        return None
+    if isinstance(calibration_entry, dict):
+        value = calibration_entry.get("r2", calibration_entry.get("r_squared"))
+    else:
+        value = getattr(calibration_entry, "r2", getattr(calibration_entry, "r_squared", None))
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_baseline_coord(
+    baselines: Any,
+    orientation: str,
+) -> Optional[float]:
+    if not isinstance(baselines, list):
+        return None
+
+    axis_id = "y" if str(orientation).lower() == "vertical" else "x"
+
+    selected = None
+    for baseline in baselines:
+        if not isinstance(baseline, dict):
+            continue
+        if baseline.get("axis_id") == axis_id:
+            selected = baseline
+            break
+
+    if selected is None and baselines:
+        first = baselines[0]
+        if isinstance(first, dict):
+            selected = first
+
+    if not selected:
+        return None
+
+    value = selected.get("value")
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_result_payload_for_gui(
+    result: Dict[str, Any],
+    image_size: Optional[Tuple[int, int]] = None,
+) -> Dict[str, Any]:
+    """
+    Normalize runtime pipeline result payloads into the legacy keys expected by GUI widgets.
+    Keeps backward compatibility for existing legacy payload shapes.
+    """
+    normalized = dict(result)
+
+    detections = normalized.get("detections")
+    if not isinstance(detections, dict):
+        detections = {}
+    normalized["detections"] = detections
+
+    orientation = str(normalized.get("orientation", "vertical")).lower()
+    chart_type = str(normalized.get("chart_type", "")).lower()
+
+    bars = normalized.get("bars")
+    if not isinstance(bars, list):
+        if chart_type in {"bar", "histogram"}:
+            elements = normalized.get("elements")
+            if isinstance(elements, list):
+                bars = [element for element in elements if isinstance(element, dict)]
+            else:
+                bars = []
+        else:
+            bars = []
+
+    normalized_bars = []
+    for bar in bars:
+        if not isinstance(bar, dict):
+            continue
+        item = dict(bar)
+        tick_label = item.get("tick_label")
+        if not item.get("bar_label") and isinstance(tick_label, dict):
+            tick_text = tick_label.get("text")
+            if isinstance(tick_text, str) and tick_text.strip():
+                item["bar_label"] = tick_text.strip()
+            tick_bbox = tick_label.get("bbox")
+            if "bar_label_bbox" not in item and isinstance(tick_bbox, list):
+                item["bar_label_bbox"] = tick_bbox
+        if item.get("pixel_height") is None:
+            pixel_dimension = item.get("pixel_dimension")
+            if pixel_dimension is not None:
+                item["pixel_height"] = pixel_dimension
+        normalized_bars.append(item)
+
+    normalized["bars"] = normalized_bars
+
+    scale_info = normalized.get("scale_info")
+    if not isinstance(scale_info, dict):
+        scale_info = {}
+    normalized["scale_info"] = scale_info
+
+    calibration = normalized.get("calibration")
+    if isinstance(calibration, dict):
+        primary = calibration.get("primary")
+    else:
+        primary = None
+    r2 = _extract_calibration_r2(primary)
+    if r2 is None:
+        r2 = _extract_calibration_r2(scale_info)
+    if r2 is not None:
+        scale_info["r_squared"] = r2
+
+    baseline_coord = normalized.get("baseline_coord")
+    if baseline_coord is None:
+        baseline_coord = _resolve_baseline_coord(normalized.get("baselines"), orientation)
+    if baseline_coord is not None:
+        try:
+            baseline_coord = float(baseline_coord)
+            normalized["baseline_coord"] = baseline_coord
+            # Legacy UI expects this legacy field for visibility toggles.
+            scale_info.setdefault("baseline_y_coord", baseline_coord)
+        except (TypeError, ValueError):
+            pass
+
+    if "_assigned_bar_labels" not in normalized:
+        metadata = normalized.get("metadata")
+        if isinstance(metadata, dict):
+            assigned = metadata.get("assigned_bar_labels", metadata.get("_assigned_bar_labels"))
+            if isinstance(assigned, dict):
+                normalized["_assigned_bar_labels"] = assigned
+
+    image_dimensions = normalized.get("image_dimensions")
+    if not isinstance(image_dimensions, dict):
+        image_dimensions = {}
+    if image_size is not None:
+        width, height = image_size
+        image_dimensions.setdefault("width", int(width))
+        image_dimensions.setdefault("height", int(height))
+    normalized["image_dimensions"] = image_dimensions
+
+    return normalized
+
+class OCRLoaderThread(QThread):
+    """
+    Background thread for loading the EasyOCR model to prevent UI freezing.
+    """
+    ocr_ready = pyqtSignal(object)  # Emits the initialized reader
+    error_occurred = pyqtSignal(str) # Emits error message
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+        self._cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            import easyocr
+            languages = self.settings.get('ocr_settings', {}).get('languages', ['en', 'pt'])
+            use_gpu = self.settings.get('ocr_settings', {}).get('easyocr_gpu', True)
+            
+            # This is the heavy blocking call
+            reader = easyocr.Reader(languages, gpu=use_gpu)
+            
+            if not self._cancel_event.is_set():
+                self.ocr_ready.emit(reader)
+                
+        except Exception as e:
+            if not self._cancel_event.is_set():
+                self.error_occurred.emit(str(e))
+    
+    def cancel(self):
+        self._cancel_event.set()
+
 class ModernAnalysisThread(QThread):
     status_updated = pyqtSignal(str)
     analysis_complete = pyqtSignal(object)
     progress_updated = pyqtSignal(int)
 
-    def __init__(self, image_path, conf, output_path, advanced_settings, context: "ApplicationContext", parent=None):
+    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", parent=None):
         super().__init__(parent)
         self.image_path = image_path
         self.conf = conf
         self.output_path = output_path
         self.advanced_settings = advanced_settings
+        self.models_dir = models_dir
         self.context = context
         self._cancel_event = threading.Event()
 
@@ -62,24 +248,21 @@ class ModernAnalysisThread(QThread):
             if self.is_cancelled():
                 return
 
-            self.status_updated.emit("🔄 Starting analysis...")
+            self.status_updated.emit("Starting analysis...")
             self.progress_updated.emit(10)
 
             analysis_manager = self.context.analysis_manager
             
             # Setup analysis_manager
             analysis_manager.set_models(self.context.model_manager)
-            try:
-                easyocr_reader = self.context.get_service('easyocr_reader')
-            except KeyError:
-                # Initialize easyocr reader if not in service container
-                import easyocr
-                languages = self.advanced_settings.get('ocr_settings', {}).get('languages', ['en', 'pt']) if self.advanced_settings else ['en', 'pt']
-                use_gpu = self.advanced_settings.get('ocr_settings', {}).get('easyocr_gpu', True) if self.advanced_settings else True
-                easyocr_reader = easyocr.Reader(languages, gpu=use_gpu)
-                # Set it for later use
-                self.context.analysis_manager.set_easyocr_reader(easyocr_reader)
-            analysis_manager.set_easyocr_reader(easyocr_reader)
+            
+            # Ensure models are loaded
+            self.context.model_manager.load_models(self.models_dir)
+            
+            # Note: EasyOCR reader is set globally by OCRLoaderThread now.
+            # We assume it's available in the AnalysisManager since "Run" button 
+            # is only enabled when OCR is ready.
+            
             analysis_manager.set_advanced_settings(self.advanced_settings)
 
             result = analysis_manager.run_single_analysis(self.image_path, self.conf, self.output_path)
@@ -88,17 +271,17 @@ class ModernAnalysisThread(QThread):
 
             if not self.is_cancelled():
                 if result:
-                    self.status_updated.emit("✅ Analysis complete!")
+                    self.status_updated.emit("Analysis complete.")
                     self.analysis_complete.emit(result)
                 else:
-                    self.status_updated.emit("❌ Analysis failed.")
+                    self.status_updated.emit("Analysis failed.")
                     self.analysis_complete.emit({'error': 'Analysis failed.'})
 
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"Analysis error: {e}", exc_info=True)
             if not self.is_cancelled():
-                self.status_updated.emit(f"❌ Error: {str(e)}")
+                self.status_updated.emit(f"Error: {str(e)}")
                 self.analysis_complete.emit({'error': str(e)})
 
 
@@ -107,7 +290,16 @@ class BatchAnalysisThread(QThread):
     progress_updated = pyqtSignal(int, int)
     batch_complete = pyqtSignal(str)
 
-    def __init__(self, input_path, output_path, models_dir, easyocr_reader, conf, advanced_settings=None):
+    def __init__(
+        self,
+        input_path,
+        output_path,
+        models_dir,
+        easyocr_reader,
+        conf,
+        advanced_settings=None,
+        context: Optional["ApplicationContext"] = None,
+    ):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
@@ -117,27 +309,17 @@ class BatchAnalysisThread(QThread):
         self.conf = conf
         self.advanced_settings = advanced_settings
         self._cancel_event = multiprocessing.Event()
+        self.context = context or ApplicationContext.get_instance()
 
     def cancel(self):
         self._cancel_event.set()
 
     def run(self):
         try:
-            # num_workers = self.advanced_settings.get('performance', {}).get('batch_workers', 4)
-            # Parallel execution is now handled intrinsically or sequentially by the manager for stability
-            
-            # Access analysis manager from context (assuming it's available via some global or passed in)
-            # Since we don't have context passed to __init__, we need to get it or change __init__
-            # However, looking at ModernAnalysisThread, it accepts context. 
-            # We should probably update BatchAnalysisThread to accept context too.
-            # For now, let's grab the instance if possible, or fail gracefully.
-            from core.app_context import ApplicationContext
-            context = ApplicationContext.get_instance()
-            analysis_manager = context.analysis_manager
-            
-            # Setup manager if needed (though usually setup by main app)
-            # analysis_manager.set_models(context.model_manager) 
-            # analysis_manager.set_advanced_settings(self.advanced_settings)
+            analysis_manager = self.context.analysis_manager
+            analysis_manager.set_models(self.context.model_manager)
+            analysis_manager.set_advanced_settings(self.advanced_settings)
+            self.context.model_manager.load_models(self.models_dir)
 
             processed, total = analysis_manager.run_batch_analysis(
                 self.input_path,
@@ -159,8 +341,13 @@ class ImageScrollArea(QScrollArea):
     def __init__(self, parent_app):
         super().__init__()
         self.parent_app = parent_app
-        self.setWidgetResizable(True)
+        self.setWidgetResizable(False)
         self.setMinimumSize(500, 200)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._drag_active = False
+        self._drag_origin = None
 
     def wheelEvent(self, event):
         if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
@@ -171,6 +358,40 @@ class ImageScrollArea(QScrollArea):
             event.accept()
         else:
             super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.widget() is not None:
+            needs_pan = (
+                self.widget().width() > self.viewport().width()
+                or self.widget().height() > self.viewport().height()
+            )
+            if needs_pan:
+                self._drag_active = True
+                self._drag_origin = event.position().toPoint()
+                self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_active and self._drag_origin is not None:
+            current_pos = event.position().toPoint()
+            delta = current_pos - self._drag_origin
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            self._drag_origin = current_pos
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_active:
+            self._drag_active = False
+            self._drag_origin = None
+            self.viewport().unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class ModernChartAnalysisApp(QMainWindow):
@@ -188,6 +409,8 @@ class ModernChartAnalysisApp(QMainWindow):
         self.extraction_thread = None
         self.base_path = Path(__file__).parent.resolve()
         self.project_root = self.base_path.parent
+        self.icons_path = self.base_path / "ui" / "rendering" / "icons"
+        self._icon_cache: Dict[Tuple[str, str, int], QIcon] = {}
 
         self.advanced_settings = None
         self.advanced_settings_file = self.project_root / "config" / "advanced_settings.json"
@@ -205,7 +428,7 @@ class ModernChartAnalysisApp(QMainWindow):
         stylesheet = self._get_stylesheet()
         self.setStyleSheet(stylesheet)
 
-        self.setWindowTitle("📊 Chart Analysis Tool v12")
+        self.setWindowTitle("Chart Analysis Tool v12")
         # Use sizeHint to allow proper DPI scaling
         screen = QGuiApplication.primaryScreen()
         screen_size = screen.size()
@@ -232,6 +455,10 @@ class ModernChartAnalysisApp(QMainWindow):
         self.ocr_section_widgets = {}
         self.view_checkboxes_pool = {}
 
+        # NEW: Async OCR Loader
+        self.ocr_loader_thread = None
+        self.ocr_ready = False
+
         # NEW: Smart pixmap cache with memory bounds (replaces unbounded OrderedDict)
         from core.pixmap_cache import SmartPixmapCache
         self.pixmap_cache = SmartPixmapCache(
@@ -253,18 +480,24 @@ class ModernChartAnalysisApp(QMainWindow):
             "axis_labels": {"normal": (255, 0, 255),   "highlight": (255, 105, 180)},
             "scale_label": {"normal": (255, 117, 24),  "highlight": (255, 140, 0)},
             "tick_label":  {"normal": (0, 255, 255),   "highlight": (0, 206, 209)},
-            "other":       {"normal": (128, 128, 128), "highlight": (192, 192, 192),
-            "baseline":    {"normal": (240, 240, 240), "highlight": (240, 240, 240)}}
+            "other":       {"normal": (128, 128, 128), "highlight": (192, 192, 192)},
+            "baseline":    {"normal": (240, 240, 240), "highlight": (240, 240, 240)},
         }
 
         self.highlight_timer = QTimer()
         self.highlight_timer.setSingleShot(True)
         self.highlight_timer.timeout.connect(self._apply_highlight)
+        self.hover_clear_timer = QTimer()
+        self.hover_clear_timer.setSingleShot(True)
+        self.hover_clear_timer.timeout.connect(self._clear_hover_highlight)
 
         self._pending_highlight_bbox = None
         self._pending_highlight_class = None
         self._highlight_lock = threading.Lock()  # Lock for highlight state management
         # OLD locks removed - now using self.thread_safety
+
+        self.sidebar_collapsed = False
+        self._sidebar_saved_width = 280
 
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self._delayed_update_image)
@@ -281,6 +514,9 @@ class ModernChartAnalysisApp(QMainWindow):
         self._setup_ui()
         self.load_config()
         self.load_advanced_settings()
+        
+        # Start async OCR loading
+        self._start_ocr_loading(self.advanced_settings)
         # self.load_heavy_models()
 
         if PYQT_VERSION_STR:
@@ -293,112 +529,183 @@ class ModernChartAnalysisApp(QMainWindow):
 
         self.setFocus()
 
+    def get_icon(self, filename: str, color: str = "#d4d4d4", size: int = 16) -> QIcon:
+        """Load and tint SVG icon from src/ui/rendering/icons."""
+        cache_key = (filename, color, size)
+        cached = self._icon_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        icon_path = self.icons_path / filename
+        if not icon_path.exists():
+            logging.warning("Icon file not found: %s", icon_path)
+            return QIcon()
+
+        base_icon = QIcon(str(icon_path))
+        if not color:
+            self._icon_cache[cache_key] = base_icon
+            return base_icon
+
+        base_pixmap = base_icon.pixmap(size, size)
+        if base_pixmap.isNull():
+            base_pixmap = QPixmap(str(icon_path))
+        if base_pixmap.isNull():
+            self._icon_cache[cache_key] = base_icon
+            return base_icon
+
+        tinted = QPixmap(base_pixmap.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, base_pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), QColor(color))
+        painter.end()
+
+        icon = QIcon(tinted)
+        self._icon_cache[cache_key] = icon
+        return icon
+
+    def _create_icon_button(
+        self,
+        icon_filename: str,
+        tooltip: str,
+        *,
+        icon_color: str = "#d4d4d4",
+        button_size: int = 26,
+        icon_size: int = 14,
+        accent: bool = False,
+    ) -> QPushButton:
+        button = QPushButton("")
+        button.setToolTip(tooltip)
+        button.setFixedSize(button_size, button_size)
+        button.setIcon(self.get_icon(icon_filename, color=icon_color, size=icon_size))
+        button.setIconSize(QSize(icon_size, icon_size))
+        button.setProperty("iconOnly", True)
+        if accent:
+            button.setProperty("accent", True)
+        return button
+
+    def _create_path_row(
+        self,
+        label_text: str,
+        line_edit: QLineEdit,
+        browse_callback,
+    ) -> QWidget:
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(4)
+
+        label = QLabel(label_text.upper())
+        label.setProperty("sectionHeader", True)
+        container_layout.addWidget(label)
+
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        row_layout.addWidget(line_edit, 1)
+
+        browse_btn = self._create_icon_button(
+            "folder-open-solid-full.svg",
+            f"Browse {label_text.lower()}",
+            icon_color="#c5c5c5",
+            button_size=26,
+            icon_size=14,
+        )
+        browse_btn.clicked.connect(browse_callback)
+        row_layout.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        container_layout.addLayout(row_layout)
+        return container
+
     def _get_stylesheet(self):
         return (
-            "QMainWindow { background-color: #2b2b2b; color: #ffffff; }"
-            "QWidget { background-color: #2b2b2b; color: #ffffff; font-family: system-ui, -apple-system, sans-serif; font-size: 10px; }"
-            "QLabel { color: #ffffff; font-size: 10px; padding: 2px; }"
-            "QPushButton { background-color: #404040; border: 1px solid #555555; border-radius: 4px; padding: 6px 12px; color: #ffffff; font-weight: bold; font-size: 10px; min-height: 20px; }"
-            "QPushButton:hover { background-color: #4a90e2; border-color: #4a90e2; }"
-            "QPushButton:pressed { background-color: #357abd; }"
-            "QPushButton:disabled { background-color: #333333; color: #666666; border-color: #444444; }"
-            "QLineEdit { background-color: #404040; border: 1px solid #555555; border-radius: 3px; padding: 4px; color: #ffffff; font-size: 10px; }"
-            "QLineEdit:focus { border-color: #4a90e2; background-color: #454545; }"
-            "QTabWidget::pane { border: 1px solid #555555; background-color: #353535; }"
-            "QTabBar::tab { background-color: #404040; border: 1px solid #555555; padding: 6px 12px; margin-right: 1px; color: #ffffff; font-size: 10px; }"
-            "QTabBar::tab:selected { background-color: #4a90e2; border-bottom: 2px solid #4a90e2; }"
-            "QScrollArea { border: 1px solid #555555; background-color: #353535; }"
-            "QCheckBox { color: #ffffff; spacing: 6px; font-size: 9px; }"
-            "QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #555555; border-radius: 2px; background-color: #404040; }"
-            "QCheckBox::indicator:checked { background-color: #4a90e2; border-color: #4a90e2; }"
-            "QSlider::groove:horizontal { border: 1px solid #555555; height: 4px; background: #404040; border-radius: 2px; }"
-            "QSlider::handle:horizontal { background: #4a90e2; border: 1px solid #357abd; width: 14px; margin: -5px 0; border-radius: 7px; }"
-            "QProgressBar { border: 1px solid #555555; border-radius: 3px; background-color: #404040; text-align: center; color: #ffffff; font-size: 10px; max-height: 20px; }"
-            "QProgressBar::chunk { background-color: #4a90e2; border-radius: 2px; }"
-            "QFrame { border: 1px solid #555555; background-color: #353535; }"
-            "QGroupBox { border: 2px solid #4a90e2; border-radius: 6px; margin-top: 12px; padding-top: 8px; font-weight: bold; color: #4a90e2; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }"
-            "QSplitter::handle { background-color: #555555; border: 1px solid #666666; }"
-            "QSplitter::handle:horizontal { width: 3px; }"
-            "QSplitter::handle:vertical { height: 3px; }"
+            "QMainWindow { background-color: #1e1e1e; color: #d4d4d4; }"
+            "QWidget { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 10px; }"
+            "QLabel { color: #d4d4d4; padding: 0px; }"
+            "QLabel[sectionHeader=\"true\"] { color: #9da1a6; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }"
+            "QPushButton { background-color: #2d2d2d; border: 1px solid #454545; border-radius: 3px; color: #d4d4d4; padding: 5px 10px; min-height: 22px; }"
+            "QPushButton:hover { border-color: #5a5a5a; background-color: #343434; }"
+            "QPushButton:pressed { background-color: #252526; }"
+            "QPushButton:disabled { color: #6b6b6b; border-color: #3a3a3a; background-color: #252526; }"
+            "QPushButton[iconOnly=\"true\"] { padding: 0px; min-height: 0px; background-color: #252526; border: 1px solid #3f3f3f; }"
+            "QPushButton[iconOnly=\"true\"]:hover { border-color: #007acc; background-color: #2c2c2c; }"
+            "QPushButton[iconOnly=\"true\"][accent=\"true\"] { background-color: #007acc; border-color: #007acc; }"
+            "QPushButton[iconOnly=\"true\"][accent=\"true\"]:hover { background-color: #1685d1; border-color: #1685d1; }"
+            "QLineEdit { background-color: #3c3c3c; border: 1px solid #3c3c3c; border-radius: 2px; color: #ffffff; padding: 5px 8px; }"
+            "QLineEdit:focus { border: 1px solid #007acc; background-color: #333333; }"
+            "QScrollArea { background-color: #252526; border: 1px solid #454545; }"
+            "QScrollBar:vertical { background: #252526; width: 10px; margin: 0px; }"
+            "QScrollBar::handle:vertical { background: #3c3c3c; min-height: 24px; border-radius: 4px; }"
+            "QScrollBar::handle:vertical:hover { background: #4a4a4a; }"
+            "QScrollBar:horizontal { background: #252526; height: 10px; margin: 0px; }"
+            "QScrollBar::handle:horizontal { background: #3c3c3c; min-width: 24px; border-radius: 4px; }"
+            "QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }"
+            "QTabWidget::pane { border: 1px solid #454545; background-color: #252526; top: -1px; }"
+            "QTabBar::tab { background-color: #2a2a2a; border: 1px solid #454545; padding: 6px 10px; margin-right: 2px; color: #bfbfbf; }"
+            "QTabBar::tab:selected { color: #ffffff; border-color: #007acc; background-color: #1f1f1f; }"
+            "QCheckBox { color: #cfcfcf; spacing: 6px; font-size: 10px; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #555555; border-radius: 2px; background-color: #2d2d2d; }"
+            "QCheckBox::indicator:checked { background-color: #007acc; border-color: #007acc; }"
+            "QSlider::groove:horizontal { border: 0px; height: 4px; background: #3c3c3c; border-radius: 2px; }"
+            "QSlider::handle:horizontal { background: #007acc; border: 0px; width: 12px; margin: -4px 0; border-radius: 6px; }"
+            "QProgressBar { border: 1px solid #454545; border-radius: 2px; background-color: #252526; text-align: center; color: #d4d4d4; }"
+            "QProgressBar::chunk { background-color: #007acc; }"
+            "QGroupBox { border: 1px solid #454545; margin-top: 10px; padding-top: 8px; color: #c5c5c5; font-weight: 600; background-color: #252526; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+            "QFrame#sidebarPanel { background-color: #252526; border-right: 1px solid #454545; }"
+            "QSplitter::handle { background-color: #303030; }"
+            "QSplitter::handle:horizontal { width: 2px; }"
+            "QSplitter::handle:vertical { height: 2px; }"
         )
 
     def _create_title_bar(self):
-        """Create title bar with proper geometry and spacing."""
+        """Create a compact title bar with action icon."""
         titlebar = QFrame()
-        
-        # FIXED: Increased height to accommodate all elements
+        titlebar.setObjectName("titleBar")
         titlebar_style = """
-            QFrame {
-                background-color: #2b2b2b;
-                border-bottom: 2px solid #4a90e2;
-                padding: 4px;
+            QFrame#titleBar {
+                background-color: #1e1e1e;
+                border-bottom: 1px solid #454545;
             }
         """
         titlebar.setStyleSheet(titlebar_style)
-        titlebar.setFixedHeight(48)  # ✅ Increased from 40 to 48 to accommodate 28px button + margins
-        
+        titlebar.setFixedHeight(35)
+
         title_layout = QHBoxLayout(titlebar)
-        title_layout.setContentsMargins(12, 6, 12, 6)  # ✅ Increased vertical margins to 6px
+        title_layout.setContentsMargins(10, 4, 10, 4)
         title_layout.setSpacing(8)
-        
-        # Settings button with proper sizing
-        self.settings_btn = QPushButton("⚙️")
-        self.settings_btn.setFixedSize(28, 28)  # ✅ Fixed size 28x28 to fit in 48px height with margins
-        
-        # Style settings button
-        settings_btn_style = """
-            QPushButton {
-                background-color: #404040;
-                border: 1px solid #555555;
-                border-radius: 4px;
-                padding: 2px;
-                color: #ffffff;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #4a90e2;
-                border-color: #4a90e2;
-            }
-            QPushButton:pressed {
-                background-color: #353535;
-            }
-        """
-        self.settings_btn.setStyleSheet(settings_btn_style)
+
+        app_title = QLabel("CHART ANALYSIS WORKBENCH")
+        app_title.setProperty("sectionHeader", True)
+        app_title.setStyleSheet(
+            "QLabel { color: #e6e6e6; font-size: 11px; font-weight: 700; letter-spacing: 1.0px; }"
+        )
+        title_layout.addWidget(app_title)
+
+        title_layout.addStretch()
+
+        self.settings_indicator = QLabel("●")
+        self.settings_indicator.setFixedSize(10, 10)
+        self.settings_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.settings_indicator.setStyleSheet("QLabel { color: #6b6b6b; font-size: 9px; }")
+        title_layout.addWidget(self.settings_indicator)
+
+        self.settings_btn = self._create_icon_button(
+            "gear-solid-full.svg",
+            "Advanced settings",
+            icon_color="#ffffff",
+            button_size=24,
+            icon_size=14,
+            accent=False,
+        )
         self.settings_btn.clicked.connect(self.open_settings_dialog)
         title_layout.addWidget(self.settings_btn)
-        
-        # Settings indicator - fits in remaining space
-        self.settings_indicator = QLabel("●")
-        self.settings_indicator.setFixedSize(12, 12)  # ✅ Fixed size indicator
-        self.settings_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_layout.addWidget(self.settings_indicator)
-        
-        # Spacing between button group and title
-        title_layout.addSpacing(8)
-        
-        # Title label
-        title_label = QLabel("📊 Chart Analysis Tool v12 - Advanced Settings")
-        title_label.setFont(QFont("system-ui", 12, QFont.Weight.Bold))
-        
-        title_label_style = """
-            QLabel {
-                color: #4a90e2;
-                font-size: 12px;
-                font-weight: bold;
-                padding: 2px 8px;
-            }
-        """
-        title_label.setStyleSheet(title_label_style)
-        title_layout.addWidget(title_label)
-        
-        # Stretch to push everything to the left
-        title_layout.addStretch()
-        
+
         # Update indicators
         self.update_settings_indicator()
         self.update_settings_tooltip()
-        
+
         return titlebar
 
     def load_advanced_settings(self):
@@ -430,32 +737,65 @@ class ModernChartAnalysisApp(QMainWindow):
     
     def on_settings_changed(self, new_settings):
         # Check if OCR settings that require re-initialization have changed
+        old_ocr_engine = self.advanced_settings.get('ocr_engine', 'EasyOCR') if self.advanced_settings else 'EasyOCR'
+        new_ocr_engine = new_settings.get('ocr_engine', 'EasyOCR')
         old_ocr_settings = self.advanced_settings.get('ocr_settings', {}) if self.advanced_settings else {}
         new_ocr_settings = new_settings.get('ocr_settings', {})
         
-        if old_ocr_settings.get('easyocr_gpu') != new_ocr_settings.get('easyocr_gpu') or \
+        if old_ocr_engine != new_ocr_engine or \
+           old_ocr_settings.get('easyocr_gpu') != new_ocr_settings.get('easyocr_gpu') or \
            old_ocr_settings.get('languages') != new_ocr_settings.get('languages'):
-            self.reload_easyocr_reader(new_settings)
+            self._start_ocr_loading(new_settings)
 
         self.advanced_settings = new_settings
         self.update_settings_tooltip()
         self.update_settings_indicator()
-        self.update_status("⚙️ Settings updated - some changes may require reprocessing an image.")
+        self.update_status("Settings updated. Some changes may require reprocessing an image.")
 
-    def reload_easyocr_reader(self, settings):
-        if analysis.EASYOCR_AVAILABLE:
-            try:
-                if self.easyocr_reader:
-                    del self.easyocr_reader
-                    gc.collect()
-                
-                use_gpu = settings.get('ocr_settings', {}).get('easyocr_gpu', True)
-                languages = settings.get('ocr_settings', {}).get('languages', ['en', 'pt'])
-                
-                self.easyocr_reader = analysis.easyocr.Reader(languages, gpu=use_gpu)
-                self.update_status("✅ EasyOCR reader reloaded with new settings.")
-            except Exception as e:
-                self.update_status(f"❌ Error reloading EasyOCR: {e}")
+    def _start_ocr_loading(self, settings):
+        """Start async loading of OCR engine."""
+        if self.ocr_loader_thread and self.ocr_loader_thread.isRunning():
+            self.ocr_loader_thread.cancel()
+            self.ocr_loader_thread.wait()
+
+        ocr_engine_name = (settings or {}).get('ocr_engine', 'EasyOCR')
+        needs_easyocr = ocr_engine_name == 'EasyOCR'
+
+        if not needs_easyocr:
+            # Paddle pipeline does not require preloading EasyOCR.
+            self.ocr_ready = True
+            self.run_batch_btn.setEnabled(True)
+            self.update_status("✅ OCR engine configured (Paddle mode).")
+            return
+
+        if not analysis.EASYOCR_AVAILABLE:
+            self.ocr_ready = False
+            self.run_batch_btn.setEnabled(True)
+            self.update_status("⚠️ EasyOCR not available.")
+            return
+
+        self.ocr_ready = False
+        self.run_batch_btn.setEnabled(False) # Disable run buttons
+        self.update_status("Loading OCR engine...")
+        
+        self.ocr_loader_thread = OCRLoaderThread(settings, self)
+        self.ocr_loader_thread.ocr_ready.connect(self._on_ocr_loaded)
+        self.ocr_loader_thread.error_occurred.connect(lambda msg: self.update_status(f"OCR load error: {msg}"))
+        self.ocr_loader_thread.start()
+
+    def _on_ocr_loaded(self, reader):
+        """Handle successful OCR load."""
+        self.easyocr_reader = reader
+        
+        # Update context
+        self.context.analysis_manager.set_easyocr_reader(reader)
+        
+        self.ocr_ready = True
+        self.run_batch_btn.setEnabled(True)
+        self.update_status("OCR engine loaded.")
+        
+        # Explicit clean old resources if needed
+        gc.collect()
 
     def apply_advanced_settings(self):
         if not self.advanced_settings:
@@ -464,9 +804,9 @@ class ModernChartAnalysisApp(QMainWindow):
         try:
             detection_thresh = self.advanced_settings['detection_thresholds'].get('bar_detection', 0.4)
             self.conf_slider.setValue(int(detection_thresh * 10))
-            self.update_status("✅ Advanced settings applied.")
+            self.update_status("Advanced settings applied.")
         except Exception as e:
-            self.update_status(f"⚠️ Error applying settings: {e}")
+            self.update_status(f"Error applying settings: {e}")
 
     def update_settings_tooltip(self, button=None):
         if button is None:
@@ -479,13 +819,13 @@ class ModernChartAnalysisApp(QMainWindow):
         gpu_enabled = self.advanced_settings.get('ocr_settings', {}).get('easyocr_gpu', True)
         bar_threshold = self.advanced_settings.get('detection_thresholds', {}).get('bar_detection', 0.4)
         
-        tooltip = f"""⚙️ Advanced Settings
+        tooltip = f"""Advanced Settings
 
 OCR Engine: {ocr_engine.upper()}
-GPU Enabled: {'✓' if gpu_enabled else '✗'}
+GPU Enabled: {'Yes' if gpu_enabled else 'No'}
 Bar Detection Threshold: {bar_threshold:.2f}
 
-Click to configure all advanced options."""
+Click to configure advanced options."""
         button.setToolTip(tooltip)
 
     def update_settings_indicator(self):
@@ -496,11 +836,11 @@ Click to configure all advanced options."""
         default_settings = dialog.get_settings()
         
         if self.advanced_settings and self.advanced_settings != default_settings:
-            self.settings_indicator.setText("🟢")
+            self.settings_indicator.setText("●")
             self.settings_indicator.setToolTip("Custom settings are active.")
             self.settings_indicator.setStyleSheet("QLabel { color: #4CAF50; }")
         else:
-            self.settings_indicator.setText("⚫")
+            self.settings_indicator.setText("●")
             self.settings_indicator.setToolTip("Default settings are active.")
             self.settings_indicator.setStyleSheet("QLabel { color: #888888; }")
 
@@ -514,16 +854,13 @@ Click to configure all advanced options."""
         # Create title bar
         titlebar = self._create_title_bar()
         
-        # Main layout with proper margins
+        # Main layout
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(8, 4, 8, 8)  # ✅ Added 4px top margin
-        main_layout.setSpacing(6)  # ✅ Increased from 4 to 6
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
         # Add title bar
         main_layout.addWidget(titlebar)
-        
-        # Add spacing after titlebar to prevent overlap
-        main_layout.addSpacing(4)  # ✅ Extra spacing
         
         # Main splitter
         self.main_splitter_widget = QSplitter(Qt.Orientation.Horizontal)
@@ -532,39 +869,43 @@ Click to configure all advanced options."""
         central_widget.setLayout(main_layout)
         
         # === LEFT PANEL ===
-        self.left_panel = QWidget()
+        self.left_panel = QFrame()
+        self.left_panel.setObjectName("sidebarPanel")
         # Use size policy instead of fixed width for better DPI scaling
         self.left_panel.setSizePolicy(
             QSizePolicy.Policy.Preferred,  # Horizontal - Preferred to allow expansion/contraction
             QSizePolicy.Policy.Expanding   # Vertical - Expand to fill available space
         )
         # Set minimum and maximum widths to maintain reasonable proportions
-        self.left_panel.setMinimumWidth(280)  # Minimum width for usability
-        self.left_panel.setMaximumWidth(400)  # Maximum width to prevent excessive stretching
+        self.left_panel.setMinimumWidth(240)
+        self.left_panel.setMaximumWidth(320)
         
         left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(4, 4, 4, 4)
-        left_layout.setSpacing(8)  # ✅ Increased spacing
-        
-        # Configuration label with proper styling
-        config_label = QLabel("⚙️ Configuration")
-        config_label.setFont(QFont("system-ui", 11, QFont.Weight.Bold))
-        config_label_style = """
-            QLabel {
-                color: #4a90e2;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 0px;
-                margin-top: 4px;
-            }
-        """
-        config_label.setStyleSheet(config_label_style)
-        left_layout.addWidget(config_label)
+        left_layout.setContentsMargins(10, 12, 10, 10)
+        left_layout.setSpacing(10)
+
+        sidebar_header_layout = QHBoxLayout()
+        sidebar_header_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_header_layout.setSpacing(6)
+        config_label = QLabel("SIDEBAR")
+        config_label.setProperty("sectionHeader", True)
+        sidebar_header_layout.addWidget(config_label)
+        sidebar_header_layout.addStretch()
+        self.sidebar_toggle_btn = self._create_icon_button(
+            "circle-chevron-left-solid-full.svg",
+            "Collapse sidebar",
+            icon_color="#c5c5c5",
+            button_size=22,
+            icon_size=12,
+        )
+        self.sidebar_toggle_btn.clicked.connect(self.toggle_sidebar)
+        sidebar_header_layout.addWidget(self.sidebar_toggle_btn)
+        left_layout.addLayout(sidebar_header_layout)
         
         # Configuration scroll area
         self.config_scroll = QScrollArea()
         self.config_scroll.setWidgetResizable(True)
-        self.config_scroll.setFixedHeight(280)
+        self.config_scroll.setFixedHeight(285)
         self.config_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
@@ -574,10 +915,23 @@ Click to configure all advanced options."""
         left_layout.addWidget(self.config_scroll)
         
         # File list label
-        file_list_label = QLabel("📁 Image Files")
-        file_list_label.setFont(QFont("system-ui", 11, QFont.Weight.Bold))
-        file_list_label.setStyleSheet(config_label_style)  # Same style as config label
-        left_layout.addWidget(file_list_label)
+        files_header_layout = QHBoxLayout()
+        files_header_layout.setContentsMargins(0, 0, 0, 0)
+        files_header_layout.setSpacing(6)
+        file_list_label = QLabel("IMAGE FILES")
+        file_list_label.setProperty("sectionHeader", True)
+        files_header_layout.addWidget(file_list_label)
+        files_header_layout.addStretch()
+        self.files_sidebar_toggle_btn = self._create_icon_button(
+            "circle-chevron-left-solid-full.svg",
+            "Collapse sidebar",
+            icon_color="#9da1a6",
+            button_size=20,
+            icon_size=11,
+        )
+        self.files_sidebar_toggle_btn.clicked.connect(self.toggle_sidebar)
+        files_header_layout.addWidget(self.files_sidebar_toggle_btn)
+        left_layout.addLayout(files_header_layout)
         
         # File list scroll
         self.file_list_scroll = QScrollArea()
@@ -595,6 +949,25 @@ Click to configure all advanced options."""
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(4, 4, 4, 4)
         right_layout.setSpacing(4)
+
+        right_header_layout = QHBoxLayout()
+        right_header_layout.setContentsMargins(0, 0, 0, 0)
+        right_header_layout.setSpacing(6)
+        right_header_label = QLabel("CANVAS")
+        right_header_label.setProperty("sectionHeader", True)
+        right_header_layout.addWidget(right_header_label)
+        right_header_layout.addStretch()
+        self.sidebar_restore_btn = self._create_icon_button(
+            "circle-chevron-right-solid-full.svg",
+            "Expand sidebar",
+            icon_color="#d4d4d4",
+            button_size=22,
+            icon_size=12,
+        )
+        self.sidebar_restore_btn.clicked.connect(self.toggle_sidebar)
+        self.sidebar_restore_btn.setVisible(False)
+        right_header_layout.addWidget(self.sidebar_restore_btn)
+        right_layout.addLayout(right_header_layout)
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -606,18 +979,16 @@ Click to configure all advanced options."""
 
         self.display_frame = ImageScrollArea(self)
         
-        display_widget = QWidget()
-        display_layout = QVBoxLayout(display_widget)
-        display_layout.setContentsMargins(4, 4, 4, 4)
-        self.image_label = QLabel("🖼️ Select an input folder to begin analysis")
+        self.image_label = QLabel("Select an input folder to begin analysis")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.image_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored,  # Horizontal
-            QSizePolicy.Policy.Ignored   # Vertical
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed
         )
         self.image_label.setScaledContents(False)  # Don't auto-scale
         self.image_label.setMinimumSize(200, 200)   # Minimum size
+        self.image_label.setMaximumSize(16777215, 16777215)
         
         image_label_style = (
             "QLabel {"
@@ -631,8 +1002,7 @@ Click to configure all advanced options."""
         )
         self.image_label.setStyleSheet(image_label_style)
         
-        display_layout.addWidget(self.image_label, stretch=1)
-        self.display_frame.setWidget(display_widget)
+        self.display_frame.setWidget(self.image_label)
         self.vertical_splitter.addWidget(self.display_frame)
 
         self.bottom_container = QWidget()
@@ -669,88 +1039,111 @@ Click to configure all advanced options."""
         self.status_bar = self.statusBar()
         self.status_bar.showMessage("Ready")
 
+    def toggle_sidebar(self):
+        self._set_sidebar_collapsed(not self.sidebar_collapsed)
+
+    def _set_sidebar_collapsed(self, collapsed: bool):
+        if not hasattr(self, "main_splitter_widget") or self.main_splitter_widget is None:
+            return
+        if collapsed == self.sidebar_collapsed:
+            return
+
+        sizes = self.main_splitter_widget.sizes()
+        total_width = sum(sizes) if sizes else max(self.width(), 1)
+
+        if collapsed:
+            current_width = self.left_panel.width()
+            if current_width > 32:
+                self._sidebar_saved_width = current_width
+            self.left_panel.setVisible(False)
+            self.sidebar_collapsed = True
+            if hasattr(self, "sidebar_toggle_btn"):
+                self.sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-right-solid-full.svg", "#c5c5c5", 12))
+            if hasattr(self, "files_sidebar_toggle_btn"):
+                self.files_sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-right-solid-full.svg", "#9da1a6", 11))
+            if hasattr(self, "sidebar_restore_btn"):
+                self.sidebar_restore_btn.setVisible(True)
+            self.main_splitter_widget.setSizes([0, max(total_width, 1)])
+        else:
+            self.left_panel.setVisible(True)
+            restore_width = int(np.clip(self._sidebar_saved_width, 220, 380))
+            right_width = max(total_width - restore_width, 1)
+            self.main_splitter_widget.setSizes([restore_width, right_width])
+            self.sidebar_collapsed = False
+            if hasattr(self, "sidebar_toggle_btn"):
+                self.sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-left-solid-full.svg", "#c5c5c5", 12))
+            if hasattr(self, "files_sidebar_toggle_btn"):
+                self.files_sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-left-solid-full.svg", "#9da1a6", 11))
+            if hasattr(self, "sidebar_restore_btn"):
+                self.sidebar_restore_btn.setVisible(False)
+
     def _setup_config_frame(self):
-        """Setup configuration frame with proper spacing."""
-        self.config_frame = QFrame()
-        
-        config_frame_style = """
-            QFrame {
-                border: 1px solid #555555;
-                border-radius: 6px;
-                padding: 8px;
-                background-color: #353535;
-                margin-top: 4px;
-            }
-        """
-        self.config_frame.setStyleSheet(config_frame_style)
-        
-        config_layout = QGridLayout(self.config_frame)
-        config_layout.setSpacing(6)  # ✅ Increased from 4 to prevent crowding
-        config_layout.setContentsMargins(10, 10, 10, 10)  # ✅ Increased from 8 to prevent edge crowding
+        """Build a compact sidebar-style configuration panel."""
+        self.config_frame = QWidget()
+        config_layout = QVBoxLayout(self.config_frame)
+        config_layout.setSpacing(10)
+        config_layout.setContentsMargins(8, 8, 8, 8)
 
-        row = 0
-        
-        config_layout.addWidget(QLabel("📂 Input:"), row, 0)
         self.input_path_edit = QLineEdit()
-        self.input_path_edit.setPlaceholderText("Select input folder...")
-        config_layout.addWidget(self.input_path_edit, row, 1)
-        
-        browse_input_btn = QPushButton("Browse")
-        browse_input_btn.clicked.connect(lambda: self.browse_directory(self.input_path_edit, self.handle_input_path_change))
-        browse_input_btn.setMaximumWidth(70)
-        config_layout.addWidget(browse_input_btn, row, 2)
-        row += 1
+        self.input_path_edit.setPlaceholderText("Input folder")
+        input_row = self._create_path_row(
+            "Input",
+            self.input_path_edit,
+            lambda: self.browse_directory(self.input_path_edit, self.handle_input_path_change),
+        )
+        config_layout.addWidget(input_row)
 
-        config_layout.addWidget(QLabel("💾 Output:"), row, 0)
         self.output_path_edit = QLineEdit()
-        self.output_path_edit.setPlaceholderText("Output folder...")
-        config_layout.addWidget(self.output_path_edit, row, 1)
-        
-        browse_output_btn = QPushButton("Browse")
-        browse_output_btn.clicked.connect(lambda: self.browse_directory(self.output_path_edit))
-        browse_output_btn.setMaximumWidth(70)
-        config_layout.addWidget(browse_output_btn, row, 2)
-        row += 1
+        self.output_path_edit.setPlaceholderText("Output folder")
+        output_row = self._create_path_row(
+            "Output",
+            self.output_path_edit,
+            lambda: self.browse_directory(self.output_path_edit),
+        )
+        config_layout.addWidget(output_row)
 
-        config_layout.addWidget(QLabel("📂 Models Directory:"), row, 0)
-        default_models_dir = str(self.base_path / "Modulos")
+        default_models_dir = str(self.base_path / "models")
         self.models_dir_edit = QLineEdit(default_models_dir)
-        config_layout.addWidget(self.models_dir_edit, row, 1)
-        
-        browse_models_dir_btn = QPushButton("Browse")
-        browse_models_dir_btn.clicked.connect(lambda: self.browse_directory(self.models_dir_edit))
-        browse_models_dir_btn.setMaximumWidth(70)
-        config_layout.addWidget(browse_models_dir_btn, row, 2)
-        row += 1
+        models_row = self._create_path_row(
+            "Models",
+            self.models_dir_edit,
+            lambda: self.browse_directory(self.models_dir_edit),
+        )
+        config_layout.addWidget(models_row)
 
-        self.conf_label = QLabel("🎯 Confidence: 0.40")
-        self.conf_label.setFont(QFont("system-ui", 9, QFont.Weight.Bold))
-        config_layout.addWidget(self.conf_label, row, 0, 1, 3)
-        row += 1
+        self.conf_label = QLabel("CONFIDENCE: 0.40")
+        self.conf_label.setProperty("sectionHeader", True)
+        config_layout.addWidget(self.conf_label)
         
         self.conf_slider = QSlider(Qt.Orientation.Horizontal)
         self.conf_slider.setMinimum(1)
         self.conf_slider.setMaximum(9)
         self.conf_slider.setValue(4)
         self.conf_slider.valueChanged.connect(self.update_slider_label)
-        config_layout.addWidget(self.conf_slider, row, 0, 1, 3)
-        row += 1
+        config_layout.addWidget(self.conf_slider)
 
-        self.run_batch_btn = QPushButton("🚀 Run Batch Analysis")
+        self.run_batch_btn = QPushButton("Run Batch Analysis")
+        self.run_batch_btn.setIcon(self.get_icon("bullseye-solid-full.svg", color="#ffffff", size=14))
+        self.run_batch_btn.setIconSize(QSize(14, 14))
         self.run_batch_btn.clicked.connect(self.start_batch_analysis_thread)
         run_batch_style = (
             "QPushButton {"
-            "    background-color: #4a90e2;"
-            "    font-size: 11px;"
-            "    font-weight: bold;"
-            "    padding: 8px;"
+            "    background-color: #007acc;"
+            "    border: 1px solid #007acc;"
+            "    color: #ffffff;"
+            "    font-size: 10px;"
+            "    font-weight: 600;"
+            "    min-height: 26px;"
+            "    padding: 4px 10px;"
             "}"
             "QPushButton:hover {"
-            "    background-color: #5ba0f2;"
+            "    background-color: #1685d1;"
+            "    border-color: #1685d1;"
             "}"
         )
         self.run_batch_btn.setStyleSheet(run_batch_style)
-        config_layout.addWidget(self.run_batch_btn, row, 0, 1, 3)
+        config_layout.addWidget(self.run_batch_btn)
+        config_layout.addStretch()
 
     def _setup_results_ui_once(self):
         self.results_tab_widget = QTabWidget()
@@ -777,13 +1170,13 @@ Click to configure all advanced options."""
         
         self.ocr_sections = {}
         section_order = [
-            ("chart_title", "📋 Chart Title"),
-            ("axis_title", "📐 Axis Titles"),
-            ("scale_label", "📏 Scale Labels"),
-            ("tick_label", "🏷️ Bar/Tick Labels"),
-            ("legend", "🔖 Legend"),
-            ("data_label", "🔢 Data Labels"),
-            ("other", "📝 Other Text")
+            ("chart_title", "Chart Title"),
+            ("axis_title", "Axis Titles"),
+            ("scale_label", "Scale Labels"),
+            ("tick_label", "Bar/Tick Labels"),
+            ("legend", "Legend"),
+            ("data_label", "Data Labels"),
+            ("other", "Other Text")
         ]
         
         for section_key, section_title in section_order:
@@ -796,7 +1189,7 @@ Click to configure all advanced options."""
         ocr_scroll.setWidget(self.ocr_content_widget)
         ocr_layout.addWidget(ocr_scroll)
         
-        self.results_tab_widget.addTab(ocr_tab, "📤 OCR Results")
+        self.results_tab_widget.addTab(ocr_tab, "OCR")
 
     def _create_ocr_section(self, title, section_key):
         group = QGroupBox(title)
@@ -825,7 +1218,7 @@ Click to configure all advanced options."""
         self.bar_content_layout.setSpacing(8)
         self.bar_content_layout.setContentsMargins(8, 8, 8, 8)
         
-        scale_group = QGroupBox("📊 Scale Information")
+        scale_group = QGroupBox("Scale")
         scale_layout = QVBoxLayout(scale_group)
         
         self.scale_info_frame = QFrame()
@@ -836,7 +1229,9 @@ Click to configure all advanced options."""
         self.scale_r2_label.setStyleSheet("QLabel { font-weight: bold; font-size: 11px; }")
         scale_info_layout.addWidget(self.scale_r2_label)
         
-        self.recal_btn = QPushButton("🔄 Recalibrate")
+        self.recal_btn = QPushButton("Recalibrate")
+        self.recal_btn.setIcon(self.get_icon("repeat-solid-full.svg", color="#c5c5c5", size=14))
+        self.recal_btn.setIconSize(QSize(14, 14))
         self.recal_btn.clicked.connect(self.recalibrate_scale)
         self.recal_btn.setMaximumWidth(120)
         recal_style = (
@@ -857,7 +1252,7 @@ Click to configure all advanced options."""
         scale_layout.addWidget(self.scale_info_frame)
         self.bar_content_layout.addWidget(scale_group)
         
-        self.bars_group = QGroupBox("📊 Detected Bars")
+        self.bars_group = QGroupBox("Detected Bars")
         self.bars_layout = QVBoxLayout(self.bars_group)
         self.bars_layout.setSpacing(4)
         self.bar_content_layout.addWidget(self.bars_group)
@@ -866,7 +1261,7 @@ Click to configure all advanced options."""
         bar_scroll.setWidget(self.bar_content_widget)
         bar_layout.addWidget(bar_scroll)
         
-        self.results_tab_widget.addTab(bar_tab, "📊 Bars")
+        self.results_tab_widget.addTab(bar_tab, "Data")
 
     def _create_view_tab(self):
         view_tab = QWidget()
@@ -884,7 +1279,7 @@ Click to configure all advanced options."""
         view_scroll.setWidget(self.view_content_widget)
         view_layout.addWidget(view_scroll)
         
-        self.results_tab_widget.addTab(view_tab, "👁️ View Options")
+        self.results_tab_widget.addTab(view_tab, "View")
 
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
@@ -897,7 +1292,7 @@ Click to configure all advanced options."""
     def safe_model_access(self):
         """Context manager for model access (NEW: uses ThreadSafetyManager)"""
         with self.thread_safety.model_access():
-            yield self.models
+            yield self.context.model_manager
             
     def update_image_safe(self, pixmap):
         """Thread-safe image updates (NEW: uses ThreadSafetyManager)"""
@@ -908,8 +1303,56 @@ Click to configure all advanced options."""
             
     def _apply_pixmap_to_ui(self, pixmap):
         """Must run on main thread"""
-        if self.image_label:
-            self.image_label.setPixmap(pixmap)
+        if self.image_label and pixmap is not None:
+            self._set_image_pixmap(pixmap)
+
+    def _set_image_placeholder(self, message: str):
+        if not self.image_label:
+            return
+        self.image_label.clear()
+        self.image_label.setPixmap(QPixmap())
+        self.image_label.setText(message)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setMinimumSize(200, 200)
+        self.image_label.setMaximumSize(16777215, 16777215)
+        self.image_label.resize(200, 200)
+        placeholder_style = (
+            "QLabel {"
+            "    font-size: 12px;"
+            "    color: #888888;"
+            "    background-color: #3a3a3a;"
+            "    border: 2px dashed #555555;"
+            "    border-radius: 6px;"
+            "    padding: 15px;"
+            "}"
+        )
+        self.image_label.setStyleSheet(placeholder_style)
+
+    def _set_image_pixmap(self, pixmap: QPixmap):
+        if not self.image_label:
+            return
+        self.image_label.setText("")
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet(
+            "QLabel { background-color: #2f2f2f; border: none; padding: 0px; }"
+        )
+        self.image_label.setPixmap(pixmap)
+        self.image_label.resize(pixmap.size())
+        self.image_label.setMinimumSize(pixmap.size())
+        self.image_label.setMaximumSize(pixmap.size())
+        self.image_label.adjustSize()
+
+    def _compute_fit_zoom(self, image_size: Tuple[int, int]) -> float:
+        width, height = image_size
+        if width <= 0 or height <= 0:
+            return 1.0
+        viewport = self.display_frame.viewport()
+        if viewport.width() < 50 or viewport.height() < 50:
+            return 1.0
+        avail_w = max(1, viewport.width() - 24)
+        avail_h = max(1, viewport.height() - 24)
+        fit_zoom = min(avail_w / width, avail_h / height)
+        return float(np.clip(fit_zoom, 0.1, 1.0))
     
     def _on_state_changed(self, new_state):
         """
@@ -935,6 +1378,13 @@ Click to configure all advanced options."""
         self.perf_monitor.report()
 
     def cleanup_resources(self):
+        if hasattr(self, "highlight_timer"):
+            self.highlight_timer.stop()
+        if hasattr(self, "hover_clear_timer"):
+            self.hover_clear_timer.stop()
+        if hasattr(self, "update_timer"):
+            self.update_timer.stop()
+
         if self.analysis_thread and self.analysis_thread.isRunning():
             self.analysis_thread.cancel()
             self.analysis_thread.quit()
@@ -946,11 +1396,11 @@ Click to configure all advanced options."""
             self.batch_thread.wait(3000)
 
         if self.original_pil_image:
-            self.original_pil_image.close()
+            self._close_pil_image_safely(self.original_pil_image)
             self.original_pil_image = None
             
         if self.base_image_with_detections:
-            self.base_image_with_detections.close()
+            self._close_pil_image_safely(self.base_image_with_detections)
             self.base_image_with_detections = None
             
         if hasattr(self, 'image_label') and self.image_label:
@@ -965,7 +1415,7 @@ Click to configure all advanced options."""
         # Clear the highlight cache
         for img in self.highlight_cache.values():
             if img:
-                img.close()
+                self._close_pil_image_safely(img)
         self.highlight_cache.clear()
         
         # Clear pixmap cache
@@ -1004,7 +1454,19 @@ Click to configure all advanced options."""
                     config_data = json.load(f)
                 self.input_path_edit.setText(config_data.get("input_path", ""))
                 self.output_path_edit.setText(config_data.get("output_path", str(self.project_root / "output")))
-                self.models_dir_edit.setText(config_data.get("models_dir", str(self.project_root / "models")))
+                
+                # Migration logic for models_dir
+                models_dir_from_config = config_data.get("models_dir")
+                if models_dir_from_config:
+                    models_dir_path = Path(models_dir_from_config)
+                    # If path points to "Modulos" (old name) and doesn't exist, try "models"
+                    if not models_dir_path.exists() and "Modulos" in str(models_dir_path):
+                        potential_new_path = self.base_path / "models"
+                        if potential_new_path.exists():
+                            config_data['models_dir'] = str(potential_new_path)
+                            self.update_status("⚠️ Migrated config: 'Modulos' -> 'models'")
+                
+                self.models_dir_edit.setText(config_data.get("models_dir", str(self.base_path / "models")))
                 conf = config_data.get("confidence", 0.4)
                 self.conf_slider.setValue(int(conf * 10))
                 self.update_slider_label(self.conf_slider.value())
@@ -1022,7 +1484,7 @@ Click to configure all advanced options."""
             self.update_status(f"❌ Error loading config: {e}")
 
     def update_slider_label(self, value):
-        self.conf_label.setText(f"🎯 Confidence: {value / 10.0:.2f}")
+        self.conf_label.setText(f"CONFIDENCE: {value / 10.0:.2f}")
 
     def browse_directory(self, line_edit_widget, on_path_set=None):
         path = QFileDialog.getExistingDirectory(self, "Select Folder")
@@ -1035,18 +1497,118 @@ Click to configure all advanced options."""
         self.populate_file_list()
         self.update_status(f"Folder loaded. {len(self.image_files)} images found.")
 
+    def _required_model_relative_paths(self) -> List[Path]:
+        required = [Path(MODELS_CONFIG.classification)]
+        required.extend(Path(model_name) for model_name in MODELS_CONFIG.detection.values())
+
+        ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "EasyOCR")
+        if ocr_engine in {"Paddle", "Paddle_docs"}:
+            required.extend([
+                Path("OCR/PP-OCRv5_server_det.onnx"),
+                Path("OCR/PP-OCRv5_server_rec.onnx"),
+                Path("OCR/PP-LCNet_x1_0_textline_ori.onnx"),
+                Path("OCR/PP-OCRv5_server_rec.yml"),
+            ])
+        return required
+
+    def _validate_model_files(self, models_dir_path: Path) -> List[str]:
+        missing = []
+        for relative_path in self._required_model_relative_paths():
+            candidate = models_dir_path / relative_path
+            if not candidate.exists():
+                missing.append(str(candidate))
+        return missing
+
+    @staticmethod
+    def _is_error_result(result: Any) -> bool:
+        return isinstance(result, dict) and isinstance(result.get("error"), str)
+
+    @staticmethod
+    def _format_analysis_error_message(message: str) -> str:
+        lower_msg = message.lower()
+        if "unsupported model ir version" in lower_msg:
+            return (
+                "Model compatibility error:\n"
+                f"{message}\n\n"
+                "Your ONNX models require a newer onnxruntime build.\n"
+                "Update dependencies and restart the application."
+            )
+        if "model loading failed" in lower_msg:
+            return (
+                "Model loading failed:\n"
+                f"{message}\n\n"
+                "Check model files and onnxruntime compatibility."
+            )
+        return message
+
+    @staticmethod
+    def _close_pil_image_safely(image_obj):
+        """
+        Close only file-backed PIL images.
+        In-memory images created by copy()/resize() do not hold file handles and should
+        not be explicitly closed to avoid PIL debug noise.
+        """
+        if image_obj is None:
+            return
+        if getattr(image_obj, "fp", None) is not None:
+            try:
+                image_obj.close()
+            except Exception:
+                logging.debug("Failed to close file-backed PIL image", exc_info=True)
+
+    def _normalize_result_for_gui(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        image_size = self.original_pil_image.size if self.original_pil_image is not None else None
+        return _normalize_result_payload_for_gui(result, image_size=image_size)
+
     def validate_paths(self):
+        input_path_text = self.input_path_edit.text().strip()
+        output_path_text = self.output_path_edit.text().strip()
+        models_path_text = self.models_dir_edit.text().strip()
+
         missing_paths = []
-        if not self.input_path_edit.text():
+        if not input_path_text:
             missing_paths.append("Input folder")
-        if not self.output_path_edit.text():
+        if not output_path_text:
             missing_paths.append("Output folder")
-        if not self.models_dir_edit.text():
-            missing_paths.append("Models Directory")
-        
+        if not models_path_text:
+            missing_paths.append("Models directory")
+
         if missing_paths:
             QMessageBox.critical(self, "Missing Paths", f"Please set:\n• " + "\n• ".join(missing_paths))
             return False
+
+        input_path = Path(input_path_text)
+        if not input_path.exists() or not input_path.is_dir():
+            QMessageBox.critical(self, "Invalid Input Folder", f"Input folder not found:\n{input_path}")
+            return False
+
+        output_path = Path(output_path_text)
+        try:
+            output_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Invalid Output Folder",
+                f"Could not create output folder:\n{output_path}\n\n{exc}",
+            )
+            return False
+
+        models_path = Path(models_path_text)
+        if not models_path.exists() or not models_path.is_dir():
+            QMessageBox.critical(self, "Invalid Models Directory", f"Models directory not found:\n{models_path}")
+            return False
+
+        missing_models = self._validate_model_files(models_path)
+        if missing_models:
+            preview = "\n".join(f"• {path}" for path in missing_models[:10])
+            extra = "" if len(missing_models) <= 10 else f"\n... and {len(missing_models) - 10} more"
+            QMessageBox.critical(
+                self,
+                "Missing Model Files",
+                f"Required model files are missing:\n{preview}{extra}",
+            )
+            return False
+
         return True
 
     def populate_file_list(self):
@@ -1057,14 +1619,14 @@ Click to configure all advanced options."""
 
         path_str = self.input_path_edit.text()
         if not path_str:
-            label = QLabel("❌ Invalid folder")
+            label = QLabel("Invalid folder")
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
 
         path = Path(path_str)
         if not path.is_dir():
-            label = QLabel("❌ Invalid folder")
+            label = QLabel("Invalid folder")
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
@@ -1075,7 +1637,7 @@ Click to configure all advanced options."""
         ])
 
         if not self.image_files:
-            label = QLabel("❌ No images found")
+            label = QLabel("No images found")
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
@@ -1083,20 +1645,24 @@ Click to configure all advanced options."""
         for i, file_path in enumerate(self.image_files):
             base_name = os.path.basename(file_path)
             display_name = base_name if len(base_name) <= 25 else base_name[:22] + "..."
-            btn = QPushButton(f"📷 {display_name}")
+            btn = QPushButton(display_name)
+            btn.setIcon(self.get_icon("image-solid-full.svg", color="#bfbfbf", size=13))
+            btn.setIconSize(QSize(13, 13))
             btn.setFlat(True)
             btn.setToolTip(base_name)
             btn_style = (
                 "QPushButton {"
-                "    text-align: left;"
-                "    padding: 4px 8px;"
-                "    border: 1px solid #555555;"
-                "    border-radius: 3px;"
-                "    margin: 1px;"
-                "    font-size: 9px;"
+                    "    text-align: left;"
+                    "    padding: 4px 8px;"
+                    "    border: 1px solid #454545;"
+                    "    border-radius: 3px;"
+                    "    margin: 1px;"
+                    "    font-size: 9px;"
+                    "    color: #d4d4d4;"
                 "}"
                 "QPushButton:hover {"
-                "    background-color: #4a4a4a;"
+                    "    background-color: #2f2f2f;"
+                    "    border-color: #007acc;"
                 "}"
             )
             btn.setStyleSheet(btn_style)
@@ -1105,6 +1671,10 @@ Click to configure all advanced options."""
 
     def start_batch_analysis_thread(self):
         if not self.validate_paths():
+            return
+
+        if (self.advanced_settings or {}).get("ocr_engine", "EasyOCR") == "EasyOCR" and not self.ocr_ready:
+            QMessageBox.information(self, "OCR Loading", "EasyOCR is still loading. Please wait.")
             return
 
         if self.is_processing or (self.batch_thread and self.batch_thread.isRunning()):
@@ -1124,7 +1694,8 @@ Click to configure all advanced options."""
             self.models_dir_edit.text(),
             None,  # easyocr_reader is no longer needed as it's handled internally
             self.conf_slider.value() / 10.0,
-            self.advanced_settings
+            self.advanced_settings,
+            context=self.context,
         )
         
         self.batch_thread.status_updated.connect(self.update_status)
@@ -1159,13 +1730,14 @@ Click to configure all advanced options."""
         # Stop all timers
         if hasattr(self, 'highlight_timer'):
             self.highlight_timer.stop()
+        if hasattr(self, 'hover_clear_timer'):
+            self.hover_clear_timer.stop()
         if hasattr(self, 'update_timer'):
             self.update_timer.stop()
         
         # Clear image label FIRST to release pixmap reference
         if hasattr(self, 'image_label'):
-            self.image_label.clear()
-            self.image_label.setPixmap(QPixmap())  # Empty pixmap
+            self._set_image_placeholder("Loading image...")
         
         # Force Qt event processing
         from PyQt6.QtWidgets import QApplication
@@ -1186,13 +1758,13 @@ Click to configure all advanced options."""
             for img in list(self.highlight_cache.values()):
                 if img and img != self.base_image_with_detections:
                     try:
-                        img.close()
+                        self._close_pil_image_safely(img)
                     except:
                         pass
             self.highlight_cache.clear()
 
         # Clear pixmap cache and force Qt cleanup
-        if hasattr(self, '_pixmap_cache'):
+        if hasattr(self, 'pixmap_cache'):
             try:
                 # NEW: SmartPixmapCache handles cleanup automatically
                 self.pixmap_cache.clear()
@@ -1207,13 +1779,16 @@ Click to configure all advanced options."""
         if hasattr(self, 'image_label') and self.image_label:
             self.image_label.clear()
             self.image_label.setPixmap(QPixmap())  # Set empty pixmap
+            self.image_label.setMinimumSize(200, 200)
+            self.image_label.setMaximumSize(16777215, 16777215)
+            self.image_label.resize(200, 200)
         
         if self.original_pil_image:
-            self.original_pil_image.close()
+            self._close_pil_image_safely(self.original_pil_image)
             self.original_pil_image = None
             
         if self.base_image_with_detections:
-            self.base_image_with_detections.close()
+            self._close_pil_image_safely(self.base_image_with_detections)
             self.base_image_with_detections = None
             
         # Force Qt event processing
@@ -1262,22 +1837,12 @@ Click to configure all advanced options."""
 
     def _clear_display(self):
         self.cleanup_image_resources()
-        
-        self.image_label.setText("🖼️ Image will be displayed here")
-        clear_display_style = (
-            "QLabel {"
-            "    font-size: 12px;"
-            "    color: #888888;"
-            "    background-color: #3a3a3a;"
-            "    border: 2px dashed #555555;"
-            "    border-radius: 6px;"
-            "    padding: 15px;"
-            "}"
-        )
-        self.image_label.setStyleSheet(clear_display_style)
+        self._set_image_placeholder("Image will be displayed here")
         self.hover_widgets.clear()
         self.highlighted_bbox = None
         self.zoom_level = 1.0
+        self.display_frame.horizontalScrollBar().setValue(0)
+        self.display_frame.verticalScrollBar().setValue(0)
 
         if hasattr(self, 'results_tab_widget'):
             self.results_tab_widget.setVisible(False)
@@ -1292,12 +1857,20 @@ Click to configure all advanced options."""
             self.update_status("❌ Cannot load image. Check paths")
             return
 
+        if (self.advanced_settings or {}).get("ocr_engine", "EasyOCR") == "EasyOCR" and not self.ocr_ready:
+            self.update_status("⏳ Waiting for EasyOCR to finish loading...")
+            QMessageBox.information(self, "OCR Loading", "EasyOCR is still loading. Please wait.")
+            return
+
         self.current_image_path = self.image_files[self.current_image_index]
         
         try:
-            self.original_pil_image = Image.open(self.current_image_path)
-            if self.original_pil_image.mode != 'RGB':
-                self.original_pil_image = self.original_pil_image.convert('RGB')
+            with Image.open(self.current_image_path) as source_image:
+                if source_image.mode != 'RGB':
+                    self.original_pil_image = source_image.convert('RGB')
+                else:
+                    self.original_pil_image = source_image.copy()
+            self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
         except Exception as e:
             self.update_status(f"❌ Error loading image: {str(e)}")
             QMessageBox.critical(self, "Image Error", f"Failed to load image:\n{str(e)}")
@@ -1323,6 +1896,7 @@ Click to configure all advanced options."""
                 self.conf_slider.value() / 10.0, 
                 self.output_path_edit.text(),
                 self.advanced_settings,
+                self.models_dir_edit.text(),
                 self.context,
                 parent=self
             )
@@ -1344,13 +1918,16 @@ Click to configure all advanced options."""
             self.nav_frame.deleteLater()
             self.nav_frame = None
 
-        if result is None:
+        if result is None or self._is_error_result(result):
+            error_message = result.get("error") if isinstance(result, dict) else "Analysis failed."
             self.current_analysis_result = None
-            self.update_status("❌ Analysis failed. Check log for details.")
+            user_message = self._format_analysis_error_message(str(error_message))
+            self.update_status(f"❌ {str(error_message)}")
             self._clear_display()
             self.results_tab_widget.setVisible(False)
+            QMessageBox.critical(self, "Analysis Error", user_message)
         else:
-            self.current_analysis_result = result
+            self.current_analysis_result = self._normalize_result_for_gui(result)
             self.update_status("✅ Processing complete")
             self._update_ui_with_results()
             self.update_displayed_image()
@@ -1362,9 +1939,11 @@ Click to configure all advanced options."""
     def _clear_all_results(self):
         for section_key, section_info in self.ocr_section_widgets.items():
             section_info['group'].setVisible(False)
-            for widget_info in section_info['widgets']:
-                if 'widget' in widget_info:
-                    widget_info['widget'].deleteLater()
+            section_layout = section_info.get('layout')
+            while section_layout and section_layout.count():
+                child = section_layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
             section_info['widgets'].clear()
         
         while self.bars_layout.count():
@@ -1379,22 +1958,25 @@ Click to configure all advanced options."""
         self.visibility_checks.clear()
 
     def _update_ui_with_results(self):
-        logging.info(f"_update_ui_with_results called")
-        logging.info(f"Result keys: {list(self.current_analysis_result.keys()) if self.current_analysis_result else 'None'}")
+        logging.debug("_update_ui_with_results called")
+        logging.debug(
+            "Result keys: %s",
+            list(self.current_analysis_result.keys()) if self.current_analysis_result else 'None'
+        )
         
         self._clear_all_results()
 
         self._populate_ocr_tab()
-        logging.info(f"OCR widgets created: {len(self.analysis_results_widgets)}")
+        logging.debug("OCR widgets created: %s", len(self.analysis_results_widgets))
         
         self._populate_bars_tab()
         bars_count = len(self.current_analysis_result.get('bars', [])) if self.current_analysis_result else 0
-        logging.info(f"Bars tab populated with {bars_count} bars")
+        logging.debug("Bars tab populated with %s bars", bars_count)
         
         self._populate_view_tab()
 
         self.results_tab_widget.setVisible(True)
-        logging.info("Results tab widget made visible")
+        logging.debug("Results tab widget made visible")
 
     def _populate_ocr_tab(self):
         self.ocr_content_widget.setUpdatesEnabled(False)
@@ -1403,107 +1985,204 @@ Click to configure all advanced options."""
                 return
             
             detections = self.current_analysis_result.get('detections', {})
+            metadata = self.current_analysis_result.get('metadata', {})
             
             assigned_bar_labels = self.current_analysis_result.get('_assigned_bar_labels', {})
             bar_label_texts = set(assigned_bar_labels.get('texts', []))
             bar_label_bboxes = set(tuple(bbox) for bbox in assigned_bar_labels.get('bboxes', []))
-            
-            section_mapping = {
-                'chart_title': 'chart_title',
-                'axis_title': 'axis_title',
-                'scale_label': 'scale_label',
-                'tick_label': 'tick_label',
-                'legend': 'legend',
-                'data_label': 'data_label',
-                'other': 'other'
-            }
-            
-            for detection_key, section_key in section_mapping.items():
-                items = detections.get(detection_key, [])
 
-                filtered_items = []
+            section_records: Dict[str, List[Tuple[Dict[str, Any], str]]] = {
+                "chart_title": [],
+                "axis_title": [],
+                "scale_label": [],
+                "tick_label": [],
+                "legend": [],
+                "data_label": [],
+                "other": [],
+            }
+
+            def _extend_section(section_key: str, source_class: str, items: Any):
+                if isinstance(items, dict):
+                    items = [items]
+                if not isinstance(items, list):
+                    return
                 for item in items:
-                    item_text = item.get('text', '')
-                    item_bbox = tuple(item.get('xyxy', []))
-                    
-                    if item_text in bar_label_texts or item_bbox in bar_label_bboxes:
+                    if isinstance(item, dict):
+                        section_records[section_key].append((item, source_class))
+
+            # Direct detector classes.
+            direct_mapping = {
+                "chart_title": "chart_title",
+                "axis_title": "axis_title",
+                "legend": "legend",
+                "data_label": "data_label",
+                "other": "other",
+            }
+            for detection_key, section_key in direct_mapping.items():
+                _extend_section(section_key, detection_key, detections.get(detection_key, []))
+
+            # Prefer classifier outputs for scale/tick labels when available.
+            label_classification = metadata.get("label_classification", {})
+            if isinstance(label_classification, dict):
+                _extend_section(
+                    "scale_label",
+                    "axis_labels",
+                    label_classification.get("scale_labels", label_classification.get("scale_label", [])),
+                )
+                _extend_section(
+                    "tick_label",
+                    "axis_labels",
+                    label_classification.get("tick_labels", label_classification.get("tick_label", [])),
+                )
+                _extend_section(
+                    "axis_title",
+                    "axis_title",
+                    label_classification.get("axis_titles", label_classification.get("axis_title", [])),
+                )
+
+            has_classified_scale_tick = bool(section_records["scale_label"] or section_records["tick_label"])
+
+            # Fallback: split raw axis_labels into numeric (scale) and non-numeric (tick)
+            # only when classifier outputs are unavailable.
+            raw_axis_labels = detections.get("axis_labels", [])
+            if isinstance(raw_axis_labels, list) and not has_classified_scale_tick:
+                for item in raw_axis_labels:
+                    if not isinstance(item, dict):
                         continue
-                    
-                    filtered_items.append(item)
-                
-                if not filtered_items:
-                    continue
-                
+                    text = str(item.get("text", "")).strip()
+                    cleaned_value = item.get("cleaned_value")
+
+                    if not text and cleaned_value is None:
+                        continue
+
+                    looks_numeric = cleaned_value is not None
+                    if not looks_numeric and text:
+                        candidate = (
+                            text.replace(",", ".")
+                            .replace("%", "")
+                            .replace("$", "")
+                            .replace("€", "")
+                            .strip()
+                        )
+                        try:
+                            float(candidate)
+                            looks_numeric = True
+                        except ValueError:
+                            looks_numeric = False
+
+                    target_section = "scale_label" if looks_numeric else "tick_label"
+                    _extend_section(target_section, "axis_labels", [item])
+
+            # Fallback: use extracted bar tick labels only if no tick-label section exists.
+            if not section_records["tick_label"]:
+                for bar in self.current_analysis_result.get("bars", []):
+                    if isinstance(bar, dict):
+                        tick_label = bar.get("tick_label")
+                        if isinstance(tick_label, dict):
+                            _extend_section("tick_label", "tick_label", [tick_label])
+
+            widgets_created = 0
+            for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "other"):
                 section_info = self.ocr_section_widgets.get(section_key)
                 if not section_info:
                     continue
-                
-                section_group = section_info['group']
-                section_layout = section_info['layout']
-                
-                for idx, item in enumerate(filtered_items):
-                    text = item.get('text', '')
-                    bbox = item.get('xyxy', [])
-                    cleaned_value = item.get('cleaned_value')
-                    
+
+                section_group = section_info["group"]
+                section_layout = section_info["layout"]
+                seen_items = set()
+                filtered_records = []
+
+                for item, source_class in section_records[section_key]:
+                    text = str(item.get("text", "")).strip()
+                    bbox_tuple = tuple(item.get("xyxy", []))
+                    cleaned_value = item.get("cleaned_value")
+
+                    if text in bar_label_texts or bbox_tuple in bar_label_bboxes:
+                        continue
+                    if not text and cleaned_value is None:
+                        continue
+
+                    dedupe_key = (text, bbox_tuple)
+                    if dedupe_key in seen_items:
+                        continue
+                    seen_items.add(dedupe_key)
+
+                    filtered_records.append((item, source_class, text, bbox_tuple, cleaned_value))
+
+                if not filtered_records:
+                    continue
+
+                section_group.setVisible(True)
+                for idx, (item, source_class, text, bbox_tuple, cleaned_value) in enumerate(filtered_records):
                     item_frame = QFrame()
                     item_layout = QHBoxLayout(item_frame)
                     item_layout.setContentsMargins(2, 2, 2, 2)
                     item_layout.setSpacing(6)
-                    
-                    entry = QLineEdit(text)
-                    entry.setMinimumWidth(250)
+
+                    entry_text = text if text else str(cleaned_value)
+                    entry = QLineEdit(entry_text)
+                    entry.setMinimumWidth(140)
+                    entry.setMaximumHeight(30)
+                    entry.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                     entry_style = (
                         "QLineEdit { "
                         "    font-size: 10px; "
-                        "    padding: 4px 6px; "
+                        "    padding: 2px 6px; "
                         "    margin: 1px; "
                         "    background-color: #454545;"
                         "}"
                     )
                     entry.setStyleSheet(entry_style)
-                    
-                    if bbox:
-                        entry.enterEvent = lambda e, b=bbox, c=detection_key: self.on_widget_hover_enter(b, c, e)
+
+                    if bbox_tuple:
+                        bbox = list(bbox_tuple)
+                        entry.enterEvent = lambda e, b=bbox, c=source_class: self.on_widget_hover_enter(b, c, e)
                         entry.leaveEvent = lambda e: self.on_widget_hover_leave(e)
-                    
+
                     item_layout.addWidget(entry)
-                    
-                    if cleaned_value is not None:
-                        cleaned_label = QLabel(f"→ {cleaned_value:.2f}")
+
+                    if cleaned_value is not None and text:
+                        try:
+                            cleaned_repr = f"{float(cleaned_value):.2f}"
+                        except (TypeError, ValueError):
+                            cleaned_repr = str(cleaned_value)
+                        cleaned_label = QLabel(f"→ {cleaned_repr}")
                         cleaned_label.setStyleSheet("QLabel { color: #4CAF50; font-weight: bold; font-size: 9px; }")
                         item_layout.addWidget(cleaned_label)
-                    
+
                     item_layout.addStretch()
-                    
-                    section_layout.insertWidget(section_layout.count() - 1, item_frame)
-                    
-                    widget_id = f"{section_key}_{idx}"
-                    section_info['widgets'].append({
-                        'widget': item_frame,
-                        'entry': entry,
-                        'item': item,
-                        'id': widget_id
-                    })
-                    
+                    section_layout.addWidget(item_frame)
+
+                    widget_id = f"{section_key}_{idx}_{widgets_created}"
+                    widgets_created += 1
+                    section_info["widgets"].append(
+                        {
+                            "widget": item_frame,
+                            "entry": entry,
+                            "item": item,
+                            "id": widget_id,
+                        }
+                    )
+
                     self.analysis_results_widgets[widget_id] = {
-                        'entry': entry,
-                        'original_item': item,
-                        'section': section_key
+                        "entry": entry,
+                        "original_item": item,
+                        "section": section_key,
                     }
-                
-                section_group.setVisible(True)
+
+            if widgets_created == 0:
+                self.update_status("ℹ️ No OCR text was extracted for this image.")
         finally:
             self.ocr_content_widget.setUpdatesEnabled(True)
             self.ocr_content_widget.update()
 
     def _populate_bars_tab(self):
         if not self.current_analysis_result:
-            logging.warning("_populate_bars_tab: no analysis result")
+            logging.debug("_populate_bars_tab: no analysis result")
             return
         
         scale_info = self.current_analysis_result.get('scale_info', {})
-        logging.info(f"Scale info: {scale_info}")
+        logging.debug("Scale info: %s", scale_info)
         r_squared = scale_info.get('r_squared')
         
         if r_squared is not None:
@@ -1522,7 +2201,7 @@ Click to configure all advanced options."""
         bars = self.current_analysis_result.get('bars', [])
         
         if not bars:
-            no_bars_label = QLabel("ℹ️ No bars detected")
+            no_bars_label = QLabel("No bars detected")
             no_bars_label.setStyleSheet("QLabel { color: #888888; font-style: italic; }")
             self.bars_layout.addWidget(no_bars_label)
             return
@@ -1535,129 +2214,139 @@ Click to configure all advanced options."""
 
     def _create_bar_widget(self, idx, bar):
         bar_frame = QFrame()
-        bar_frame_style = (
-            "QFrame { "
-            "    border: 2px solid #555555; "
-            "    border-radius: 6px; "
-            "    padding: 8px; "
-            "    margin: 3px; "
-            "    background-color: #404040; "
-            "} "
-            "QFrame:hover { "
-            "    border-color: #4a90e2; "
-            "    background-color: #454545; "
+        default_style = (
+            "QFrame {"
+            "    border: 1px solid #3f3f3f;"
+            "    border-radius: 4px;"
+            "    margin: 1px;"
+            "    background-color: #2a2a2a;"
             "}"
         )
-        bar_frame.setStyleSheet(bar_frame_style)
-        
+        expanded_style = (
+            "QFrame {"
+            "    border: 1px solid #007acc;"
+            "    border-radius: 4px;"
+            "    margin: 1px;"
+            "    background-color: #2d2d2d;"
+            "}"
+        )
+        bar_frame.setStyleSheet(default_style)
+
         bar_layout = QVBoxLayout(bar_frame)
-        bar_layout.setSpacing(6)
-        bar_layout.setContentsMargins(8, 8, 8, 8)
-        
-        header_layout = QHBoxLayout()
-        
-        bar_num_label = QLabel(f"📊 Bar #{idx + 1}")
-        bar_num_label.setStyleSheet("QLabel { font-weight: bold; color: #4a90e2; font-size: 12px; }")
-        header_layout.addWidget(bar_num_label)
-        
-        header_layout.addStretch()
-        
-        value = bar.get('estimated_value')
-        if value is not None:
-            value_label = QLabel(f"Value: {value:.2f}")
-            value_label.setStyleSheet("QLabel { font-weight: bold; color: #4CAF50; font-size: 11px; }")
-            header_layout.addWidget(value_label)
-        
-        bar_layout.addLayout(header_layout)
-        
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setStyleSheet("QFrame { background-color: #555555; max-height: 1px; }")
-        bar_layout.addWidget(separator)
-        
-        label_section = QFrame()
-        label_section_style = (
-            "QFrame { "
-            "    background-color: #353535; "
-            "    border: 1px solid #666666; "
-            "    border-radius: 4px; "
-            "    padding: 6px; "
+        bar_layout.setSpacing(2)
+        bar_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Row 1: [Bar # Badge] [Extracted Text]
+        row1_layout = QHBoxLayout()
+        row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(4)
+
+        bar_badge = QLabel(f"#{idx + 1}")
+        bar_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bar_badge.setFixedSize(40, 22)
+        bar_badge.setStyleSheet(
+            "QLabel {"
+            "    background-color: #007acc;"
+            "    color: #ffffff;"
+            "    border: 1px solid #007acc;"
+            "    border-radius: 3px;"
+            "    font-size: 9px;"
+            "    font-weight: 700;"
             "}"
         )
-        label_section.setStyleSheet(label_section_style)
-        label_section_layout = QVBoxLayout(label_section)
-        label_section_layout.setSpacing(4)
-        label_section_layout.setContentsMargins(6, 6, 6, 6)
-        
-        label_header = QLabel("🏷️ Bar Label:")
-        label_header.setStyleSheet("QLabel { font-weight: bold; color: #FFB74D; font-size: 10px; }")
-        label_section_layout.addWidget(label_header)
-        
-        label_entry = QLineEdit(bar.get('bar_label', ''))
-        label_entry.setMinimumWidth(250)
-        label_entry.setPlaceholderText("Enter bar label...")
-        label_entry_style = (
-            "QLineEdit { "
-            "    font-size: 11px; "
-            "    font-weight: bold; "
-            "    padding: 6px 8px; "
-            "    background-color: #454545; "
-            "    border: 1px solid #777777; "
-            "    border-radius: 3px; "
-            "    color: #FFFFFF; "
+        row1_layout.addWidget(bar_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        label_entry = QLineEdit(bar.get("bar_label", ""))
+        label_entry.setPlaceholderText("Extracted label")
+        label_entry.setMinimumHeight(22)
+        label_entry.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        label_entry.setStyleSheet(
+            "QLineEdit {"
+            "    font-size: 10px;"
+            "    padding: 2px 6px;"
+            "    border: 1px solid #3f3f3f;"
+            "    border-radius: 3px;"
+            "    background-color: #3c3c3c;"
+            "    color: #ffffff;"
             "}"
-            "QLineEdit:focus { "
-            "    border: 2px solid #4a90e2; "
-            "    background-color: #4a4a4a; "
+            "QLineEdit:focus {"
+            "    border: 1px solid #007acc;"
             "}"
         )
-        label_entry.setStyleSheet(label_entry_style)
-        label_section_layout.addWidget(label_entry)
-        
-        bar_layout.addWidget(label_section)
-        
-        info_layout = QHBoxLayout()
-        
-        pixel_height = bar.get('pixel_height')
-        if pixel_height is not None:
-            height_label = QLabel(f"Height: {pixel_height:.1f}px")
-            height_label.setStyleSheet("QLabel { color: #AAAAAA; font-size: 9px; }")
-            info_layout.addWidget(height_label)
-        
-        confidence = bar.get('confidence')
-        if confidence is not None:
-            conf_label = QLabel(f"Confidence: {confidence:.2f}")
-            conf_label.setStyleSheet("QLabel { color: #AAAAAA; font-size: 9px; }")
-            info_layout.addWidget(conf_label)
-        
-        info_layout.addStretch()
-        bar_layout.addLayout(info_layout)
-        
+        row1_layout.addWidget(label_entry, 1)
+        bar_layout.addLayout(row1_layout)
+
+        # Row 2: value/height/confidence details (expanded only on badge hover).
+        details_widget = QWidget()
+        details_layout = QHBoxLayout(details_widget)
+        details_layout.setContentsMargins(44, 0, 0, 0)
+        details_layout.setSpacing(10)
+
+        value = bar.get("estimated_value")
+        value_text = f"Value: {value:.2f}" if isinstance(value, (int, float)) else "Value: -"
+        value_label = QLabel(value_text)
+        value_label.setStyleSheet("QLabel { color: #d4d4d4; font-size: 9px; }")
+        details_layout.addWidget(value_label)
+
+        pixel_height = bar.get("pixel_height")
+        high_text = f"High: {pixel_height:.1f}px" if isinstance(pixel_height, (int, float)) else "High: -"
+        high_label = QLabel(high_text)
+        high_label.setStyleSheet("QLabel { color: #a8a8a8; font-size: 9px; }")
+        details_layout.addWidget(high_label)
+
+        confidence = bar.get("confidence")
+        conf_text = f"Confidence: {confidence:.2f}" if isinstance(confidence, (int, float)) else "Confidence: -"
+        conf_label = QLabel(conf_text)
+        conf_label.setStyleSheet("QLabel { color: #a8a8a8; font-size: 9px; }")
+        details_layout.addWidget(conf_label)
+        details_layout.addStretch()
+        details_widget.setVisible(False)
+        bar_layout.addWidget(details_widget)
+
         widget_id = f"bar_{idx}"
         self.analysis_results_widgets[widget_id] = {
-            'entry': label_entry,
-            'original_item': bar,
-            'section': 'bars',
-            'type': 'bar_label'
+            "entry": label_entry,
+            "original_item": bar,
+            "section": "bars",
+            "type": "bar_label",
         }
-        
-        bbox = bar.get('xyxy')
-        label_bbox = bar.get('bar_label_bbox')
-        
-        if bbox:
-            bar_frame.enterEvent = lambda e, b=bbox: self.on_widget_hover_enter(b, "bar", e)
-            bar_frame.leaveEvent = lambda e: self.on_widget_hover_leave(e)
-            
-            if label_bbox:
-                label_entry.enterEvent = lambda e, b=label_bbox: self.on_widget_hover_enter(b, "tick_label", e)
-                label_entry.leaveEvent = lambda e: self.on_widget_hover_leave(e)
-        
+
+        bbox = bar.get("xyxy")
+
+        def _expand_details(_event=None):
+            details_widget.setVisible(True)
+            bar_frame.setStyleSheet(expanded_style)
+            if bbox:
+                self.on_widget_hover_enter(bbox, "bar")
+
+        def _collapse_details(_event=None):
+            details_widget.setVisible(False)
+            bar_frame.setStyleSheet(default_style)
+            if bbox:
+                self.on_widget_hover_leave()
+
+        # Expansion and highlight are intentionally bound only to the small badge.
+        bar_badge.enterEvent = _expand_details
+        bar_badge.leaveEvent = _collapse_details
+
         return bar_frame
 
     def _populate_view_tab(self):
         """Populate visibility options including baseline."""
         if not self.current_analysis_result:
             return
+
+        # Remove previously rendered labels/checklist rows from the grid.
+        while self.view_content_layout.count():
+            child = self.view_content_layout.takeAt(0)
+            widget = child.widget()
+            if widget is None:
+                continue
+            if isinstance(widget, QCheckBox):
+                widget.setVisible(False)
+                widget.setParent(None)
+            else:
+                widget.deleteLater()
         
         detections = self.current_analysis_result.get('detections', {})
         
@@ -1665,7 +2354,7 @@ Click to configure all advanced options."""
         col = 0
         
         # ===== SECTION 1: General Elements =====
-        general_label = QLabel("🔍 General Elements")
+        general_label = QLabel("General Elements")
         general_label.setFont(QFont("system-ui", 11, QFont.Weight.Bold))
         general_label.setStyleSheet("QLabel { color: #4a90e2; margin-top: 8px; margin-bottom: 4px; }")
         self.view_content_layout.addWidget(general_label, row, 0, 1, 2)
@@ -1687,7 +2376,7 @@ Click to configure all advanced options."""
             col = 0
         
         # ===== SECTION 2: Chart-Specific Elements =====
-        chart_label = QLabel("📊 Chart Elements")
+        chart_label = QLabel("Chart Elements")
         chart_label.setFont(QFont("system-ui", 11, QFont.Weight.Bold))
         chart_label.setStyleSheet("QLabel { color: #4a90e2; margin-top: 12px; margin-bottom: 4px; }")
         self.view_content_layout.addWidget(chart_label, row, 0, 1, 2)
@@ -1709,14 +2398,18 @@ Click to configure all advanced options."""
             col = 0
         
         # ===== SECTION 3: Special Overlays =====
-        special_label = QLabel("🎯 Overlays")
+        special_label = QLabel("Overlays")
         special_label.setFont(QFont("system-ui", 11, QFont.Weight.Bold))
         special_label.setStyleSheet("QLabel { color: #FFB74D; margin-top: 12px; margin-bottom: 4px; }")
         self.view_content_layout.addWidget(special_label, row, 0, 1, 2)
         row += 1
         
         # CRITICAL: Add baseline checkbox
-        baseline_visible = self.current_analysis_result.get('scale_info', {}).get('baseline_y_coord') is not None
+        scale_info = self.current_analysis_result.get('scale_info', {})
+        baseline_visible = (
+            scale_info.get('baseline_y_coord') is not None
+            or self.current_analysis_result.get('baseline_coord') is not None
+        )
         
         if baseline_visible:
             # Create or reuse baseline checkbox
@@ -1787,7 +2480,7 @@ Click to configure all advanced options."""
         # Clear base image
         if hasattr(self, 'base_image_with_detections') and self.base_image_with_detections:
             try:
-                self.base_image_with_detections.close()
+                self._close_pil_image_safely(self.base_image_with_detections)
             except:
                 pass
             self.base_image_with_detections = None
@@ -1797,7 +2490,7 @@ Click to configure all advanced options."""
             for img in list(self.highlight_cache.values()):
                 if img is not None:
                     try:
-                        img.close()
+                        self._close_pil_image_safely(img)
                     except:
                         pass
             self.highlight_cache.clear()
@@ -1821,71 +2514,83 @@ Click to configure all advanced options."""
 
     def _setup_navigation_controls(self):
         self.nav_frame = QFrame()
+        self.nav_frame.setObjectName("navigationBar")
         nav_frame_style = (
-            "QFrame {"
-            "    border: 1px solid #555555;"
-            "    border-radius: 4px;"
-            "    background-color: #353535;"
-            "    padding: 4px;"
+            "QFrame#navigationBar {"
+            "    border-top: 1px solid #454545;"
+            "    background-color: #252526;"
+            "    padding: 0px;"
             "}"
         )
         self.nav_frame.setStyleSheet(nav_frame_style)
-        self.nav_frame.setMaximumHeight(40)
+        self.nav_frame.setMaximumHeight(38)
         
         nav_layout = QHBoxLayout(self.nav_frame)
-        nav_layout.setSpacing(6)
-        nav_layout.setContentsMargins(6, 4, 6, 4)
+        nav_layout.setSpacing(8)
+        nav_layout.setContentsMargins(8, 4, 8, 4)
 
-        prev_btn = QPushButton("⬅️ Prev")
+        prev_btn = self._create_icon_button(
+            "circle-chevron-left-solid-full.svg",
+            "Previous image",
+            icon_color="#c5c5c5",
+            button_size=26,
+            icon_size=14,
+        )
         prev_btn.clicked.connect(self.prev_image)
         prev_btn.setEnabled(self.current_image_index > 0)
-        prev_btn.setFixedHeight(28)
-        prev_btn.setStyleSheet("QPushButton { font-size: 9px; padding: 4px 8px; }")
         nav_layout.addWidget(prev_btn)
 
         counter_label = QLabel(f"{self.current_image_index + 1}/{len(self.image_files)}")
         counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        counter_label.setStyleSheet("QLabel { font-weight: bold; font-size: 10px; min-width: 60px; }")
-        nav_layout.addWidget(counter_label)
-
-        save_btn = QPushButton("💾 Save")
-        save_btn.clicked.connect(self._save_analysis_results)
-        save_btn.setFixedHeight(28)
-        save_btn_style = (
-            "QPushButton {"
-            "    background-color: #4CAF50;"
-            "    font-size: 9px;"
-            "    padding: 4px 8px;"
-            "}"
-            "QPushButton:hover {"
-            "    background-color: #66BB6A;"
-            "}"
+        counter_label.setStyleSheet(
+            "QLabel { color: #d4d4d4; font-weight: 600; font-size: 10px; min-width: 56px; }"
         )
-        save_btn.setStyleSheet(save_btn_style)
+        nav_layout.addWidget(counter_label)
+        nav_layout.addSpacing(4)
+
+        save_btn = self._create_icon_button(
+            "floppy-disk-solid-full.svg",
+            "Save current analysis",
+            icon_color="#ffffff",
+            button_size=26,
+            icon_size=14,
+            accent=True,
+        )
+        save_btn.clicked.connect(self._save_analysis_results)
         nav_layout.addWidget(save_btn)
 
-        save_next_btn = QPushButton("💾➡️ Save & Next")
+        save_next_btn = QPushButton("Save Next")
+        save_next_btn.setIcon(self.get_icon("floppy-disk-solid-full.svg", color="#ffffff", size=14))
+        save_next_btn.setIconSize(QSize(14, 14))
         save_next_btn.clicked.connect(self.save_and_next)
-        save_next_btn.setFixedHeight(28)
         save_next_btn_style = (
             "QPushButton {"
-            "    background-color: #2196F3;"
-            "    font-weight: bold;"
-            "    font-size: 9px;"
-            "    padding: 4px 8px;"
+            "    background-color: #007acc;"
+            "    border: 1px solid #007acc;"
+            "    color: #ffffff;"
+            "    font-size: 10px;"
+            "    font-weight: 600;"
+            "    min-height: 24px;"
+            "    padding: 3px 10px;"
             "}"
             "QPushButton:hover {"
-            "    background-color: #42A5F5;"
+            "    background-color: #1685d1;"
+            "    border-color: #1685d1;"
             "}"
         )
         save_next_btn.setStyleSheet(save_next_btn_style)
         nav_layout.addWidget(save_next_btn)
+        nav_layout.addStretch()
 
-        next_btn = QPushButton("Next ➡️")
+        next_btn = self._create_icon_button(
+            "circle-chevron-right-solid-full.svg",
+            "Next image",
+            icon_color="#c5c5c5",
+            button_size=26,
+            icon_size=14,
+        )
         next_btn.clicked.connect(self.next_image)
         next_btn.setEnabled(self.current_image_index < len(self.image_files) - 1)
-        next_btn.setFixedHeight(28)
-        next_btn.setStyleSheet("QPushButton { font-size: 9px; padding: 4px 8px; }")
         nav_layout.addWidget(next_btn)
 
         self.bottom_container_layout.addWidget(self.nav_frame)
@@ -2026,7 +2731,7 @@ Click to configure all advanced options."""
         if not force_refresh:
             cached_pixmap = self._get_cached_pixmap(cache_key)
             if cached_pixmap:
-                self.image_label.setPixmap(cached_pixmap)
+                self._set_image_pixmap(cached_pixmap)
                 return
         
         img_to_show = None
@@ -2067,16 +2772,10 @@ Click to configure all advanced options."""
             
             # Ensure this is run on the main thread
             if threading.current_thread() is threading.main_thread():
-                self.image_label.setPixmap(pixmap)
+                self._set_image_pixmap(pixmap)
             else:
                 # Schedule to run on main thread
-                from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-                QMetaObject.invokeMethod(
-                    self.image_label,
-                    "setPixmap",
-                    Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(QPixmap, pixmap)
-                )
+                QTimer.singleShot(0, lambda pm=pixmap: self._set_image_pixmap(pm))
 
             self._cache_pixmap(cache_key, pixmap)
             
@@ -2086,7 +2785,6 @@ Click to configure all advanced options."""
         
         finally:
             if img_to_show is not None:
-                img_to_show.close()
                 del img_to_show
             gc.collect()
 
@@ -2118,7 +2816,7 @@ Click to configure all advanced options."""
         """Clear all cached pixmaps (NEW: uses SmartPixmapCache)."""
         # NEW: SmartPixmapCache handles gc.collect() automatically
         self.pixmap_cache.clear()
-        logging.info("Cleared pixmap cache")
+        logging.debug("Cleared pixmap cache")
         from PyQt6.QtCore import QCoreApplication
         QCoreApplication.processEvents()
         
@@ -2128,38 +2826,55 @@ Click to configure all advanced options."""
         """Apply pending highlight with thread safety."""
         with self._highlight_lock:
             if self._pending_highlight_bbox is not None:
-                self.highlighted_bbox = self._pending_highlight_bbox
+                pending_bbox = self._pending_highlight_bbox
                 highlight_class = self._pending_highlight_class
             else:
-                self.highlighted_bbox = None
+                pending_bbox = None
                 highlight_class = None
+
+            if pending_bbox is None:
+                return
+
+            if self.highlighted_bbox == pending_bbox:
+                return
+
+            self.highlighted_bbox = pending_bbox
         
         # Update display OUTSIDE lock to avoid deadlock
         self.update_displayed_image(self.highlighted_bbox, highlight_class)
 
+    def _clear_hover_highlight(self):
+        """Clear hover highlight with debounce to prevent flicker while moving between fields."""
+        with self._highlight_lock:
+            if self._pending_highlight_bbox is not None:
+                return
+            if self.highlighted_bbox is None:
+                return
+            self.highlighted_bbox = None
+        self.update_displayed_image(None, None)
+
     def on_widget_hover_enter(self, bbox, class_name, event=None):
         """Handle mouse enter with thread-safe state management."""
         with self._highlight_lock:
-            # Stop any pending highlight
+            # Stop any pending highlight/clear cycle
             self.highlight_timer.stop()
+            self.hover_clear_timer.stop()
             
             # Set new pending highlight
             self._pending_highlight_bbox = bbox
             self._pending_highlight_class = class_name
             
             # Start timer
-            self.highlight_timer.start(50)  # 50ms debounce
+            self.highlight_timer.start(35)  # Short debounce keeps UI stable while moving quickly between entries
     
     def on_widget_hover_leave(self, event=None):
-        """Handle mouse leave with proper cleanup."""
+        """Handle mouse leave with delayed cleanup to avoid visual blinking."""
         with self._highlight_lock:
             self.highlight_timer.stop()
             self._pending_highlight_bbox = None
             self._pending_highlight_class = None
-            
-            # Immediately clear highlight (no delay)
-            self.highlighted_bbox = None
-            self.update_displayed_image(None, None)
+            self.hover_clear_timer.stop()
+            self.hover_clear_timer.start(110)
 
     def get_class_for_bbox(self, bbox):
         if not self.current_analysis_result or not bbox or 'detections' not in self.current_analysis_result:
@@ -2171,7 +2886,10 @@ Click to configure all advanced options."""
         return None
 
     def reset_zoom(self):
-        self.zoom_level = 1.0
+        if self.original_pil_image is not None:
+            self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
+        else:
+            self.zoom_level = 1.0
         self.update_displayed_image(self.highlighted_bbox, self.get_class_for_bbox(self.highlighted_bbox))
 
     def zoom_in(self):
@@ -2231,17 +2949,17 @@ Click to configure all advanced options."""
             super().keyPressEvent(event)
 
     def _update_results_from_gui(self):
-        logging.info("Updating results from GUI...")
+        logging.debug("Updating results from GUI...")
         
         for widget_id, widget_info in self.analysis_results_widgets.items():
             new_text = widget_info['entry'].text()
             original_item = widget_info['original_item']
             
             if widget_info.get('type') == 'bar_label':
-                logging.info(f"Updating bar_label from '{original_item.get('bar_label')}' to '{new_text}'")
+                logging.debug("Updating bar_label from '%s' to '%s'", original_item.get('bar_label'), new_text)
                 original_item['bar_label'] = new_text
             else:
-                logging.info(f"Updating text from '{original_item.get('text')}' to '{new_text}'")
+                logging.debug("Updating text from '%s' to '%s'", original_item.get('text'), new_text)
                 original_item['text'] = new_text
 
     def _save_analysis_results(self):
@@ -2259,14 +2977,12 @@ Click to configure all advanced options."""
             
             json_path = output_path / f"{base_name}_analysis.json"
             with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(self.current_analysis_result, f, ensure_ascii=False, indent=2)
+                json.dump(sanitize_for_json(self.current_analysis_result), f, ensure_ascii=False, indent=2)
 
             annotated_img = self.create_image_with_highlight()
             if annotated_img:
                 annotated_path = output_path / f"{base_name}_annotated.png"
                 annotated_img.save(annotated_path, "PNG", optimize=True)
-                if annotated_img != self.base_image_with_detections:
-                    annotated_img.close()
             
             self.update_status(f"✅ Saved: {os.path.basename(self.current_image_path)}")
             return True
@@ -2316,25 +3032,35 @@ Click to configure all advanced options."""
                                 f"Need at least 2 scale labels.\nFound: {len(scale_labels)}")
                 return
 
+            bars = self.current_analysis_result.get('bars', [])
+            if not bars:
+                QMessageBox.warning(self, "No Bars", "No bars available to recalibrate.")
+                return
+
             scale_model, r_squared = analysis.calibrate_scale_from_ticks_numpy(scale_labels)
             if scale_model is None:
                 QMessageBox.critical(self, "Calibration Failed", "Scale recalibration failed.")
                 return
 
-            self.current_analysis_result['scale_info']['r_squared'] = r_squared
-            h_img = self.current_analysis_result['image_dimensions']['height']
+            scale_info = self.current_analysis_result.setdefault('scale_info', {})
+            scale_info['r_squared'] = r_squared
+            image_dimensions = self.current_analysis_result.setdefault('image_dimensions', {})
+            if self.original_pil_image is not None:
+                image_dimensions.setdefault('height', self.original_pil_image.size[1])
+                image_dimensions.setdefault('width', self.original_pil_image.size[0])
+            h_img = image_dimensions.get('height', 0)
             
             slope, intercept = scale_model.coeffs
             baseline_coord = float(np.clip((0 - intercept) / slope, 0, h_img)) if abs(slope) > 1e-9 else 0
             self.current_analysis_result['baseline_coord'] = baseline_coord
 
-            for i, bar in enumerate(self.current_analysis_result['bars']):
+            for i, bar in enumerate(bars):
                 height_px, value = analysis.get_bar_value_numpy(bar['xyxy'], scale_model, baseline_coord)
-                self.current_analysis_result['bars'][i]['pixel_height'] = height_px
-                self.current_analysis_result['bars'][i]['estimated_value'] = value
+                bars[i]['pixel_height'] = height_px
+                bars[i]['estimated_value'] = value
 
             if self.base_image_with_detections:
-                self.base_image_with_detections.close()
+                self._close_pil_image_safely(self.base_image_with_detections)
                 self.base_image_with_detections = None
                 
             self.update_displayed_image()
@@ -2360,10 +3086,13 @@ Click to configure all advanced options."""
             if central_widget:
                 available_width = central_widget.width()
                 if available_width > 0:
-                    left_width = min(400, max(280, int(available_width * 0.22)))  # Keep within reasonable bounds
-                    right_width = available_width - left_width
-                    if right_width > 0:
-                        QTimer.singleShot(0, lambda: self._set_main_splitter_sizes([left_width, right_width]))
+                    if self.sidebar_collapsed:
+                        QTimer.singleShot(0, lambda: self._set_main_splitter_sizes([0, available_width]))
+                    else:
+                        left_width = min(400, max(220, int(available_width * 0.22)))
+                        right_width = available_width - left_width
+                        if right_width > 0:
+                            QTimer.singleShot(0, lambda: self._set_main_splitter_sizes([left_width, right_width]))
             
             # Adjust the vertical splitter as well if needed
             right_panel = None
@@ -2384,6 +3113,8 @@ Click to configure all advanced options."""
         """Safely set main splitter sizes."""
         if hasattr(self, 'main_splitter_widget') and self.main_splitter_widget:
             self.main_splitter_widget.setSizes(sizes)
+            if not self.sidebar_collapsed and sizes and sizes[0] > 32:
+                self._sidebar_saved_width = sizes[0]
     
     def _set_vertical_splitter_sizes(self, sizes):
         """Safely set vertical splitter sizes."""
@@ -2402,7 +3133,9 @@ if __name__ == "__main__":
     
     # Get the root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
+    debug_enabled = os.environ.get("CHART_ANALYSIS_DEBUG", "0").strip().lower() in {"1", "true", "yes"}
+    default_level = logging.DEBUG if debug_enabled else logging.INFO
+    root_logger.setLevel(default_level)
 
     # Remove any existing handlers
     for handler in root_logger.handlers[:]:
@@ -2412,14 +3145,18 @@ if __name__ == "__main__":
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
     
     file_handler = logging.FileHandler(log_file, mode='w')
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(default_level)
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
     
     stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.DEBUG)
+    stream_handler.setLevel(default_level)
     stream_handler.setFormatter(formatter)
     root_logger.addHandler(stream_handler)
+
+    if not debug_enabled:
+        logging.getLogger("PIL").setLevel(logging.WARNING)
+        logging.getLogger("onnxruntime").setLevel(logging.WARNING)
 
     logging.info("Root logger configured successfully.")
     

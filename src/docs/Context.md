@@ -60,7 +60,21 @@ The system follows a layered architecture with clear separation of concerns:
 
 ### Core Principle: Composition Over Re-implementation
 
-New handlers compose with existing ModularBaselineDetector (1,500+ lines) instead of duplicating logic. All complex clustering, aggregation, and baseline detection logic is preserved and enhanced through smart routing and configuration.
+Handlers compose with `ModularBaselineDetector` from the canonical baseline package (`src/core/baseline/`) instead of duplicating logic. A compatibility facade (`src/core/baseline_detection.py`) is kept for stable imports while internals remain decomposed into focused modules (detector/policy/geometry/zero-crossing/scatter/stats).
+
+### Strategic Triage Policy (2026-02-09)
+
+Use a staged adoption policy for model and architecture modernization:
+
+1. Keep migration/contract stabilization and parity work as top priority.
+2. Introduce SOTA initiatives only behind isolated A/B workflows.
+3. Keep default runtime behavior unchanged until acceptance gates pass.
+4. Treat foundation-model paths as optional parallel branches first.
+
+References:
+- `src/Critic.md` (feasibility/priority matrix and rationale)
+- `src/evaluation/isolated_ab_runner.py` (isolated A/B comparison utility)
+- `src/docs/TESTING_WITH_ANALYSIS.md` (experiment protocol and gate usage)
 
 ---
 
@@ -69,7 +83,8 @@ New handlers compose with existing ModularBaselineDetector (1,500+ lines) instea
 ```
 src/
 ├── core/                                # Core services and utilities
-│   ├── baseline_detection.py          # ModularBaselineDetector (1,500+ lines)
+│   ├── baseline/                      # Canonical baseline modules
+│   ├── baseline_detection.py          # Compatibility facade
 │   ├── spatial_classification_enhanced.py  # LYLAA implementation
 │   ├── model_manager.py                # Singleton model loader
 │   ├── data_manager.py                 # Data handling utilities
@@ -217,9 +232,9 @@ requirements.txt                        # Python dependencies
 
 **Location**: `src/services/calibration_adapter.py`
 
-**Purpose**: Bridge between service-level results and detector-level calibration inputs.
+**Purpose**: Optional bridge between service-level calibration outputs and detector-level inputs.
 
-**Key Feature**: Enables zero-crossing baseline snapping for horizontal bar charts (fixes R² 0.37 → ≥0.90).
+**Current Status**: Not on the active runtime baseline path; the active zero-crossing behavior is implemented in baseline detection modules.
 
 ### 4. Specialized Handlers
 
@@ -239,11 +254,11 @@ requirements.txt                        # Python dependencies
 
 **Location**: `src/handlers/bar_handler.py`
 
-**Key Enhancement**: Zero-crossing baseline snapping via `CalibrationAdapter`.
+**Key Enhancement**: Zero-crossing baseline snapping via `ModularBaselineDetector.detect(...)` using primary calibration zero when available.
 
 **Impact**: Improved horizontal bar chart accuracy from R² 0.37 to ≥0.90.
 
-**Mechanism**: Ensures the baseline for horizontal bars is correctly aligned with the calibrated zero-point of the axis, leading to much more accurate value extraction.
+**Mechanism**: Ensures the baseline for horizontal bars is aligned with the calibrated zero-point of the axis, improving value extraction stability.
 
 #### LineHandler
 
@@ -327,13 +342,19 @@ The generator produces highly detailed annotations, including:
 
 ### 7. ModularBaselineDetector
 
-**Location**: `src/core/baseline_detection.py`
+**Location**: `src/core/baseline/detector.py` (canonical), `src/core/baseline_detection.py` (compatibility facade)
 
 **Purpose**: Detect baseline positions for chart elements using adaptive clustering.
 
-**Why This Approach**: Instead of reimplementing complex clustering and baseline detection logic within each chart handler, ModularBaselineDetector centralizes over 1,500 lines of battle-tested code. This promotes the "Composition Over Re-implementation" principle, ensuring consistency, maintainability, and continuous enhancement of core algorithms through smart routing and configuration.
+**Why This Approach**: Instead of reimplementing baseline logic in each handler, the detector centralizes baseline policy and estimation while delegating focused responsibilities to small modules. This keeps behavior consistent and improves maintainability.
 
-**Size**: 1,500+ lines of preserved, battle-tested logic
+**Decomposition**:
+- `core/baseline/detector.py` - orchestration and result assembly
+- `core/baseline/policy.py` - chart policy and axis-id mapping
+- `core/baseline/geometry.py` - bbox/stack geometry helpers
+- `core/baseline/zero_crossing.py` - calibration zero and interpolation fallback
+- `core/baseline/scatter.py` - scatter-specific baseline heuristics
+- `core/baseline/stats.py` - reusable statistical primitives
 
 **Key Algorithms**:
 - **DBSCANClusterer**: Density-based spatial clustering
@@ -484,9 +505,9 @@ This section highlights significant enhancements that have improved the system's
 - **Location**: `src/handlers/scatter_handler.py`
 
 ### Horizontal Bar Chart Accuracy
-- **Enhancement**: Enabled zero-crossing baseline snapping in the `CalibrationAdapter`.
+- **Enhancement**: Enabled zero-crossing baseline snapping in `ModularBaselineDetector.detect(...)`.
 - **Impact**: Dramatically improved value extraction accuracy for horizontal bar charts, increasing the R² value from a previous 0.37 to ≥0.90.
-- **Location**: `src/services/calibration_adapter.py` + `src/handlers/bar_handler.py`
+- **Location**: `src/core/baseline/detector.py` + `src/handlers/bar_handler.py`
 
 ### Line Chart Type Safety
 - **Enhancement**: The `LineHandler` now enforces explicit type conversion to `numpy` arrays.
@@ -698,4 +719,3 @@ For maintenance and development questions, refer to:
 ---
 
 **END OF TECHNICAL DOCUMENTATION**
-

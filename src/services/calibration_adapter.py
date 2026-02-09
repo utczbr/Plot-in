@@ -4,6 +4,10 @@ Calibration adapter to bridge CalibrationService output and ModularBaselineDetec
 This adapter addresses the critical gap where ModularBaselineDetector needs
 (slope, intercept, zero_crossing) from calibration but CalibrationService
 provides a different structure.
+
+Note:
+- This module is currently an optional adapter utility.
+- Active runtime baseline snapping is implemented in `core.baseline` modules.
 """
 from dataclasses import dataclass
 from typing import Optional, Callable

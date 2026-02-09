@@ -11,7 +11,6 @@ from pathlib import Path
 
 from .data_manager import DataManager
 from .image_manager import ImageManager
-from .config import MODELS_CONFIG
 from pipelines.chart_pipeline import ChartAnalysisPipeline
 from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
@@ -29,8 +28,8 @@ class AnalysisManager:
         self._advanced_settings = None
         self.logger = logging.getLogger(__name__)
     
-    def set_models(self, models: Dict[str, Any]):
-        """Set the loaded models for analysis."""
+    def set_models(self, models: Any):
+        """Set the model manager (or model registry object) for analysis."""
         self._models = models
     
     def set_easyocr_reader(self, reader):
@@ -43,7 +42,7 @@ class AnalysisManager:
 
     def _create_pipeline(self) -> Optional[ChartAnalysisPipeline]:
         """Creates a configured pipeline instance."""
-        if not all([self._models, self._easyocr_reader, self._advanced_settings]):
+        if not self._models or not self._advanced_settings:
             self.logger.error("AnalysisManager not properly initialized")
             return None
 
@@ -51,6 +50,24 @@ class AnalysisManager:
         ocr_engine_name = self._advanced_settings.get('ocr_engine', 'Paddle')
         ocr_accuracy = self._advanced_settings.get('ocr_accuracy', 'Optimized').lower()
         calibration_method = self._advanced_settings.get('calibration_method', 'PROSAC')
+
+        if ocr_engine_name == 'EasyOCR' and self._easyocr_reader is None:
+            self.logger.error("EasyOCR engine selected but EasyOCR reader is not initialized")
+            return None
+
+        models_dir = None
+        if hasattr(self._models, "get_loaded_models_dir"):
+            models_dir = self._models.get_loaded_models_dir()
+
+        if models_dir is None:
+            models_dir = Path("models")
+        else:
+            models_dir = Path(models_dir)
+
+        det_model_path = str(models_dir / "OCR" / "PP-OCRv5_server_det.onnx")
+        rec_model_path = str(models_dir / "OCR" / "PP-OCRv5_server_rec.onnx")
+        cls_model_path = str(models_dir / "OCR" / "PP-LCNet_x1_0_textline_ori.onnx")
+        dict_path = str(models_dir / "OCR" / "PP-OCRv5_server_rec.yml")
         
         # Create OCR engine
         if ocr_engine_name == 'EasyOCR':
@@ -59,10 +76,10 @@ class AnalysisManager:
             ocr_engine = OCREngineFactory.create_engine(
                 'paddle_onnx',
                 self._easyocr_reader,
-                det_model_path=MODELS_CONFIG.ocr['det'],
-                rec_model_path=MODELS_CONFIG.ocr['rec'],
-                dict_path=MODELS_CONFIG.ocr['dict'],
-                cls_model_path=MODELS_CONFIG.ocr['cls']
+                det_model_path=det_model_path,
+                rec_model_path=rec_model_path,
+                dict_path=dict_path,
+                cls_model_path=cls_model_path
             )
         elif ocr_engine_name == 'Paddle_docs':
             ocr_engine = OCREngineFactory.create_engine('paddle_full', self._easyocr_reader)
@@ -99,6 +116,9 @@ class AnalysisManager:
     def run_batch_analysis(self, input_path: str, output_path: str, models_dir: str, conf: float,
                             status_callback=None, cancel_event=None) -> Tuple[int, int]:
         """Run analysis on multiple images."""
+        if self._models and hasattr(self._models, "load_models"):
+            self._models.load_models(models_dir)
+            
         pipeline = self._create_pipeline()
         if not pipeline:
             return 0, 0

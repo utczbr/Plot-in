@@ -168,7 +168,6 @@ class ProductionSpatialClassifier:
             'scatter': {**default, **ScatterChartClassifier.get_default_params()},
             'box': {**default, **BoxChartClassifier.get_default_params()},
             'histogram': {**default, **HistogramChartClassifier.get_default_params()},
-            'histogram': {**default, **HistogramChartClassifier.get_default_params()},
             'heatmap': {**default, **HeatmapChartClassifier.get_default_params()},
             'pie': {**default, **PieChartClassifier.get_default_params()}
         }
@@ -208,7 +207,6 @@ class ProductionSpatialClassifier:
             'line': LineChartClassifier,
             'scatter': ScatterChartClassifier,
             'box': BoxChartClassifier,
-            'histogram': HistogramChartClassifier,
             'histogram': HistogramChartClassifier,
             'heatmap': HeatmapChartClassifier,
             'pie': PieChartClassifier

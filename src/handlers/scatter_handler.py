@@ -7,11 +7,11 @@ due to all numeric labels being classified as title_label instead of scale_label
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import ExtractionResult
-from handlers.legacy import BaseChartHandler
+from handlers.base_handler import CartesianExtractionHandler
+from services.orientation_service import Orientation, OrientationService
 
 
-class ScatterHandler(BaseChartHandler):
+class ScatterHandler(CartesianExtractionHandler):
     """
     Scatter plot handler.
     CRITICAL FIX: Forces all numeric labels to scale labels (not title labels).
@@ -24,6 +24,15 @@ class ScatterHandler(BaseChartHandler):
                       baselines, orientation) -> List[Dict]:
         """Extract scatter points using ScatterExtractor."""
         from extractors.scatter_extractor import ScatterExtractor
+
+        try:
+            orientation_enum = OrientationService.from_any(orientation)
+        except ValueError:
+            self.logger.warning(
+                "Invalid orientation '%s' for scatter extraction. Defaulting to vertical.",
+                orientation,
+            )
+            orientation_enum = Orientation.VERTICAL
         
         extractor = ScatterExtractor()
         
@@ -47,7 +56,7 @@ class ScatterHandler(BaseChartHandler):
             cal_primary = calibration.get('primary')
             cal_secondary = calibration.get('secondary') or cal_primary
             
-            if orientation == 'vertical':
+            if orientation_enum == Orientation.VERTICAL:
                 cal_y = cal_y or cal_primary
                 cal_x = cal_x or cal_secondary
             else:

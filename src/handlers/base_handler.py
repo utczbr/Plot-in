@@ -13,13 +13,15 @@ from __future__ import annotations
 from handlers.types import (
     ChartCoordinateSystem,
     ExtractionResult,
-    OldExtractionResult
+    OldExtractionResult,
+    HandlerContext,
 )
 
 # Re-export New Architecture
 from handlers.base import (
     BaseHandler,
     CartesianChartHandler,
+    CartesianExtractionHandler,
     GridChartHandler,
     PolarChartHandler
 )
@@ -31,8 +33,10 @@ __all__ = [
     'ChartCoordinateSystem',
     'ExtractionResult',
     'OldExtractionResult',
+    'HandlerContext',
     'BaseHandler',
     'CartesianChartHandler',
+    'CartesianExtractionHandler',
     'GridChartHandler',
     'PolarChartHandler',
     'BaseChartHandler'

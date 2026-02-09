@@ -398,6 +398,7 @@ class ModernChartAnalysisApp(QMainWindow):
     def __init__(self, context: Optional[ApplicationContext] = None):
         super().__init__()
         self.context = context or ApplicationContext.get_instance()
+        self._is_macos = sys.platform == "darwin"
 
         # Add explicit cleanup registry
         self._resource_registry = []
@@ -546,7 +547,16 @@ class ModernChartAnalysisApp(QMainWindow):
             self._icon_cache[cache_key] = base_icon
             return base_icon
 
-        base_pixmap = base_icon.pixmap(size, size)
+        # Render at device pixel ratio for sharp/correct icon placement on HiDPI displays.
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        dpr = float(screen.devicePixelRatio()) if screen is not None else 1.0
+        dpr = max(1.0, dpr)
+        requested_size = max(1, int(round(size)))
+        render_size = max(1, int(round(requested_size * dpr)))
+
+        base_pixmap = base_icon.pixmap(QSize(render_size, render_size))
+        if not base_pixmap.isNull():
+            base_pixmap.setDevicePixelRatio(dpr)
         if base_pixmap.isNull():
             base_pixmap = QPixmap(str(icon_path))
         if base_pixmap.isNull():
@@ -557,6 +567,8 @@ class ModernChartAnalysisApp(QMainWindow):
         tinted.fill(Qt.GlobalColor.transparent)
 
         painter = QPainter(tinted)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawPixmap(0, 0, base_pixmap)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
         painter.fillRect(tinted.rect(), QColor(color))
@@ -565,6 +577,18 @@ class ModernChartAnalysisApp(QMainWindow):
         icon = QIcon(tinted)
         self._icon_cache[cache_key] = icon
         return icon
+
+    def _scaled_ui_px(self, px: int) -> int:
+        """Slightly upscale compact controls on macOS for visual parity."""
+        if self._is_macos:
+            return max(1, int(round(px * 1.08)))
+        return max(1, int(round(px)))
+
+    def _scaled_icon_px(self, px: int) -> int:
+        """Scale glyphs a bit more than controls on macOS where they appear optically smaller."""
+        if self._is_macos:
+            return max(1, int(round(px * 1.15)))
+        return max(1, int(round(px)))
 
     def _create_icon_button(
         self,
@@ -576,11 +600,15 @@ class ModernChartAnalysisApp(QMainWindow):
         icon_size: int = 14,
         accent: bool = False,
     ) -> QPushButton:
+        button_px = self._scaled_ui_px(button_size)
+        icon_px = self._scaled_icon_px(icon_size)
+
         button = QPushButton("")
         button.setToolTip(tooltip)
-        button.setFixedSize(button_size, button_size)
-        button.setIcon(self.get_icon(icon_filename, color=icon_color, size=icon_size))
-        button.setIconSize(QSize(icon_size, icon_size))
+        button.setFixedSize(button_px, button_px)
+        button.setIcon(self.get_icon(icon_filename, color=icon_color, size=icon_px))
+        button.setIconSize(QSize(icon_px, icon_px))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setProperty("iconOnly", True)
         if accent:
             button.setProperty("accent", True)
@@ -621,14 +649,14 @@ class ModernChartAnalysisApp(QMainWindow):
     def _get_stylesheet(self):
         return (
             "QMainWindow { background-color: #1e1e1e; color: #d4d4d4; }"
-            "QWidget { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 10px; }"
+            "QWidget { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Inter', 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif; font-size: 10px; }"
             "QLabel { color: #d4d4d4; padding: 0px; }"
             "QLabel[sectionHeader=\"true\"] { color: #9da1a6; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }"
             "QPushButton { background-color: #2d2d2d; border: 1px solid #454545; border-radius: 3px; color: #d4d4d4; padding: 5px 10px; min-height: 22px; }"
             "QPushButton:hover { border-color: #5a5a5a; background-color: #343434; }"
             "QPushButton:pressed { background-color: #252526; }"
             "QPushButton:disabled { color: #6b6b6b; border-color: #3a3a3a; background-color: #252526; }"
-            "QPushButton[iconOnly=\"true\"] { padding: 0px; min-height: 0px; background-color: #252526; border: 1px solid #3f3f3f; }"
+            "QPushButton[iconOnly=\"true\"] { padding: 0px; min-height: 20px; min-width: 20px; background-color: #252526; border: 1px solid #3f3f3f; }"
             "QPushButton[iconOnly=\"true\"]:hover { border-color: #007acc; background-color: #2c2c2c; }"
             "QPushButton[iconOnly=\"true\"][accent=\"true\"] { background-color: #007acc; border-color: #007acc; }"
             "QPushButton[iconOnly=\"true\"][accent=\"true\"]:hover { background-color: #1685d1; border-color: #1685d1; }"
@@ -926,8 +954,8 @@ Click to configure advanced options."""
             "circle-chevron-left-solid-full.svg",
             "Collapse sidebar",
             icon_color="#9da1a6",
-            button_size=20,
-            icon_size=11,
+            button_size=22,
+            icon_size=12,
         )
         self.files_sidebar_toggle_btn.clicked.connect(self.toggle_sidebar)
         files_header_layout.addWidget(self.files_sidebar_toggle_btn)
@@ -1058,9 +1086,9 @@ Click to configure advanced options."""
             self.left_panel.setVisible(False)
             self.sidebar_collapsed = True
             if hasattr(self, "sidebar_toggle_btn"):
-                self.sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-right-solid-full.svg", "#c5c5c5", 12))
+                self.sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-right-solid-full.svg", "#c5c5c5", self._scaled_icon_px(12)))
             if hasattr(self, "files_sidebar_toggle_btn"):
-                self.files_sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-right-solid-full.svg", "#9da1a6", 11))
+                self.files_sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-right-solid-full.svg", "#9da1a6", self._scaled_icon_px(12)))
             if hasattr(self, "sidebar_restore_btn"):
                 self.sidebar_restore_btn.setVisible(True)
             self.main_splitter_widget.setSizes([0, max(total_width, 1)])
@@ -1071,9 +1099,9 @@ Click to configure advanced options."""
             self.main_splitter_widget.setSizes([restore_width, right_width])
             self.sidebar_collapsed = False
             if hasattr(self, "sidebar_toggle_btn"):
-                self.sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-left-solid-full.svg", "#c5c5c5", 12))
+                self.sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-left-solid-full.svg", "#c5c5c5", self._scaled_icon_px(12)))
             if hasattr(self, "files_sidebar_toggle_btn"):
-                self.files_sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-left-solid-full.svg", "#9da1a6", 11))
+                self.files_sidebar_toggle_btn.setIcon(self.get_icon("circle-chevron-left-solid-full.svg", "#9da1a6", self._scaled_icon_px(12)))
             if hasattr(self, "sidebar_restore_btn"):
                 self.sidebar_restore_btn.setVisible(False)
 
@@ -1123,8 +1151,9 @@ Click to configure advanced options."""
         config_layout.addWidget(self.conf_slider)
 
         self.run_batch_btn = QPushButton("Run Batch Analysis")
-        self.run_batch_btn.setIcon(self.get_icon("bullseye-solid-full.svg", color="#ffffff", size=14))
-        self.run_batch_btn.setIconSize(QSize(14, 14))
+        run_batch_icon_px = self._scaled_icon_px(14)
+        self.run_batch_btn.setIcon(self.get_icon("bullseye-solid-full.svg", color="#ffffff", size=run_batch_icon_px))
+        self.run_batch_btn.setIconSize(QSize(run_batch_icon_px, run_batch_icon_px))
         self.run_batch_btn.clicked.connect(self.start_batch_analysis_thread)
         run_batch_style = (
             "QPushButton {"
@@ -1230,8 +1259,9 @@ Click to configure advanced options."""
         scale_info_layout.addWidget(self.scale_r2_label)
         
         self.recal_btn = QPushButton("Recalibrate")
-        self.recal_btn.setIcon(self.get_icon("repeat-solid-full.svg", color="#c5c5c5", size=14))
-        self.recal_btn.setIconSize(QSize(14, 14))
+        recal_icon_px = self._scaled_icon_px(14)
+        self.recal_btn.setIcon(self.get_icon("repeat-solid-full.svg", color="#c5c5c5", size=recal_icon_px))
+        self.recal_btn.setIconSize(QSize(recal_icon_px, recal_icon_px))
         self.recal_btn.clicked.connect(self.recalibrate_scale)
         self.recal_btn.setMaximumWidth(120)
         recal_style = (
@@ -1646,8 +1676,9 @@ Click to configure advanced options."""
             base_name = os.path.basename(file_path)
             display_name = base_name if len(base_name) <= 25 else base_name[:22] + "..."
             btn = QPushButton(display_name)
-            btn.setIcon(self.get_icon("image-solid-full.svg", color="#bfbfbf", size=13))
-            btn.setIconSize(QSize(13, 13))
+            image_icon_px = self._scaled_icon_px(13)
+            btn.setIcon(self.get_icon("image-solid-full.svg", color="#bfbfbf", size=image_icon_px))
+            btn.setIconSize(QSize(image_icon_px, image_icon_px))
             btn.setFlat(True)
             btn.setToolTip(base_name)
             btn_style = (
@@ -2560,8 +2591,9 @@ Click to configure advanced options."""
         nav_layout.addWidget(save_btn)
 
         save_next_btn = QPushButton("Save Next")
-        save_next_btn.setIcon(self.get_icon("floppy-disk-solid-full.svg", color="#ffffff", size=14))
-        save_next_btn.setIconSize(QSize(14, 14))
+        save_next_icon_px = self._scaled_icon_px(14)
+        save_next_btn.setIcon(self.get_icon("floppy-disk-solid-full.svg", color="#ffffff", size=save_next_icon_px))
+        save_next_btn.setIconSize(QSize(save_next_icon_px, save_next_icon_px))
         save_next_btn.clicked.connect(self.save_and_next)
         save_next_btn_style = (
             "QPushButton {"

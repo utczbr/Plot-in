@@ -1,6 +1,6 @@
 """
 Calibration Method Comparison
-Tests PROSAC vs Adaptive vs Fast across DPI ranges and axis scales
+Tests PROSAC vs Linear vs Fast across DPI ranges and axis scales
 """
 
 import json
@@ -8,6 +8,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List
 import subprocess
+import sys
 
 
 class CalibrationTester:
@@ -16,7 +17,14 @@ class CalibrationTester:
     def __init__(self, test_images_dir: Path, models_dir: Path):
         self.test_images_dir = Path(test_images_dir)
         self.models_dir = Path(models_dir)
-        self.calibration_methods = ['PROSAC', 'Adaptive', 'Fast']
+        self.src_dir = Path(__file__).resolve().parents[1]
+        self.analysis_script = self.src_dir / "analysis.py"
+        self.evaluation_script = self.src_dir / "scripts" / "run_evaluation.py"
+        self.calibration_methods = [
+            ("PROSAC", "PROSAC"),
+            ("Linear", "Linear"),
+            ("Fast", "fast"),
+        ]
     
     def run_calibration_comparison(self, gt_dir: Path, output_dir: Path):
         """Run analysis with each calibration method and compare."""
@@ -25,42 +33,42 @@ class CalibrationTester:
         
         results = []
         
-        for method in self.calibration_methods:
+        for method_label, method_arg in self.calibration_methods:
             print(f"\n{'='*60}")
-            print(f"Testing calibration method: {method}")
+            print(f"Testing calibration method: {method_label}")
             print(f"{'='*60}")
             
             # Run analysis with this calibration method
-            method_output_dir = output_dir / f"results_{method.lower()}"
+            method_output_dir = output_dir / f"results_{method_label.lower()}"
             method_output_dir.mkdir(parents=True, exist_ok=True)
             
             cmd = [
-                'python', 'analysis.py',
+                sys.executable, str(self.analysis_script),
                 '--input', str(self.test_images_dir),
                 '--output', str(method_output_dir),
-                '--calibration', method,
+                '--calibration', method_arg,
                 '--models-dir', str(self.models_dir),
                 '--ocr', 'Paddle'
             ]
             
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, cwd=str(self.src_dir))
             
             # Evaluate accuracy
-            eval_output = output_dir / f"eval_{method.lower()}.json"
+            eval_output = output_dir / f"eval_{method_label.lower()}.json"
             subprocess.run([
-                'python', 'scripts/run_evaluation.py',
+                sys.executable, str(self.evaluation_script),
                 '--gt', str(gt_dir),
                 '--pred', str(method_output_dir),
                 '--output', str(eval_output)
-            ], check=True)
+            ], check=True, cwd=str(self.src_dir))
             
             # Load results
-            with open(eval_output, 'r') as f:
+            with open(eval_output, 'r', encoding='utf-8') as f:
                 eval_data = json.load(f)
             
             summary = eval_data.get('summary', {})
             results.append({
-                'method': method,
+                'method': method_label,
                 'detection_f1': summary.get('avg_detection_f1', 0),
                 'value_mae': summary.get('avg_value_mae', float('inf')),
                 'relative_error_pct': summary.get('avg_relative_error_pct', 100),
@@ -96,7 +104,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--images', type=str, required=True)
     parser.add_argument('--gt', type=str, required=True)
-    parser.add_argument('--models', type=str, default='models')
+    parser.add_argument('--models', type=str, default=str(Path(__file__).resolve().parents[1] / 'models'))
     parser.add_argument('--output', type=str, default='calibration_tests')
     args = parser.parse_args()
     

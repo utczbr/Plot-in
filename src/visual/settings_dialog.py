@@ -1,5 +1,6 @@
 import json
 import copy
+import sys
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QTabWidget, QWidget, QLabel,
@@ -687,7 +688,7 @@ class SettingsDialog(QDialog):
                 'other': ''
             },
             'ocr_settings': {
-                'easyocr_gpu': True,
+                'easyocr_gpu': sys.platform != "darwin",
                 'easyocr_contrast_ths': 0.1,
                 'easyocr_adjust_contrast': 0.5,
                 'easyocr_min_size': 10,
@@ -735,7 +736,7 @@ class SettingsDialog(QDialog):
             'performance': {
                 'batch_workers': 4,
                 'ocr_workers': 4,
-                'use_gpu': True
+                'use_gpu': sys.platform != "darwin"
             },
             'nn_classifier': {
                 'enabled': False,

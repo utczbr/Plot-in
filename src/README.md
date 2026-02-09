@@ -153,10 +153,10 @@ Required pattern for new cartesian handlers:
 
 ### CLI (Batch Folder)
 ```bash
-python src/analysis.py \
+python3 src/analysis.py \
   --input ./sample_charts \
   --output ./results \
-  --models-dir ./models \
+  --models-dir ./src/models \
   --ocr Paddle \
   --ocr-accuracy Optimized \
   --calibration PROSAC \
@@ -166,10 +166,10 @@ python src/analysis.py \
 
 ### CLI (EasyOCR backend)
 ```bash
-python src/analysis.py \
+python3 src/analysis.py \
   --input ./sample_charts \
   --output ./results \
-  --models-dir ./models \
+  --models-dir ./src/models \
   --ocr EasyOCR \
   --ocr-accuracy Precise \
   --calibration PROSAC \
@@ -178,7 +178,7 @@ python src/analysis.py \
 
 ### GUI
 ```bash
-python src/main_modern.py
+python3 src/main_modern.py
 ```
 
 ### Model and OCR File Expectations
@@ -228,7 +228,7 @@ python3 -m pytest tests/core_tests tests/pipelines_tests tests/services_tests te
 
 ### Isolated A/B Experiment Gate (Migration-Safe)
 ```bash
-python src/evaluation/isolated_ab_runner.py \
+python3 src/evaluation/isolated_ab_runner.py \
   --baseline-results src/evaluation/reports/baseline_evaluation.json \
   --candidate-results src/evaluation/reports/candidate_evaluation.json \
   --output-report src/evaluation/reports/ab_report.json
@@ -236,7 +236,7 @@ python src/evaluation/isolated_ab_runner.py \
 
 Manifest-driven benchmark mode (ChartQA/PlotQA-style records):
 ```bash
-python src/evaluation/isolated_ab_runner.py \
+python3 src/evaluation/isolated_ab_runner.py \
   --benchmark-manifest src/evaluation/examples/chart_manifest.jsonl \
   --benchmark-format auto \
   --manifest-gt-root src/train/labels \

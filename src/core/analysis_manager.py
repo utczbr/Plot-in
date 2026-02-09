@@ -40,6 +40,18 @@ class AnalysisManager:
         """Set advanced settings for analysis."""
         self._advanced_settings = settings
 
+    @staticmethod
+    def _default_models_dir() -> Path:
+        return Path(__file__).resolve().parents[1] / "models"
+
+    @staticmethod
+    def _pick_existing(base_dir: Path, *candidate_names: str) -> Path:
+        for name in candidate_names:
+            candidate = base_dir / name
+            if candidate.exists():
+                return candidate
+        return base_dir / candidate_names[0]
+
     def _create_pipeline(self) -> Optional[ChartAnalysisPipeline]:
         """Creates a configured pipeline instance."""
         if not self._models or not self._advanced_settings:
@@ -60,14 +72,29 @@ class AnalysisManager:
             models_dir = self._models.get_loaded_models_dir()
 
         if models_dir is None:
-            models_dir = Path("models")
+            models_dir = self._default_models_dir()
         else:
             models_dir = Path(models_dir)
+            if not models_dir.exists():
+                fallback_models_dir = self._default_models_dir()
+                if fallback_models_dir.exists():
+                    self.logger.warning(
+                        "Configured models directory not found: %s. Falling back to %s",
+                        models_dir,
+                        fallback_models_dir,
+                    )
+                    models_dir = fallback_models_dir
 
-        det_model_path = str(models_dir / "OCR" / "PP-OCRv5_server_det.onnx")
-        rec_model_path = str(models_dir / "OCR" / "PP-OCRv5_server_rec.onnx")
-        cls_model_path = str(models_dir / "OCR" / "PP-LCNet_x1_0_textline_ori.onnx")
-        dict_path = str(models_dir / "OCR" / "PP-OCRv5_server_rec.yml")
+        ocr_dir = models_dir / "OCR"
+        det_model_path = self._pick_existing(ocr_dir, "PP-OCRv5_server_det.onnx")
+        rec_model_path = self._pick_existing(ocr_dir, "PP-OCRv5_server_rec.onnx")
+        cls_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_textline_ori.onnx")
+        dict_path = self._pick_existing(ocr_dir, "PP-OCRv5_server_rec.yml", "PP-OCRv5_server_rec.yaml")
+        doc_ori_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_doc_ori.onnx")
+        unwarp_model_path = self._pick_existing(ocr_dir, "UVDoc.onnx", "UVDoc .onnx")
+        textline_ori_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_textline_ori.onnx")
+        perf_cfg = self._advanced_settings.get('performance', {})
+        use_gpu = bool(perf_cfg.get('use_gpu', False)) if isinstance(perf_cfg, dict) else False
         
         # Create OCR engine
         if ocr_engine_name == 'EasyOCR':
@@ -76,14 +103,31 @@ class AnalysisManager:
             ocr_engine = OCREngineFactory.create_engine(
                 'paddle_onnx',
                 self._easyocr_reader,
-                det_model_path=det_model_path,
-                rec_model_path=rec_model_path,
-                dict_path=dict_path,
-                cls_model_path=cls_model_path
+                det_model_path=str(det_model_path),
+                rec_model_path=str(rec_model_path),
+                dict_path=str(dict_path),
+                cls_model_path=str(cls_model_path),
+                use_gpu=use_gpu,
             )
         elif ocr_engine_name == 'Paddle_docs':
-            ocr_engine = OCREngineFactory.create_engine('paddle_full', self._easyocr_reader)
+            ocr_engine = OCREngineFactory.create_engine(
+                'paddle_full',
+                self._easyocr_reader,
+                doc_ori_model_path=str(doc_ori_model_path),
+                unwarp_model_path=str(unwarp_model_path),
+                det_model_path=str(det_model_path),
+                textline_ori_model_path=str(textline_ori_model_path),
+                rec_model_path=str(rec_model_path),
+                dict_path=str(dict_path),
+                use_gpu=use_gpu,
+            )
         else:
+            if self._easyocr_reader is None:
+                self.logger.error(
+                    "Unsupported OCR engine '%s' and EasyOCR reader is not initialized.",
+                    ocr_engine_name,
+                )
+                return None
             ocr_engine = OCREngineFactory.create_engine('fast', self._easyocr_reader)
         
         # Create calibration engine
@@ -127,7 +171,10 @@ class AnalysisManager:
         if not input_dir.exists():
              return 0, 0
              
-        images = list(input_dir.glob('*.png')) + list(input_dir.glob('*.jpg'))
+        images = sorted(
+            p for p in input_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'}
+        )
         total = len(images)
         processed = 0
         

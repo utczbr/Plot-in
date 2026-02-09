@@ -50,10 +50,10 @@ src/
 ### 1. Run Analysis on Generated Images
 
 ```bash
-cd /home/stuart/Documentos/OCR/LYAA-fine-tuning/src
+cd src
 
 # Basic analysis with PaddleOCR
-python analysis.py \
+python3 analysis.py \
     --input train/images \
     --output train/analysis_output \
     --models-dir models \
@@ -61,7 +61,7 @@ python analysis.py \
     --annotated
 
 # Or with EasyOCR (alternative)
-python analysis.py \
+python3 analysis.py \
     --input train/images \
     --output train/analysis_output \
     --models-dir models \
@@ -77,8 +77,8 @@ After running analysis, compare the output against the unified.json ground truth
 cd src/train/gerador_charts/test_generation
 
 # Run accuracy analyzer on both directories
-python accuracy_analyzer.py \
-    --labels-dir /home/stuart/Documentos/OCR/LYAA-fine-tuning/src/train/labels \
+python3 accuracy_analyzer.py \
+    --labels-dir ../../labels \
     --report-file ground_truth_report.json
 ```
 
@@ -103,7 +103,7 @@ done
 ### Step 2: Run Analysis
 
 ```bash
-python src/analysis.py \
+python3 src/analysis.py \
     --input src/train/test_subset \
     --output src/train/test_output \
     --models-dir src/models \
@@ -221,7 +221,7 @@ grep -l '"chart_type": "bar"' src/train/labels/*_unified.json | \
     xargs -I{} cp {} src/train/test_bars/
 
 # Run analysis
-python src/analysis.py \
+python3 src/analysis.py \
     --input src/train/test_bars \
     --output src/train/test_bars_output \
     --models-dir src/models
@@ -252,7 +252,7 @@ Use this when validating a single improvement practice in isolation (for example
 ### Option 1: Run evaluator for both prediction folders and compare
 
 ```bash
-python src/evaluation/isolated_ab_runner.py \
+python3 src/evaluation/isolated_ab_runner.py \
   --gt-dir src/train/gt \
   --baseline-pred-dir src/train/baseline_output \
   --candidate-pred-dir src/train/candidate_output \
@@ -262,7 +262,7 @@ python src/evaluation/isolated_ab_runner.py \
 ### Option 2: Compare precomputed evaluation outputs
 
 ```bash
-python src/evaluation/isolated_ab_runner.py \
+python3 src/evaluation/isolated_ab_runner.py \
   --baseline-results src/evaluation/reports/baseline_evaluation.json \
   --candidate-results src/evaluation/reports/candidate_evaluation.json \
   --output-report src/evaluation/reports/ab_report.json
@@ -273,7 +273,7 @@ python src/evaluation/isolated_ab_runner.py \
 Use this mode when your benchmark provides sample metadata (JSON/JSONL) and you want the runner to map records into `<sample_id>_gt.json` and `<sample_id>_analysis.json` pairs.
 
 ```bash
-python src/evaluation/isolated_ab_runner.py \
+python3 src/evaluation/isolated_ab_runner.py \
   --benchmark-manifest src/evaluation/examples/chart_manifest.jsonl \
   --benchmark-format auto \
   --manifest-gt-root src/train/labels \
@@ -338,6 +338,6 @@ easyocr_reader = easyocr.Reader(languages, gpu=False)
 ### Memory Issues with Large Batches
 ```bash
 # Process subset of images
-python analysis.py --input train/images --output train/output
+python3 analysis.py --input train/images --output train/output
 # Then manually process remaining files
 ```

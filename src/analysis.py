@@ -1,9 +1,11 @@
 
 import os
+import sys
 import logging
 import argparse
 import json
 from pathlib import Path
+from typing import List, Optional
 
 # Core components
 from core.model_manager import ModelManager
@@ -19,45 +21,85 @@ except ImportError:
     EASYOCR_AVAILABLE = False
     logging.warning("EasyOCR module not found. OCR capabilities will be limited.")
 
+
+def _resolve_models_dir(models_dir: str) -> Path:
+    requested = Path(models_dir).expanduser()
+    if requested.is_absolute():
+        return requested
+
+    candidates = [
+        (Path.cwd() / requested).resolve(),
+        (Path(__file__).resolve().parent / requested).resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
+
+
+def _create_easyocr_reader(languages: List[str]):
+    if not EASYOCR_AVAILABLE:
+        raise RuntimeError("EasyOCR is not installed.")
+
+    # On macOS default to CPU first for better out-of-box compatibility.
+    env_gpu = os.environ.get("EASYOCR_GPU")
+    if env_gpu is not None:
+        normalized = env_gpu.strip().lower()
+        gpu_attempts = [normalized in {"1", "true", "yes", "on"}]
+    else:
+        gpu_attempts = [False] if sys.platform == "darwin" else [True, False]
+
+    last_error = None
+    for use_gpu in gpu_attempts:
+        try:
+            return easyocr.Reader(languages, gpu=use_gpu)
+        except Exception as exc:
+            last_error = exc
+            logging.warning("EasyOCR initialization failed with gpu=%s: %s", use_gpu, exc)
+
+    raise RuntimeError(f"Unable to initialize EasyOCR: {last_error}")
+
 def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'Paddle',
                           ocr_accuracy: str = 'Optimized',
                           calibration_method: str = 'PROSAC', models_dir: str = 'models',
-                          annotated: bool = False, languages: list = ['en']):
+                          annotated: bool = False, languages: Optional[List[str]] = None):
+    if languages is None:
+        languages = ['en']
+
     input_path = Path(input_dir)
     if not input_path.exists():
         raise FileNotFoundError(f"Input directory does not exist: {input_dir}")
-    
+    models_dir_path = _resolve_models_dir(models_dir)
+
     # 1. Initialize Components
     model_manager = ModelManager()
     try:
-        models = model_manager.load_models(models_dir)
+        models = model_manager.load_models(str(models_dir_path))
     except Exception as exc:
-        logging.error("Failed to load models from %s: %s", models_dir, exc)
+        logging.error("Failed to load models from %s: %s", models_dir_path, exc)
         return []
     if not models:
         logging.error("No models could be loaded. Exiting.")
         return []
-    
-    try:
-        import easyocr
-        easyocr_reader = easyocr.Reader(languages, gpu=True)
-    except ImportError:
-        logging.error("EasyOCR not available")
-        return []
-    except Exception as e:
-        logging.error(f"Error initializing EasyOCR: {e}")
-        return []
-    
+
+    easyocr_reader = None
+    if ocr_backend == 'EasyOCR':
+        try:
+            easyocr_reader = _create_easyocr_reader(languages)
+        except Exception as e:
+            logging.error("Error initializing EasyOCR: %s", e)
+            return []
+
     # 2. Configure OCR Engine
     if ocr_backend == 'Paddle':
         engine_mode = 'paddle_onnx'
         ocr_engine = OCREngineFactory.create_engine(
             engine_mode,
             easyocr_reader,
-            det_model_path=os.path.join(models_dir, 'OCR/PP-OCRv5_server_det.onnx'),
-            rec_model_path=os.path.join(models_dir, 'OCR/PP-OCRv5_server_rec.onnx'),
-            dict_path=os.path.join(models_dir, 'OCR/PP-OCRv5_server_rec.yml'),
-            cls_model_path=os.path.join(models_dir, 'OCR/PP-LCNet_x1_0_textline_ori.onnx')
+            det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
+            rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
+            dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
+            cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx')
         )
     elif ocr_backend == 'EasyOCR':
         accuracy_to_mode = {'Fast': 'fast', 'Optimized': 'optimized', 'Precise': 'precise'}
@@ -76,7 +118,10 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
         calibration_engine=calibration_engine
     )
 
-    image_paths = list(input_path.glob('*.png')) + list(input_path.glob('*.jpg'))
+    image_paths = sorted(
+        p for p in input_path.iterdir()
+        if p.is_file() and p.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'}
+    )
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     results = []
@@ -110,7 +155,11 @@ def main():
     parser = argparse.ArgumentParser(description='Chart Analysis System')
     parser.add_argument('--input', required=True, help='Input directory')
     parser.add_argument('--output', required=True, help='Output directory')
-    parser.add_argument('--models-dir', default='models', help='Models directory')
+    parser.add_argument(
+        '--models-dir',
+        default=str(Path(__file__).resolve().parent / 'models'),
+        help='Models directory (default: src/models)'
+    )
     parser.add_argument('--ocr', default='Paddle', choices=['Paddle', 'EasyOCR'], help='OCR engine')
     parser.add_argument('--ocr-accuracy', default='Optimized', choices=['Fast', 'Optimized', 'Precise'], help='OCR accuracy')
     parser.add_argument('--calibration', default='PROSAC', 

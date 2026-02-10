@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "description": "Strict checksum manifest for required models",
+  "models": [
+    {
+      "filename": "classification.onnx",
+      "relative_path": "classification.onnx",
+      "url": "https://drive.google.com/file/d/19mU6nrdlM7VQemCMPZ4hvvD0yjKNnbQ9/view?usp=drive_link",
+      "sha256": "8b1c414ef8efc85aef41b64b84e91df6e4ccf7c743dd8f4000347f334cd9a488",
+      "size_bytes": 10610891
+    },
+    {
+      "filename": "detect_bar.onnx",
+      "relative_path": "detect_bar.onnx",
+      "url": "https://drive.google.com/file/d/12VnOfvza_9WmkLhtzVY12s1A7QF6Rh-r/view?usp=drive_link",
+      "sha256": "695c93d798e23eecb0ae81ee7ebab55922817a2364105558d5e375d2ac717b6b",
+      "size_bytes": 10610932
+    },
+    {
+      "filename": "detect_box.onnx",
+      "relative_path": "detect_box.onnx",
+      "url": "https://drive.google.com/file/d/1gJUhdf2A-Yfb1beCu0gLAw6lx52wrf44/view?usp=drive_link",
+      "sha256": "e5bab7338bbc5bba6a9d4685358acaea45ef8ceeae559b12f8c4f1063a425430",
+      "size_bytes": 10611733
+    },
+    {
+      "filename": "detect_heatmap.onnx",
+      "relative_path": "detect_heatmap.onnx",
+      "url": "https://drive.google.com/file/d/1wfO4PtrXDCwMTPjpa0YVxGhgzyuibZyE/view?usp=drive_link",
+      "sha256": "0dcf67a9d0f67805f341a0abf20f6f547e825cbd3f96f4a2abd5ccc1170d0d00",
+      "size_bytes": 10729828
+    },
+    {
+      "filename": "detect_histogram.onnx",
+      "relative_path": "detect_histogram.onnx",
+      "url": "https://drive.google.com/file/d/1HyGJmAojsEQRFExlwF2li-ju3hhuKlNW/view?usp=drive_link",
+      "sha256": "613fe37066ddda7a565d77961955c42fb8d7ff8d6a11cddb7c039f95b3391eab",
+      "size_bytes": 10900126
+    },
+    {
+      "filename": "detect_line.onnx",
+      "relative_path": "detect_line.onnx",
+      "url": "https://drive.google.com/file/d/1R1zTz7cvg-_nglf0l-CStTdkwMm8ivqK/view?usp=drive_link",
+      "sha256": "422f64e397d3d82da8b045589ffa563fd09cc95570cf56f234a8b5a28c725068",
+      "size_bytes": 10610939
+    },
+    {
+      "filename": "detect_scatter.onnx",
+      "relative_path": "detect_scatter.onnx",
+      "url": "https://drive.google.com/file/d/1i7RR-Azt1oN8YpRSE4bYN6lYQSMB3JRs/view?usp=drive_link",
+      "sha256": "474c0e74e20efd892bb9f8a39dc6b24bf5ffff41a2ac7f48b67b6e44c66c58de",
+      "size_bytes": 10610939
+    },
+    {
+      "filename": "doclayout_yolo.onnx",
+      "relative_path": "doclayout_yolo.onnx",
+      "url": "https://drive.google.com/file/d/1gmltuNl8stpX7DmBLtuFc1ZfB4WQmTY5/view?usp=drive_link",
+      "sha256": "7fdece0b0c7ef5404d9823ba5b24b5500cef9bcc07d81db4bc6b8b7790973416",
+      "size_bytes": 80793781
+    },
+    {
+      "filename": "Pie_pose.onnx",
+      "relative_path": "Pie_pose.onnx",
+      "url": "https://drive.google.com/file/d/15H0N26uNFmpjucK7TAKS0QElAtuQk-s_/view?usp=drive_link",
+      "sha256": "0d6319fa34b8a64e8396c09340c0fe5d2ce4e2e8b170f5250f911abb86208647",
+      "size_bytes": 11298852
+    },
+    {
+      "filename": "PP-LCNet_x1_0_doc_ori.onnx",
+      "relative_path": "OCR/PP-LCNet_x1_0_doc_ori.onnx",
+      "url": "https://drive.google.com/file/d/1_Msc8ZG_VClMLtRvggxnlosnmd44h_fh/view?usp=drive_link",
+      "sha256": "da00ff4118e4da0a655c1cbc3513b3325dfc84ec4cf8ea691e81bcb5230fb0e5",
+      "size_bytes": 6787559
+    },
+    {
+      "filename": "PP-LCNet_x1_0_doc_ori.yml",
+      "relative_path": "OCR/PP-LCNet_x1_0_doc_ori.yml",
+      "url": "https://drive.google.com/file/d/1Oa3WrNzg5dCv0JD7djZx9xMbI05zrKXo/view?usp=drive_link",
+      "sha256": "9e195eb729a8173588cd0e8a852c8b373aa606e79e77b4ac7d8346f5426caf26",
+      "size_bytes": 766
+    },
+    {
+      "filename": "PP-LCNet_x1_0_textline_ori.onnx",
+      "relative_path": "OCR/PP-LCNet_x1_0_textline_ori.onnx",
+      "url": "https://drive.google.com/file/d/1eHqByY3q-UZScAFsmfaITF-sUO__bljs/view?usp=drive_link",
+      "sha256": "d874cd926a8f9f66e886bbd8ad7747635802b6cc52d3b81b5892845fc84c616f",
+      "size_bytes": 6777308
+    },
+    {
+      "filename": "PP-LCNet_x1_0_textline_ori.yml",
+      "relative_path": "OCR/PP-LCNet_x1_0_textline_ori.yml",
+      "url": "https://drive.google.com/file/d/1fG1zLARAagTvfeKse76MR-NfTzmWoNDX/view?usp=drive_link",
+      "sha256": "8d5120d0e1a30a9df7ed46aa9119da3796ed066777089d1c1d705f132d5e90f9",
+      "size_bytes": 735
+    },
+    {
+      "filename": "PP-OCRv5_server_det.onnx",
+      "relative_path": "OCR/PP-OCRv5_server_det.onnx",
+      "url": "https://drive.google.com/file/d/1JxTITGiRazyrpYGRHQSmRm2UxrJcRvCW/view?usp=drive_link",
+      "sha256": "9a910baffbefb807ff2f7bfaa72910e3e470bd17014d798386d87bb46f442839",
+      "size_bytes": 88116836
+    },
+    {
+      "filename": "PP-OCRv5_server_det.yml",
+      "relative_path": "OCR/PP-OCRv5_server_det.yml",
+      "url": "https://drive.google.com/file/d/1wrDTy8W3mn9ypjyHhyv8YqDoGiaRDISZ/view?usp=drive_link",
+      "sha256": "28fb721efc3634fc8aa677e474b9602cb815a91cf569ef357a7a553d7b3ce685",
+      "size_bytes": 903
+    },
+    {
+      "filename": "PP-OCRv5_server_rec.onnx",
+      "relative_path": "OCR/PP-OCRv5_server_rec.onnx",
+      "url": "https://drive.google.com/file/d/11GPsXbIbQubpE7aJKTtF6VFXz7ESsTnN/view?usp=drive_link",
+      "sha256": "5c4927aa0736ab598025a37b71daae061363642b1848a90a0cb1e02e2ce823d7",
+      "size_bytes": 84502992
+    },
+    {
+      "filename": "PP-OCRv5_server_rec.yml",
+      "relative_path": "OCR/PP-OCRv5_server_rec.yml",
+      "url": "https://drive.google.com/file/d/1dDGK8iDaM6J0QlTisx_6-wHyvIzJ9_Xc/view?usp=drive_link",
+      "sha256": "2c719dba044c4e2228aef8ff92f5f575394d75d24c16de096a33b7cfd902f66d",
+      "size_bytes": 148345
+    },
+    {
+      "filename": "sym_shape_infer_temp.onnx",
+      "relative_path": "OCR/sym_shape_infer_temp.onnx",
+      "url": "https://drive.google.com/file/d/1lMGuNtCA1uOfabKPUs3JgvhnsTTGPi-G/view?usp=drive_link",
+      "sha256": "00f066264d50001158b040fcaebf09fadeb637f78a480001e2f5888d62915a2e",
+      "size_bytes": 135964
+    },
+    {
+      "filename": "UVDoc .onnx",
+      "relative_path": "OCR/UVDoc .onnx",
+      "url": "https://drive.google.com/file/d/1iwmq8X6Wb7oYLjh-GSm1G_JPLO9hBSo5/view?usp=drive_link",
+      "sha256": "1092557894d49644e7858b293df6cb9c873d53e51319b91a8614ca9c71686dc0",
+      "size_bytes": 31684150
+    },
+    {
+      "filename": "UVDoc .yml",
+      "relative_path": "OCR/UVDoc .yml",
+      "url": "https://drive.google.com/file/d/1yxHCLQBddB8yyQefxat4Lip7Jwj8gSdw/view?usp=drive_link",
+      "sha256": "be83d537b358f3ff87740e77e14a83ee9e9a7bb215c33d091b69e8bd5904fe39",
+      "size_bytes": 330
+    }
+  ]
+}

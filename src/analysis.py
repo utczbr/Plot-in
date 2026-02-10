@@ -9,6 +9,7 @@ from typing import List, Optional
 
 # Core components
 from core.model_manager import ModelManager
+from core.install_profile import apply_profile_environment, load_install_profile
 from utils import sanitize_for_json
 from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
@@ -157,29 +158,48 @@ def main():
     parser.add_argument('--output', required=True, help='Output directory')
     parser.add_argument(
         '--models-dir',
-        default=str(Path(__file__).resolve().parent / 'models'),
+        default=None,
         help='Models directory (default: src/models)'
     )
-    parser.add_argument('--ocr', default='Paddle', choices=['Paddle', 'EasyOCR'], help='OCR engine')
+    parser.add_argument('--profile', default=None, help='Optional install profile name')
+    parser.add_argument('--ocr', default=None, choices=['Paddle', 'EasyOCR'], help='OCR engine')
     parser.add_argument('--ocr-accuracy', default='Optimized', choices=['Fast', 'Optimized', 'Precise'], help='OCR accuracy')
     parser.add_argument('--calibration', default='PROSAC', 
                         choices=['Linear', 'PROSAC', 'neural', 'log', 'visual', 'fast'],
                         help='Calibration method (neural recommended for log-scale/non-linear axes)')
     parser.add_argument('--annotated', action='store_true', help='Save annotated images')
-    parser.add_argument('--language', default='en', help='Comma-separated list of languages for OCR')
+    parser.add_argument('--language', default=None, help='Comma-separated list of languages for OCR')
     
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    languages = [lang.strip() for lang in args.language.split(',')]
-    
+    profile = load_install_profile(args.profile)
+    apply_profile_environment(profile)
+    runtime_cfg = profile.get("runtime", {}) if isinstance(profile, dict) else {}
+
+    models_dir = (
+        args.models_dir
+        or runtime_cfg.get("models_dir")
+        or str(Path(__file__).resolve().parent / 'models')
+    )
+
+    ocr_backend = args.ocr or runtime_cfg.get("ocr_backend") or 'Paddle'
+    if args.language:
+        languages = [lang.strip() for lang in args.language.split(',') if lang.strip()]
+    else:
+        profile_langs = runtime_cfg.get("ocr_languages")
+        if isinstance(profile_langs, list) and profile_langs:
+            languages = [str(lang).strip() for lang in profile_langs if str(lang).strip()]
+        else:
+            languages = ['en']
+
     run_analysis_pipeline(
         input_dir=args.input,
         output_dir=args.output,
-        ocr_backend=args.ocr,
+        ocr_backend=ocr_backend,
         ocr_accuracy=args.ocr_accuracy,
         calibration_method=args.calibration,
-        models_dir=args.models_dir,
+        models_dir=models_dir,
         annotated=args.annotated,
         languages=languages
     )

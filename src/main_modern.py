@@ -515,9 +515,9 @@ class ModernChartAnalysisApp(QMainWindow):
         self._setup_ui()
         self.load_config()
         self.load_advanced_settings()
-        
-        # Start async OCR loading
-        self._start_ocr_loading(self.advanced_settings)
+
+        # Configure OCR readiness without forcing heavy EasyOCR preload at startup.
+        self._configure_ocr_startup_state(self.advanced_settings)
         # self.load_heavy_models()
 
         if PYQT_VERSION_STR:
@@ -739,6 +739,13 @@ class ModernChartAnalysisApp(QMainWindow):
     def load_advanced_settings(self):
         loaded_settings = load_settings_from_file(self.advanced_settings_file)
         if loaded_settings:
+            # Compatibility migration: EasyOCR GPU is unstable on many macOS setups.
+            if sys.platform == "darwin":
+                ocr_settings = loaded_settings.setdefault("ocr_settings", {})
+                if ocr_settings.get("easyocr_gpu", False):
+                    ocr_settings["easyocr_gpu"] = False
+                    perf_settings = loaded_settings.setdefault("performance", {})
+                    perf_settings["use_gpu"] = False
             self.advanced_settings = loaded_settings
             self.update_status("✅ Advanced settings loaded")
         else:
@@ -773,18 +780,41 @@ class ModernChartAnalysisApp(QMainWindow):
         if old_ocr_engine != new_ocr_engine or \
            old_ocr_settings.get('easyocr_gpu') != new_ocr_settings.get('easyocr_gpu') or \
            old_ocr_settings.get('languages') != new_ocr_settings.get('languages'):
-            self._start_ocr_loading(new_settings)
+            if new_ocr_engine == 'EasyOCR':
+                self._start_ocr_loading(new_settings)
+            else:
+                self._configure_ocr_startup_state(new_settings)
 
         self.advanced_settings = new_settings
         self.update_settings_tooltip()
         self.update_settings_indicator()
         self.update_status("Settings updated. Some changes may require reprocessing an image.")
 
+    def _configure_ocr_startup_state(self, settings):
+        """Set OCR readiness state without forcing EasyOCR model preload."""
+        ocr_engine_name = (settings or {}).get('ocr_engine', 'EasyOCR')
+        if ocr_engine_name != 'EasyOCR':
+            self.ocr_ready = True
+            self.run_batch_btn.setEnabled(True)
+            self.update_status("✅ OCR engine configured (Paddle mode).")
+            return
+
+        if not analysis.EASYOCR_AVAILABLE:
+            self.ocr_ready = False
+            self.run_batch_btn.setEnabled(True)
+            self.update_status("⚠️ EasyOCR not available.")
+            return
+
+        # Lazy-load EasyOCR only when user runs analysis.
+        self.ocr_ready = False
+        self.run_batch_btn.setEnabled(True)
+        self.update_status("ℹ️ EasyOCR selected. Model will load on first analysis run.")
+
     def _start_ocr_loading(self, settings):
         """Start async loading of OCR engine."""
         if self.ocr_loader_thread and self.ocr_loader_thread.isRunning():
-            self.ocr_loader_thread.cancel()
-            self.ocr_loader_thread.wait()
+            # If already loading, keep current worker to avoid multiple heavy downloads.
+            return
 
         ocr_engine_name = (settings or {}).get('ocr_engine', 'EasyOCR')
         needs_easyocr = ocr_engine_name == 'EasyOCR'
@@ -808,7 +838,7 @@ class ModernChartAnalysisApp(QMainWindow):
         
         self.ocr_loader_thread = OCRLoaderThread(settings, self)
         self.ocr_loader_thread.ocr_ready.connect(self._on_ocr_loaded)
-        self.ocr_loader_thread.error_occurred.connect(lambda msg: self.update_status(f"OCR load error: {msg}"))
+        self.ocr_loader_thread.error_occurred.connect(self._on_ocr_load_error)
         self.ocr_loader_thread.start()
 
     def _on_ocr_loaded(self, reader):
@@ -824,6 +854,13 @@ class ModernChartAnalysisApp(QMainWindow):
         
         # Explicit clean old resources if needed
         gc.collect()
+
+    def _on_ocr_load_error(self, message: str):
+        """Handle OCR preload errors without leaving the GUI stuck."""
+        self.ocr_ready = False
+        self.run_batch_btn.setEnabled(True)
+        self.update_status(f"OCR load error: {message}")
+        logging.error("OCR preload failed: %s", message)
 
     def apply_advanced_settings(self):
         if not self.advanced_settings:
@@ -843,7 +880,7 @@ class ModernChartAnalysisApp(QMainWindow):
         if button is None or not self.advanced_settings:
             return
         
-        ocr_engine = self.advanced_settings.get('ocr_settings', {}).get('engine', 'easyocr')
+        ocr_engine = self.advanced_settings.get('ocr_engine', 'EasyOCR')
         gpu_enabled = self.advanced_settings.get('ocr_settings', {}).get('easyocr_gpu', True)
         bar_threshold = self.advanced_settings.get('detection_thresholds', {}).get('bar_detection', 0.4)
         
@@ -1704,8 +1741,15 @@ Click to configure advanced options."""
         if not self.validate_paths():
             return
 
-        if (self.advanced_settings or {}).get("ocr_engine", "EasyOCR") == "EasyOCR" and not self.ocr_ready:
-            QMessageBox.information(self, "OCR Loading", "EasyOCR is still loading. Please wait.")
+        if (self.advanced_settings or {}).get("ocr_engine", "Paddle") == "EasyOCR" and not self.ocr_ready:
+            if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
+                self._start_ocr_loading(self.advanced_settings)
+            QMessageBox.information(
+                self,
+                "OCR Loading",
+                "EasyOCR is still loading/downloading models.\n"
+                "Please wait, or switch OCR Engine to Paddle in Settings for immediate runs.",
+            )
             return
 
         if self.is_processing or (self.batch_thread and self.batch_thread.isRunning()):
@@ -1888,9 +1932,16 @@ Click to configure advanced options."""
             self.update_status("❌ Cannot load image. Check paths")
             return
 
-        if (self.advanced_settings or {}).get("ocr_engine", "EasyOCR") == "EasyOCR" and not self.ocr_ready:
+        if (self.advanced_settings or {}).get("ocr_engine", "Paddle") == "EasyOCR" and not self.ocr_ready:
+            if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
+                self._start_ocr_loading(self.advanced_settings)
             self.update_status("⏳ Waiting for EasyOCR to finish loading...")
-            QMessageBox.information(self, "OCR Loading", "EasyOCR is still loading. Please wait.")
+            QMessageBox.information(
+                self,
+                "OCR Loading",
+                "EasyOCR is still loading/downloading models.\n"
+                "Please wait, or switch OCR Engine to Paddle in Settings for immediate runs.",
+            )
             return
 
         self.current_image_path = self.image_files[self.current_image_index]

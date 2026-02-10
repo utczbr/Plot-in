@@ -39,6 +39,11 @@ from services.service_container import create_service_container
 # Import from new modular structure
 from core.model_manager import ModelManager
 from core.config import MODE_CONFIGS, MODELS_CONFIG
+from core.install_profile import (
+    apply_profile_environment,
+    load_install_profile,
+    merge_dicts,
+)
 from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
 from utils import sanitize_for_json
@@ -208,9 +213,22 @@ class OCRLoaderThread(QThread):
             import easyocr
             languages = self.settings.get('ocr_settings', {}).get('languages', ['en', 'pt'])
             use_gpu = self.settings.get('ocr_settings', {}).get('easyocr_gpu', True)
+            download_enabled = self.settings.get('ocr_settings', {}).get(
+                'easyocr_download_enabled',
+                sys.platform != "darwin",
+            )
+
+            # Optional override for troubleshooting in controlled environments.
+            env_download = os.environ.get("EASYOCR_DOWNLOAD_ENABLED")
+            if env_download is not None:
+                download_enabled = env_download.strip().lower() in {"1", "true", "yes", "on"}
             
             # This is the heavy blocking call
-            reader = easyocr.Reader(languages, gpu=use_gpu)
+            reader = easyocr.Reader(
+                languages,
+                gpu=use_gpu,
+                download_enabled=download_enabled,
+            )
             
             if not self._cancel_event.is_set():
                 self.ocr_ready.emit(reader)
@@ -410,6 +428,13 @@ class ModernChartAnalysisApp(QMainWindow):
         self.extraction_thread = None
         self.base_path = Path(__file__).parent.resolve()
         self.project_root = self.base_path.parent
+        self.install_profile = load_install_profile()
+        apply_profile_environment(self.install_profile)
+        self.profile_runtime = (
+            self.install_profile.get("runtime", {})
+            if isinstance(self.install_profile, dict)
+            else {}
+        )
         self.icons_path = self.base_path / "ui" / "rendering" / "icons"
         self._icon_cache: Dict[Tuple[str, str, int], QIcon] = {}
 
@@ -746,11 +771,35 @@ class ModernChartAnalysisApp(QMainWindow):
                     ocr_settings["easyocr_gpu"] = False
                     perf_settings = loaded_settings.setdefault("performance", {})
                     perf_settings["use_gpu"] = False
+                # Prevent hour-long first-run stalls when EasyOCR weights must be downloaded.
+                # Users can override with EASYOCR_DOWNLOAD_ENABLED=1.
+                ocr_settings.setdefault("easyocr_download_enabled", False)
+            profile_settings = {}
+            if isinstance(self.install_profile, dict):
+                profile_settings = self.install_profile.get("advanced_settings", {})
+            if isinstance(profile_settings, dict) and profile_settings:
+                loaded_settings = merge_dicts(loaded_settings, profile_settings)
+
+            runtime_cfg = self.profile_runtime if isinstance(self.profile_runtime, dict) else {}
+            ocr_backend = runtime_cfg.get("ocr_backend")
+            if isinstance(ocr_backend, str) and ocr_backend.strip():
+                loaded_settings["ocr_engine"] = ocr_backend.strip()
+            runtime_languages = runtime_cfg.get("ocr_languages")
+            if isinstance(runtime_languages, list) and runtime_languages:
+                ocr_settings = loaded_settings.setdefault("ocr_settings", {})
+                ocr_settings["languages"] = [str(lang).strip() for lang in runtime_languages if str(lang).strip()]
+
             self.advanced_settings = loaded_settings
             self.update_status("✅ Advanced settings loaded")
         else:
             dialog = SettingsDialog()
-            self.advanced_settings = dialog.get_settings()
+            default_settings = dialog.get_settings()
+            profile_settings = {}
+            if isinstance(self.install_profile, dict):
+                profile_settings = self.install_profile.get("advanced_settings", {})
+            if isinstance(profile_settings, dict) and profile_settings:
+                default_settings = merge_dicts(default_settings, profile_settings)
+            self.advanced_settings = default_settings
     
     def save_advanced_settings(self):
         if self.advanced_settings:
@@ -808,7 +857,17 @@ class ModernChartAnalysisApp(QMainWindow):
         # Lazy-load EasyOCR only when user runs analysis.
         self.ocr_ready = False
         self.run_batch_btn.setEnabled(True)
-        self.update_status("ℹ️ EasyOCR selected. Model will load on first analysis run.")
+        download_enabled = (settings or {}).get("ocr_settings", {}).get(
+            "easyocr_download_enabled",
+            sys.platform != "darwin",
+        )
+        if download_enabled:
+            self.update_status("ℹ️ EasyOCR selected. Model will load on first analysis run.")
+        else:
+            self.update_status(
+                "ℹ️ EasyOCR selected (download disabled). "
+                "If weights are missing, switch to Paddle or pre-download EasyOCR models."
+            )
 
     def _start_ocr_loading(self, settings):
         """Start async loading of OCR engine."""
@@ -859,7 +918,14 @@ class ModernChartAnalysisApp(QMainWindow):
         """Handle OCR preload errors without leaving the GUI stuck."""
         self.ocr_ready = False
         self.run_batch_btn.setEnabled(True)
-        self.update_status(f"OCR load error: {message}")
+        lower_message = str(message).lower()
+        if "download_enabled" in lower_message or "missing" in lower_message:
+            self.update_status(
+                "OCR load error: EasyOCR model weights not available locally. "
+                "Switch to Paddle for immediate runs."
+            )
+        else:
+            self.update_status(f"OCR load error: {message}")
         logging.error("OCR preload failed: %s", message)
 
     def apply_advanced_settings(self):
@@ -1167,7 +1233,7 @@ Click to configure advanced options."""
         )
         config_layout.addWidget(output_row)
 
-        default_models_dir = str(self.base_path / "models")
+        default_models_dir = self._default_models_dir()
         self.models_dir_edit = QLineEdit(default_models_dir)
         models_row = self._create_path_row(
             "Models",
@@ -1513,6 +1579,12 @@ Click to configure advanced options."""
         except Exception as e:
             self.update_status(f"❌ Error saving config: {e}")
 
+    def _default_models_dir(self) -> str:
+        runtime_models_dir = self.profile_runtime.get("models_dir") if isinstance(self.profile_runtime, dict) else None
+        if runtime_models_dir:
+            return str(Path(runtime_models_dir).expanduser())
+        return str(self.base_path / "models")
+
     def load_config(self):
         try:
             config_path = self.project_root / "config" / CONFIG_FILE
@@ -1533,7 +1605,7 @@ Click to configure advanced options."""
                             config_data['models_dir'] = str(potential_new_path)
                             self.update_status("⚠️ Migrated config: 'Modulos' -> 'models'")
                 
-                self.models_dir_edit.setText(config_data.get("models_dir", str(self.base_path / "models")))
+                self.models_dir_edit.setText(config_data.get("models_dir", self._default_models_dir()))
                 conf = config_data.get("confidence", 0.4)
                 self.conf_slider.setValue(int(conf * 10))
                 self.update_slider_label(self.conf_slider.value())
@@ -3240,6 +3312,14 @@ if __name__ == "__main__":
     if not debug_enabled:
         logging.getLogger("PIL").setLevel(logging.WARNING)
         logging.getLogger("onnxruntime").setLevel(logging.WARNING)
+
+    startup_profile = load_install_profile()
+    if startup_profile:
+        apply_profile_environment(startup_profile)
+        logging.info(
+            "Active install profile: %s",
+            startup_profile.get("profile_name", startup_profile.get("name", "unknown")),
+        )
 
     logging.info("Root logger configured successfully.")
     

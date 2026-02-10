@@ -689,6 +689,7 @@ class SettingsDialog(QDialog):
             },
             'ocr_settings': {
                 'easyocr_gpu': sys.platform != "darwin",
+                'easyocr_download_enabled': sys.platform != "darwin",
                 'easyocr_contrast_ths': 0.1,
                 'easyocr_adjust_contrast': 0.5,
                 'easyocr_min_size': 10,

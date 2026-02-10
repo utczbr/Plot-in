@@ -1,0 +1,63 @@
+name: Build Installer Artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - install.py
+      - install_*.sh
+      - install_*.bat
+      - install_*.command
+      - installer/**
+      - src/core/install_profile.py
+      - src/requirements*.txt
+      - config/advanced_settings.json
+      - .github/workflows/installer-build.yml
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_tag: linux
+            target: onefile
+          - os: windows-latest
+            os_tag: windows
+            target: onefile
+          - os: macos-latest
+            os_tag: macos
+            target: app
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+
+      - name: Build installer
+        run: |
+          python installer/build_executables.py --name chart-analysis-installer-${{ matrix.os_tag }} --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chart-analysis-installer-${{ matrix.os_tag }}
+          path: |
+            dist/chart-analysis-installer-${{ matrix.os_tag }}*
+            dist/chart-analysis-installer-${{ matrix.os_tag }}.app
+          if-no-files-found: error

@@ -131,6 +131,8 @@ def sanitize_for_json(obj):
         return bool(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
+    elif isinstance(obj, Path):
+        return str(obj)
     elif isinstance(obj, ClassificationResult):
         return {
             "scale_labels": sanitize_for_json(obj.scale_labels),

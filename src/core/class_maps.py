@@ -49,10 +49,24 @@ CLASS_MAP_HEATMAP: Dict[int, str] = {
     8: 'significance_marker'
 }
 
-# Pie chart detection model
-CLASS_MAP_PIE: Dict[int, str] = {
-    0: 'chart', 1: 'slice', 2: 'axis_title', 3: 'legend',
-    4: 'chart_title', 5: 'data_label', 6: 'axis_labels'
+# Pie chart object detection model (kept for compatibility/training contract)
+CLASS_MAP_PIE_OBJ: Dict[int, str] = {
+    0: 'chart', 1: 'wedge', 2: 'legend', 3: 'chart_title',
+    4: 'data_label', 5: 'connector_line',
+}
+
+# Pie pose detection model used in runtime
+CLASS_MAP_PIE_POSE: Dict[int, str] = {
+    0: 'slice',
+}
+
+# Backward compatibility alias used by runtime paths
+CLASS_MAP_PIE: Dict[int, str] = CLASS_MAP_PIE_POSE
+
+# Area chart detection model (shared structure with line; uses same detection model)
+CLASS_MAP_AREA: Dict[int, str] = {
+    0: 'chart', 1: 'data_point', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Backward compatibility alias
@@ -61,10 +75,10 @@ CLASS_MAP_LINE_OBJ = CLASS_MAP_LINE
 
 def get_class_map(chart_type: str) -> Dict[int, str]:
     """Get the appropriate class map for a chart type.
-    
+
     Args:
-        chart_type: One of 'bar', 'box', 'line', 'scatter', 'histogram', 'heatmap', 'pie'
-    
+        chart_type: One of 'bar', 'box', 'line', 'scatter', 'histogram', 'heatmap', 'pie', 'area'
+
     Returns:
         Dictionary mapping class IDs to class names
     """
@@ -75,7 +89,8 @@ def get_class_map(chart_type: str) -> Dict[int, str]:
         'scatter': CLASS_MAP_SCATTER,
         'histogram': CLASS_MAP_HISTOGRAM,
         'heatmap': CLASS_MAP_HEATMAP,
-        'pie': CLASS_MAP_PIE,
+        'pie': CLASS_MAP_PIE_POSE,
+        'area': CLASS_MAP_AREA,
     }.get(chart_type, CLASS_MAP_BAR)
 
 
@@ -88,6 +103,9 @@ __all__ = [
     'CLASS_MAP_SCATTER',
     'CLASS_MAP_HISTOGRAM',
     'CLASS_MAP_HEATMAP',
+    'CLASS_MAP_PIE_OBJ',
+    'CLASS_MAP_PIE_POSE',
     'CLASS_MAP_PIE',
+    'CLASS_MAP_AREA',
     'get_class_map',
 ]

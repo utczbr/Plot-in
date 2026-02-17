@@ -2,13 +2,17 @@ import sys
 from pathlib import Path
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root / 'scripts'))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+from shared.state_root import resolve_state_root
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QScrollArea, QFrame, QSlider, QTabWidget,
-    QCheckBox, QSplitter, QProgressBar, QGridLayout, QGroupBox, QDialog, QSizePolicy
+    QCheckBox, QSplitter, QProgressBar, QProgressDialog, QGridLayout, QGroupBox,
+    QDialog, QSizePolicy, QComboBox, QTableWidget, QTableWidgetItem
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR, QSize
+from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR, QSize
 import multiprocessing
 import threading
 from collections import OrderedDict
@@ -51,8 +55,15 @@ import analysis  # Keep for backward compatibility where needed
 
 from visual.settings_dialog import SettingsDialog, save_settings_to_file, load_settings_from_file
 from visual.profiling import PerformanceMonitor, timed
+from visual.pie_geometry import extract_slice_overlay_points
+from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 
 CONFIG_FILE = "gui_config.json"
+
+from core.export_manager import ExportManager
+
+PROTOCOL_COLUMNS = ExportManager.PROTOCOL_COLUMNS
+READONLY_COLUMNS = frozenset({'source_file', 'page_index', 'chart_type', 'confidence'})
 
 
 def _extract_calibration_r2(calibration_entry: Any) -> Optional[float]:
@@ -193,6 +204,7 @@ def _normalize_result_payload_for_gui(
         image_dimensions.setdefault("width", int(width))
         image_dimensions.setdefault("height", int(height))
     normalized["image_dimensions"] = image_dimensions
+    normalized["data_tab_model"] = build_data_tab_model(normalized)
 
     return normalized
 
@@ -245,7 +257,7 @@ class ModernAnalysisThread(QThread):
     analysis_complete = pyqtSignal(object)
     progress_updated = pyqtSignal(int)
 
-    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", parent=None):
+    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, parent=None):
         super().__init__(parent)
         self.image_path = image_path
         self.conf = conf
@@ -253,6 +265,7 @@ class ModernAnalysisThread(QThread):
         self.advanced_settings = advanced_settings
         self.models_dir = models_dir
         self.context = context
+        self.provenance = provenance
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -283,7 +296,10 @@ class ModernAnalysisThread(QThread):
             
             analysis_manager.set_advanced_settings(self.advanced_settings)
 
-            result = analysis_manager.run_single_analysis(self.image_path, self.conf, self.output_path)
+            result = analysis_manager.run_single_analysis(
+                self.image_path, self.conf, self.output_path,
+                provenance=self.provenance,
+            )
 
             self.progress_updated.emit(100)
 
@@ -428,6 +444,7 @@ class ModernChartAnalysisApp(QMainWindow):
         self.extraction_thread = None
         self.base_path = Path(__file__).parent.resolve()
         self.project_root = self.base_path.parent
+        self._state_root = resolve_state_root()
         self.install_profile = load_install_profile()
         apply_profile_environment(self.install_profile)
         self.profile_runtime = (
@@ -439,7 +456,7 @@ class ModernChartAnalysisApp(QMainWindow):
         self._icon_cache: Dict[Tuple[str, str, int], QIcon] = {}
 
         self.advanced_settings = None
-        self.advanced_settings_file = self.project_root / "config" / "advanced_settings.json"
+        self.advanced_settings_file = self._state_root / "config" / "advanced_settings.json"
         self.easyocr_reader = None  # Initialize as None, will be set during processing
 
 
@@ -464,11 +481,18 @@ class ModernChartAnalysisApp(QMainWindow):
         self.setMinimumSize(1000, 600)  # Reduced minimum size for smaller screens
 
         self.image_files = []
+        self._resolved_assets = []
+        self._pdf_render_temp_dir = None
+        self._resolve_worker = None
         self.current_image_index = -1
         self.current_image_path = None
         self.original_pil_image = None
         self.current_analysis_result = None
         self.analysis_results_widgets = {}
+        self.data_tab_bindings: Dict[Tuple[int, int], Dict[str, Any]] = {}
+        self.data_row_overlay_map: Dict[int, Dict[str, Any]] = {}
+        self.data_tab_page_state: Dict[str, int] = {}
+        self.data_tab_sort_state: Dict[str, Tuple[int, Qt.SortOrder]] = {}
         self.visibility_checks = {}
         self.zoom_level = 1.0
         self.highlighted_bbox = None
@@ -496,6 +520,7 @@ class ModernChartAnalysisApp(QMainWindow):
         
         self.colors = {
             "bar":         {"normal": (0, 120, 255),   "highlight": (30, 144, 255)},
+            "slice":       {"normal": (255, 90, 90),   "highlight": (255, 140, 140)},
             "line":        {"normal": (255, 0, 0),     "highlight": (255, 99, 71)},
             "scatter":     {"normal": (0, 128, 0),     "highlight": (50, 205, 50)},
             "box":         {"normal": (128, 0, 128),   "highlight": (147, 112, 219)},
@@ -1216,11 +1241,11 @@ Click to configure advanced options."""
         config_layout.setContentsMargins(8, 8, 8, 8)
 
         self.input_path_edit = QLineEdit()
-        self.input_path_edit.setPlaceholderText("Input folder")
+        self.input_path_edit.setPlaceholderText("Input folder or file")
         input_row = self._create_path_row(
             "Input",
             self.input_path_edit,
-            lambda: self.browse_directory(self.input_path_edit, self.handle_input_path_change),
+            lambda: self.browse_input(self.input_path_edit, self.handle_input_path_change),
         )
         config_layout.addWidget(input_row)
 
@@ -1286,6 +1311,7 @@ Click to configure advanced options."""
         self._create_ocr_tab()
         self._create_bars_tab()
         self._create_view_tab()
+        self._create_protocol_tab()
 
     def _create_ocr_tab(self):
         ocr_tab = QWidget()
@@ -1338,63 +1364,100 @@ Click to configure advanced options."""
         return group
 
     def _create_bars_tab(self):
-        bar_tab = QWidget()
-        bar_layout = QVBoxLayout(bar_tab)
-        bar_layout.setContentsMargins(4, 4, 4, 4)
-        
-        bar_scroll = QScrollArea()
-        bar_scroll.setWidgetResizable(True)
-        
-        self.bar_content_widget = QWidget()
-        self.bar_content_layout = QVBoxLayout(self.bar_content_widget)
-        self.bar_content_layout.setSpacing(8)
-        self.bar_content_layout.setContentsMargins(8, 8, 8, 8)
-        
-        scale_group = QGroupBox("Scale")
+        # Compatibility wrapper for legacy call sites.
+        self._create_data_tab()
+
+    def _create_data_tab(self):
+        data_tab = QWidget()
+        data_layout = QVBoxLayout(data_tab)
+        data_layout.setContentsMargins(4, 4, 4, 4)
+
+        data_scroll = QScrollArea()
+        data_scroll.setWidgetResizable(True)
+
+        self.data_content_widget = QWidget()
+        self.data_content_layout = QVBoxLayout(self.data_content_widget)
+        self.data_content_layout.setSpacing(8)
+        self.data_content_layout.setContentsMargins(8, 8, 8, 8)
+
+        scale_group = QGroupBox("Scale & Actions")
         scale_layout = QVBoxLayout(scale_group)
-        
+
         self.scale_info_frame = QFrame()
         scale_info_layout = QHBoxLayout(self.scale_info_frame)
         scale_info_layout.setContentsMargins(4, 4, 4, 4)
-        
+
         self.scale_r2_label = QLabel("R²: N/A")
         self.scale_r2_label.setStyleSheet("QLabel { font-weight: bold; font-size: 11px; }")
         scale_info_layout.addWidget(self.scale_r2_label)
-        
+
         self.recal_btn = QPushButton("Recalibrate")
         recal_icon_px = self._scaled_icon_px(14)
         self.recal_btn.setIcon(self.get_icon("repeat-solid-full.svg", color="#c5c5c5", size=recal_icon_px))
         self.recal_btn.setIconSize(QSize(recal_icon_px, recal_icon_px))
         self.recal_btn.clicked.connect(self.recalibrate_scale)
-        self.recal_btn.setMaximumWidth(120)
-        recal_style = (
-            "QPushButton { "
-            "    background-color: #FF9800; "
-            "    font-size: 10px; "
-            "    padding: 4px 8px; "
-            "    max-height: 28px; "
-            "} "
-            "QPushButton:hover { "
-            "    background-color: #FFB74D; "
-            "}"
+        self.recal_btn.setMaximumWidth(140)
+        self.recal_btn.setStyleSheet(
+            "QPushButton { background-color: #FF9800; font-size: 10px; padding: 4px 8px; max-height: 28px; } "
+            "QPushButton:hover { background-color: #FFB74D; } "
+            "QPushButton:disabled { background-color: #5a5a5a; color: #9a9a9a; }"
         )
-        self.recal_btn.setStyleSheet(recal_style)
         scale_info_layout.addWidget(self.recal_btn)
         scale_info_layout.addStretch()
-        
         scale_layout.addWidget(self.scale_info_frame)
-        self.bar_content_layout.addWidget(scale_group)
-        
-        self.bars_group = QGroupBox("Detected Bars")
-        self.bars_layout = QVBoxLayout(self.bars_group)
-        self.bars_layout.setSpacing(4)
-        self.bar_content_layout.addWidget(self.bars_group)
-        
-        self.bar_content_layout.addStretch()
-        bar_scroll.setWidget(self.bar_content_widget)
-        bar_layout.addWidget(bar_scroll)
-        
-        self.results_tab_widget.addTab(bar_tab, "Data")
+
+        self.data_summary_label = QLabel("Chart: - | Rows: 0")
+        self.data_summary_label.setStyleSheet("QLabel { color: #bdbdbd; font-size: 10px; }")
+        scale_layout.addWidget(self.data_summary_label)
+        self.data_content_layout.addWidget(scale_group)
+
+        self.data_pagination_frame = QFrame()
+        data_pagination_layout = QHBoxLayout(self.data_pagination_frame)
+        data_pagination_layout.setContentsMargins(4, 2, 4, 2)
+        data_pagination_layout.setSpacing(6)
+        self.data_prev_btn = QPushButton("Previous")
+        self.data_prev_btn.setMaximumWidth(90)
+        self.data_prev_btn.clicked.connect(self._go_to_prev_data_page)
+        self.data_next_btn = QPushButton("Next")
+        self.data_next_btn.setMaximumWidth(90)
+        self.data_next_btn.clicked.connect(self._go_to_next_data_page)
+        self.data_page_label = QLabel("Page 1 / 1")
+        self.data_page_label.setStyleSheet("QLabel { color: #bdbdbd; font-size: 10px; }")
+        data_pagination_layout.addWidget(self.data_prev_btn)
+        data_pagination_layout.addWidget(self.data_next_btn)
+        data_pagination_layout.addWidget(self.data_page_label)
+        data_pagination_layout.addStretch()
+        self.data_pagination_frame.setVisible(False)
+        self.data_content_layout.addWidget(self.data_pagination_frame)
+
+        self.data_group = QGroupBox("Detected Data")
+        data_group_layout = QVBoxLayout(self.data_group)
+        data_group_layout.setContentsMargins(4, 8, 4, 6)
+        data_group_layout.setSpacing(4)
+
+        self.data_table = QTableWidget()
+        self.data_table.setAlternatingRowColors(True)
+        self.data_table.setMouseTracking(True)
+        self.data_table.cellEntered.connect(self._on_data_table_cell_entered)
+        self.data_table.viewport().installEventFilter(self)
+        header = self.data_table.horizontalHeader()
+        if header is not None:
+            header.setSortIndicatorShown(True)
+            header.setStretchLastSection(True)
+            header.sortIndicatorChanged.connect(self._on_data_sort_changed)
+        data_group_layout.addWidget(self.data_table)
+        self.data_content_layout.addWidget(self.data_group)
+
+        self.data_content_layout.addStretch()
+        data_scroll.setWidget(self.data_content_widget)
+        data_layout.addWidget(data_scroll)
+
+        # Legacy aliases kept for backward compatibility in existing code paths.
+        self.bar_content_widget = self.data_content_widget
+        self.bar_content_layout = self.data_content_layout
+        self.bars_group = self.data_group
+
+        self.results_tab_widget.addTab(data_tab, "Data")
 
     def _create_view_tab(self):
         view_tab = QWidget()
@@ -1413,6 +1476,57 @@ Click to configure advanced options."""
         view_layout.addWidget(view_scroll)
         
         self.results_tab_widget.addTab(view_tab, "View")
+
+    def _create_protocol_tab(self):
+        proto_tab = QWidget()
+        proto_layout = QVBoxLayout(proto_tab)
+        proto_layout.setContentsMargins(4, 4, 4, 4)
+
+        # --- filter bar ---
+        filter_frame = QFrame()
+        filter_layout = QHBoxLayout(filter_frame)
+        filter_layout.setContentsMargins(4, 2, 4, 2)
+
+        filter_layout.addWidget(QLabel("Outcome:"))
+        self.proto_outcome_combo = QComboBox()
+        self.proto_outcome_combo.addItem("All")
+        self.proto_outcome_combo.currentIndexChanged.connect(self._apply_protocol_filters)
+        filter_layout.addWidget(self.proto_outcome_combo)
+
+        filter_layout.addWidget(QLabel("Group:"))
+        self.proto_group_combo = QComboBox()
+        self.proto_group_combo.addItem("All")
+        self.proto_group_combo.currentIndexChanged.connect(self._apply_protocol_filters)
+        filter_layout.addWidget(self.proto_group_combo)
+
+        filter_layout.addWidget(QLabel("Status:"))
+        self.proto_status_combo = QComboBox()
+        self.proto_status_combo.addItems(["All", "auto", "corrected", "reviewed"])
+        self.proto_status_combo.currentIndexChanged.connect(self._apply_protocol_filters)
+        filter_layout.addWidget(self.proto_status_combo)
+
+        self.proto_load_ctx_btn = QPushButton("Load Context...")
+        self.proto_load_ctx_btn.clicked.connect(self._load_context_file)
+        filter_layout.addWidget(self.proto_load_ctx_btn)
+
+        filter_layout.addStretch()
+        proto_layout.addWidget(filter_frame)
+
+        # --- table ---
+        self.protocol_table = QTableWidget()
+        self.protocol_table.setColumnCount(len(PROTOCOL_COLUMNS))
+        self.protocol_table.setHorizontalHeaderLabels(PROTOCOL_COLUMNS)
+        self.protocol_table.setAlternatingRowColors(True)
+        self.protocol_table.horizontalHeader().setStretchLastSection(True)
+        self.protocol_table.cellChanged.connect(self._on_protocol_cell_changed)
+        proto_layout.addWidget(self.protocol_table)
+
+        # --- export button ---
+        export_btn = QPushButton("Export Protocol CSV")
+        export_btn.clicked.connect(self._export_protocol_csv)
+        proto_layout.addWidget(export_btn)
+
+        self.results_tab_widget.addTab(proto_tab, "Protocol")
 
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
@@ -1560,6 +1674,10 @@ Click to configure advanced options."""
         self.cleanup_resources()
         self.save_config()
         self.save_advanced_settings()
+        # Clean up temp PDF render directory
+        if self._pdf_render_temp_dir and Path(self._pdf_render_temp_dir).exists():
+            import shutil
+            shutil.rmtree(self._pdf_render_temp_dir, ignore_errors=True)
         super().closeEvent(event)
 
     def save_config(self):
@@ -1571,8 +1689,8 @@ Click to configure advanced options."""
             "vertical_splitter_sizes": self.vertical_splitter.sizes() if hasattr(self, 'vertical_splitter') else [400, 300]
         }
         try:
-            config_dir = self.project_root / "config"
-            config_dir.mkdir(exist_ok=True)
+            config_dir = self._state_root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
             with open(config_dir / CONFIG_FILE, 'w') as f:
                 json.dump(config_data, f, indent=2)
             self.update_status("✅ Configuration saved")
@@ -1587,12 +1705,12 @@ Click to configure advanced options."""
 
     def load_config(self):
         try:
-            config_path = self.project_root / "config" / CONFIG_FILE
+            config_path = self._state_root / "config" / CONFIG_FILE
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
                     config_data = json.load(f)
                 self.input_path_edit.setText(config_data.get("input_path", ""))
-                self.output_path_edit.setText(config_data.get("output_path", str(self.project_root / "output")))
+                self.output_path_edit.setText(config_data.get("output_path", str(self._state_root / "output")))
                 
                 # Migration logic for models_dir
                 models_dir_from_config = config_data.get("models_dir")
@@ -1632,9 +1750,26 @@ Click to configure advanced options."""
             if on_path_set:
                 on_path_set(path)
 
+    def browse_input(self, line_edit_widget, on_path_set=None):
+        """Allow user to select a folder, PDF file, or image file(s)."""
+        path = QFileDialog.getExistingDirectory(self, "Select Input Folder")
+        if not path:
+            files, _ = QFileDialog.getOpenFileNames(
+                self, "Select Input File(s)", "",
+                "Supported files (*.pdf *.png *.jpg *.jpeg *.bmp *.tiff *.tif);;"
+                "PDF files (*.pdf);;"
+                "Image files (*.png *.jpg *.jpeg *.bmp *.tiff *.tif)",
+            )
+            if files:
+                path = files[0] if len(files) == 1 else str(Path(files[0]).parent)
+        if path:
+            line_edit_widget.setText(path)
+            if on_path_set:
+                on_path_set(path)
+
     def handle_input_path_change(self, path_str):
         self.populate_file_list()
-        self.update_status(f"Folder loaded. {len(self.image_files)} images found.")
+        self.update_status(f"Input loaded. {len(self.image_files)} chart(s) found.")
 
     def _required_model_relative_paths(self) -> List[Path]:
         required = [Path(MODELS_CONFIG.classification)]
@@ -1706,7 +1841,7 @@ Click to configure advanced options."""
 
         missing_paths = []
         if not input_path_text:
-            missing_paths.append("Input folder")
+            missing_paths.append("Input path")
         if not output_path_text:
             missing_paths.append("Output folder")
         if not models_path_text:
@@ -1717,8 +1852,11 @@ Click to configure advanced options."""
             return False
 
         input_path = Path(input_path_text)
-        if not input_path.exists() or not input_path.is_dir():
-            QMessageBox.critical(self, "Invalid Input Folder", f"Input folder not found:\n{input_path}")
+        if not input_path.exists():
+            QMessageBox.critical(self, "Invalid Input", f"Input path not found:\n{input_path}")
+            return False
+        if not input_path.is_dir() and not input_path.is_file():
+            QMessageBox.critical(self, "Invalid Input", f"Input path is not a file or folder:\n{input_path}")
             return False
 
         output_path = Path(output_path_text)
@@ -1750,6 +1888,17 @@ Click to configure advanced options."""
 
         return True
 
+    def _get_render_dir(self, input_path: Path) -> Path:
+        """Return the directory for PDF-rendered chart images."""
+        output_str = self.output_path_edit.text()
+        if output_str:
+            return Path(output_str) / "pdf_renders"
+        # No output path set — use temp dir to avoid polluting input dir
+        if self._pdf_render_temp_dir is None:
+            import tempfile
+            self._pdf_render_temp_dir = tempfile.mkdtemp(prefix="chart_pdf_")
+        return Path(self._pdf_render_temp_dir)
+
     def populate_file_list(self):
         for i in reversed(range(self.file_list_layout.count())):
             child = self.file_list_layout.takeAt(i)
@@ -1758,25 +1907,87 @@ Click to configure advanced options."""
 
         path_str = self.input_path_edit.text()
         if not path_str:
-            label = QLabel("Invalid folder")
+            label = QLabel("Invalid input path")
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
 
         path = Path(path_str)
-        if not path.is_dir():
-            label = QLabel("Invalid folder")
+        if not path.exists():
+            label = QLabel("Invalid input path")
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
 
-        self.image_files = sorted([
-            str(p) for p in path.iterdir()
-            if p.is_file() and p.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
-        ])
+        # Check if any PDFs are present (need threaded expansion)
+        has_pdfs = False
+        if path.is_dir():
+            has_pdfs = any(
+                p.suffix.lower() == '.pdf' for p in path.iterdir() if p.is_file()
+            )
+        elif path.is_file() and path.suffix.lower() == '.pdf':
+            has_pdfs = True
+
+        if has_pdfs:
+            self._start_pdf_resolve_worker(path)
+        else:
+            # Fast path: image-only, no threading needed
+            from core.input_resolver import resolve_input_assets
+            render_dir = self._get_render_dir(path)
+            assets = resolve_input_assets(
+                input_path=path, render_dir=render_dir, input_type='image',
+            )
+            self._finish_populate_file_list(assets)
+
+    def _start_pdf_resolve_worker(self, input_path: Path):
+        from core.input_resolver import resolve_input_assets
+
+        render_dir = self._get_render_dir(input_path)
+
+        progress = QProgressDialog(
+            "Extracting charts from PDFs...", "Cancel", 0, 0, self,
+        )
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(500)
+
+        class _ResolveWorker(QThread):
+            finished_signal = pyqtSignal(list)
+            status_signal = pyqtSignal(str)
+
+            def __init__(self, path, rdir, parent=None):
+                super().__init__(parent)
+                self.path = path
+                self.rdir = rdir
+
+            def run(self):
+                result = resolve_input_assets(
+                    input_path=self.path,
+                    render_dir=self.rdir,
+                    progress_callback=lambda msg: self.status_signal.emit(msg),
+                )
+                self.finished_signal.emit(result)
+
+        self._resolve_worker = _ResolveWorker(input_path, render_dir, parent=self)
+        self._resolve_worker.status_signal.connect(
+            lambda msg: progress.setLabelText(msg),
+        )
+        self._resolve_worker.finished_signal.connect(
+            lambda assets: self._on_resolve_finished(assets, progress),
+        )
+        progress.canceled.connect(self._resolve_worker.terminate)
+        self._resolve_worker.start()
+
+    def _on_resolve_finished(self, assets, progress):
+        progress.close()
+        self._finish_populate_file_list(assets)
+
+    def _finish_populate_file_list(self, assets):
+        """Populate the file list UI from resolved assets."""
+        self._resolved_assets = assets
+        self.image_files = [str(a.image_path) for a in assets]
 
         if not self.image_files:
-            label = QLabel("No images found")
+            label = QLabel("No charts found")
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
@@ -1789,7 +2000,13 @@ Click to configure advanced options."""
             btn.setIcon(self.get_icon("image-solid-full.svg", color="#bfbfbf", size=image_icon_px))
             btn.setIconSize(QSize(image_icon_px, image_icon_px))
             btn.setFlat(True)
-            btn.setToolTip(base_name)
+
+            # Enhanced tooltip for PDF-sourced entries
+            asset = self._resolved_assets[i]
+            if asset.source_document:
+                btn.setToolTip(f"[PDF p.{asset.page_index}] {base_name}")
+            else:
+                btn.setToolTip(base_name)
             btn_style = (
                 "QPushButton {"
                     "    text-align: left;"
@@ -2045,13 +2262,20 @@ Click to configure advanced options."""
             self.analysis_thread.deleteLater()
         
         try:
+            # Resolve provenance from current asset if available
+            _provenance = None
+            if self._resolved_assets and self.current_image_index < len(self._resolved_assets):
+                from core.input_resolver import asset_provenance_dict
+                _provenance = asset_provenance_dict(self._resolved_assets[self.current_image_index])
+
             self.analysis_thread = ModernAnalysisThread(
-                self.current_image_path, 
-                self.conf_slider.value() / 10.0, 
+                self.current_image_path,
+                self.conf_slider.value() / 10.0,
                 self.output_path_edit.text(),
                 self.advanced_settings,
                 self.models_dir_edit.text(),
                 self.context,
+                provenance=_provenance,
                 parent=self
             )
             self.analysis_thread.status_updated.connect(self.update_status)
@@ -2099,17 +2323,30 @@ Click to configure advanced options."""
                 if child.widget():
                     child.widget().deleteLater()
             section_info['widgets'].clear()
-        
-        while self.bars_layout.count():
-            child = self.bars_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+
+        if hasattr(self, 'data_table'):
+            self.data_table.blockSignals(True)
+            self.data_table.clearContents()
+            self.data_table.setRowCount(0)
+            self.data_table.setColumnCount(0)
+            self.data_table.blockSignals(False)
+        if hasattr(self, 'data_summary_label'):
+            self.data_summary_label.setText("Chart: - | Rows: 0")
+        if hasattr(self, 'data_pagination_frame'):
+            self.data_pagination_frame.setVisible(False)
+        self.data_tab_bindings.clear()
+        self.data_row_overlay_map.clear()
         
         for checkbox in self.view_checkboxes_pool.values():
             checkbox.setVisible(False)
         
         self.analysis_results_widgets.clear()
         self.visibility_checks.clear()
+
+        if hasattr(self, 'protocol_table'):
+            self.protocol_table.blockSignals(True)
+            self.protocol_table.setRowCount(0)
+            self.protocol_table.blockSignals(False)
 
     def _update_ui_with_results(self):
         logging.debug("_update_ui_with_results called")
@@ -2123,11 +2360,16 @@ Click to configure advanced options."""
         self._populate_ocr_tab()
         logging.debug("OCR widgets created: %s", len(self.analysis_results_widgets))
         
-        self._populate_bars_tab()
-        bars_count = len(self.current_analysis_result.get('bars', [])) if self.current_analysis_result else 0
-        logging.debug("Bars tab populated with %s bars", bars_count)
+        self._populate_data_tab()
+        data_rows = 0
+        if self.current_analysis_result:
+            data_model = self.current_analysis_result.get('data_tab_model', {})
+            if isinstance(data_model, dict):
+                data_rows = len(data_model.get('rows', []))
+        logging.debug("Data tab populated with %s rows", data_rows)
         
         self._populate_view_tab()
+        self._populate_protocol_tab()
 
         self.results_tab_widget.setVisible(True)
         logging.debug("Results tab widget made visible")
@@ -2140,6 +2382,7 @@ Click to configure advanced options."""
             
             detections = self.current_analysis_result.get('detections', {})
             metadata = self.current_analysis_result.get('metadata', {})
+            chart_type = str(self.current_analysis_result.get('chart_type', '')).lower()
             
             assigned_bar_labels = self.current_analysis_result.get('_assigned_bar_labels', {})
             bar_label_texts = set(assigned_bar_labels.get('texts', []))
@@ -2227,8 +2470,8 @@ Click to configure advanced options."""
                     target_section = "scale_label" if looks_numeric else "tick_label"
                     _extend_section(target_section, "axis_labels", [item])
 
-            # Fallback: use extracted bar tick labels only if no tick-label section exists.
-            if not section_records["tick_label"]:
+            # Fallback: use extracted bar tick labels only for bar-like charts.
+            if not section_records["tick_label"] and chart_type in {"bar", "histogram"}:
                 for bar in self.current_analysis_result.get("bars", []):
                     if isinstance(bar, dict):
                         tick_label = bar.get("tick_label")
@@ -2331,159 +2574,249 @@ Click to configure advanced options."""
             self.ocr_content_widget.update()
 
     def _populate_bars_tab(self):
+        # Compatibility wrapper for legacy call sites.
+        self._populate_data_tab()
+
+    def _go_to_prev_data_page(self):
         if not self.current_analysis_result:
-            logging.debug("_populate_bars_tab: no analysis result")
             return
-        
-        scale_info = self.current_analysis_result.get('scale_info', {})
+        data_model = self.current_analysis_result.get("data_tab_model", {})
+        if not isinstance(data_model, dict):
+            return
+        chart_type = str(data_model.get("summary", {}).get("chart_type", "")).lower()
+        current_page = self.data_tab_page_state.get(chart_type, 0)
+        if current_page <= 0:
+            return
+        self.data_tab_page_state[chart_type] = current_page - 1
+        self._populate_data_tab()
+
+    def _go_to_next_data_page(self):
+        if not self.current_analysis_result:
+            return
+        data_model = self.current_analysis_result.get("data_tab_model", {})
+        if not isinstance(data_model, dict):
+            return
+        summary = data_model.get("summary", {})
+        chart_type = str(summary.get("chart_type", "")).lower()
+        pagination = data_model.get("pagination", {})
+        total_pages = max(1, int(pagination.get("total_pages", 1)))
+        current_page = self.data_tab_page_state.get(chart_type, 0)
+        if current_page >= total_pages - 1:
+            return
+        self.data_tab_page_state[chart_type] = current_page + 1
+        self._populate_data_tab()
+
+    def _on_data_sort_changed(self, column: int, order: Qt.SortOrder):
+        if not self.current_analysis_result:
+            return
+        data_model = self.current_analysis_result.get("data_tab_model", {})
+        if not isinstance(data_model, dict):
+            return
+        chart_type = str(data_model.get("summary", {}).get("chart_type", "")).lower()
+        if chart_type:
+            self.data_tab_sort_state[chart_type] = (int(column), order)
+
+    def _rebuild_data_bindings_from_table(self):
+        self.data_tab_bindings.clear()
+        self.data_row_overlay_map.clear()
+        if not hasattr(self, "data_table"):
+            return
+        for row in range(self.data_table.rowCount()):
+            overlay = None
+            for col in range(self.data_table.columnCount()):
+                item = self.data_table.item(row, col)
+                if item is None:
+                    continue
+                binding = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(binding, dict):
+                    self.data_tab_bindings[(row, col)] = dict(binding)
+                if overlay is None:
+                    candidate = item.data(Qt.ItemDataRole.UserRole + 1)
+                    if isinstance(candidate, dict):
+                        overlay = candidate
+            if overlay:
+                self.data_row_overlay_map[row] = overlay
+
+    def _on_data_table_cell_entered(self, row: int, _col: int):
+        overlay = self.data_row_overlay_map.get(row, {})
+        bbox = overlay.get("bbox") if isinstance(overlay, dict) else None
+        class_name = overlay.get("class_name") if isinstance(overlay, dict) else None
+        if bbox:
+            self.on_widget_hover_enter(bbox, class_name or "other")
+        else:
+            self.on_widget_hover_leave()
+
+    def eventFilter(self, watched, event):
+        if (
+            hasattr(self, "data_table")
+            and watched == self.data_table.viewport()
+            and event.type() == QEvent.Type.Leave
+        ):
+            self.on_widget_hover_leave()
+        return super().eventFilter(watched, event)
+
+    def _populate_data_tab(self):
+        if not self.current_analysis_result:
+            logging.debug("_populate_data_tab: no analysis result")
+            return
+
+        data_model = self.current_analysis_result.get("data_tab_model")
+        if not isinstance(data_model, dict):
+            data_model = build_data_tab_model(self.current_analysis_result)
+            self.current_analysis_result["data_tab_model"] = data_model
+
+        columns = data_model.get("columns", [])
+        rows = data_model.get("rows", [])
+        summary = data_model.get("summary", {})
+        pagination = data_model.get("pagination", {})
+        empty_message = str(data_model.get("empty_message", "No editable data found."))
+        chart_type = str(summary.get("chart_type", self.current_analysis_result.get("chart_type", ""))).lower()
+
+        if not isinstance(columns, list):
+            columns = []
+        if not isinstance(rows, list):
+            rows = []
+
+        scale_info = self.current_analysis_result.get("scale_info", {})
         logging.debug("Scale info: %s", scale_info)
-        r_squared = scale_info.get('r_squared')
-        
+        r_squared = scale_info.get("r_squared")
         if r_squared is not None:
             confidence_color = "#4CAF50" if r_squared > 0.9 else "#FF9800" if r_squared > 0.7 else "#F44336"
             self.scale_r2_label.setText(f"R²: {r_squared:.4f}")
-            self.scale_r2_label.setStyleSheet(f"QLabel {{ color: {confidence_color}; font-weight: bold; font-size: 11px; }}")
+            self.scale_r2_label.setStyleSheet(
+                f"QLabel {{ color: {confidence_color}; font-weight: bold; font-size: 11px; }}"
+            )
         else:
             self.scale_r2_label.setText("R²: N/A")
             self.scale_r2_label.setStyleSheet("QLabel { color: #888888; font-size: 11px; }")
-        
-        while self.bars_layout.count():
-            child = self.bars_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        
-        bars = self.current_analysis_result.get('bars', [])
-        
-        if not bars:
-            no_bars_label = QLabel("No bars detected")
-            no_bars_label.setStyleSheet("QLabel { color: #888888; font-style: italic; }")
-            self.bars_layout.addWidget(no_bars_label)
-            return
-        
-        for idx, bar in enumerate(bars):
-            bar_frame = self._create_bar_widget(idx, bar)
-            self.bars_layout.addWidget(bar_frame)
-        
-        self.bars_layout.addStretch()
 
-    def _create_bar_widget(self, idx, bar):
-        bar_frame = QFrame()
-        default_style = (
-            "QFrame {"
-            "    border: 1px solid #3f3f3f;"
-            "    border-radius: 4px;"
-            "    margin: 1px;"
-            "    background-color: #2a2a2a;"
-            "}"
+        self.data_group.setTitle(f"{chart_type.title() if chart_type else 'Chart'} Data")
+        row_count = int(summary.get("row_count", len(rows)))
+        editable_count = int(summary.get("editable_count", 0))
+        self.data_summary_label.setText(
+            f"Chart: {chart_type or '-'} | Rows: {row_count} | Editable rows: {editable_count}"
         )
-        expanded_style = (
-            "QFrame {"
-            "    border: 1px solid #007acc;"
-            "    border-radius: 4px;"
-            "    margin: 1px;"
-            "    background-color: #2d2d2d;"
-            "}"
-        )
-        bar_frame.setStyleSheet(default_style)
 
-        bar_layout = QVBoxLayout(bar_frame)
-        bar_layout.setSpacing(2)
-        bar_layout.setContentsMargins(4, 4, 4, 4)
+        cartesian_types = {"bar", "histogram", "line", "scatter", "box", "area"}
+        if chart_type in cartesian_types:
+            self.recal_btn.setEnabled(True)
+            self.recal_btn.setToolTip("Re-run processing to refresh calibration and numeric values.")
+        elif chart_type in {"pie", "heatmap"}:
+            self.recal_btn.setEnabled(False)
+            self.recal_btn.setToolTip(f"Recalibration is disabled for {chart_type} charts.")
+        else:
+            self.recal_btn.setEnabled(False)
+            self.recal_btn.setToolTip("Recalibration is unavailable for this chart type.")
 
-        # Row 1: [Bar # Badge] [Extracted Text]
-        row1_layout = QHBoxLayout()
-        row1_layout.setContentsMargins(0, 0, 0, 0)
-        row1_layout.setSpacing(4)
+        page_size = max(1, int(pagination.get("page_size", len(rows) or 1)))
+        total_rows = len(rows)
+        total_pages = max(1, int(pagination.get("total_pages", 1)))
+        pagination_enabled = bool(pagination.get("enabled", False)) and total_rows > page_size
 
-        bar_badge = QLabel(f"#{idx + 1}")
-        bar_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        bar_badge.setFixedSize(40, 22)
-        bar_badge.setStyleSheet(
-            "QLabel {"
-            "    background-color: #007acc;"
-            "    color: #ffffff;"
-            "    border: 1px solid #007acc;"
-            "    border-radius: 3px;"
-            "    font-size: 9px;"
-            "    font-weight: 700;"
-            "}"
-        )
-        row1_layout.addWidget(bar_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        if pagination_enabled:
+            current_page = self.data_tab_page_state.get(chart_type, int(pagination.get("page", 0)))
+            current_page = max(0, min(current_page, total_pages - 1))
+            self.data_tab_page_state[chart_type] = current_page
+            start = current_page * page_size
+            end = min(total_rows, start + page_size)
+            active_rows = rows[start:end]
+            self.data_pagination_frame.setVisible(True)
+            self.data_page_label.setText(f"Page {current_page + 1} / {total_pages}")
+            self.data_prev_btn.setEnabled(current_page > 0)
+            self.data_next_btn.setEnabled(current_page < total_pages - 1)
+        else:
+            active_rows = rows
+            self.data_pagination_frame.setVisible(False)
+            self.data_page_label.setText("Page 1 / 1")
 
-        label_entry = QLineEdit(bar.get("bar_label", ""))
-        label_entry.setPlaceholderText("Extracted label")
-        label_entry.setMinimumHeight(22)
-        label_entry.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        label_entry.setStyleSheet(
-            "QLineEdit {"
-            "    font-size: 10px;"
-            "    padding: 2px 6px;"
-            "    border: 1px solid #3f3f3f;"
-            "    border-radius: 3px;"
-            "    background-color: #3c3c3c;"
-            "    color: #ffffff;"
-            "}"
-            "QLineEdit:focus {"
-            "    border: 1px solid #007acc;"
-            "}"
-        )
-        row1_layout.addWidget(label_entry, 1)
-        bar_layout.addLayout(row1_layout)
+        self.data_table.blockSignals(True)
+        try:
+            self.data_table.setSortingEnabled(False)
+            self.data_table.clear()
 
-        # Row 2: value/height/confidence details (expanded only on badge hover).
-        details_widget = QWidget()
-        details_layout = QHBoxLayout(details_widget)
-        details_layout.setContentsMargins(44, 0, 0, 0)
-        details_layout.setSpacing(10)
+            if not active_rows:
+                self.data_table.setRowCount(1)
+                self.data_table.setColumnCount(1)
+                self.data_table.setHorizontalHeaderLabels(["Info"])
+                msg_item = QTableWidgetItem(empty_message)
+                msg_item.setFlags(msg_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.data_table.setItem(0, 0, msg_item)
+                self.data_tab_bindings.clear()
+                self.data_row_overlay_map.clear()
+                return
 
-        value = bar.get("estimated_value")
-        value_text = f"Value: {value:.2f}" if isinstance(value, (int, float)) else "Value: -"
-        value_label = QLabel(value_text)
-        value_label.setStyleSheet("QLabel { color: #d4d4d4; font-size: 9px; }")
-        details_layout.addWidget(value_label)
+            column_specs = []
+            header_titles = []
+            for column in columns:
+                if not isinstance(column, dict):
+                    continue
+                column_specs.append(column)
+                header_titles.append(str(column.get("title", column.get("id", ""))))
 
-        pixel_height = bar.get("pixel_height")
-        high_text = f"High: {pixel_height:.1f}px" if isinstance(pixel_height, (int, float)) else "High: -"
-        high_label = QLabel(high_text)
-        high_label.setStyleSheet("QLabel { color: #a8a8a8; font-size: 9px; }")
-        details_layout.addWidget(high_label)
+            self.data_table.setRowCount(len(active_rows))
+            self.data_table.setColumnCount(len(column_specs))
+            self.data_table.setHorizontalHeaderLabels(header_titles)
 
-        confidence = bar.get("confidence")
-        conf_text = f"Confidence: {confidence:.2f}" if isinstance(confidence, (int, float)) else "Confidence: -"
-        conf_label = QLabel(conf_text)
-        conf_label.setStyleSheet("QLabel { color: #a8a8a8; font-size: 9px; }")
-        details_layout.addWidget(conf_label)
-        details_layout.addStretch()
-        details_widget.setVisible(False)
-        bar_layout.addWidget(details_widget)
+            for row_idx, row in enumerate(active_rows):
+                if not isinstance(row, dict):
+                    continue
+                values = row.get("values", {})
+                if not isinstance(values, dict):
+                    values = {}
+                editable_fields = set(row.get("editable_fields", []))
+                source = str(row.get("source", "elements"))
+                element_index = int(row.get("element_index", -1))
+                overlay_data = {
+                    "bbox": row.get("overlay_bbox"),
+                    "class_name": row.get("overlay_class"),
+                }
 
-        widget_id = f"bar_{idx}"
-        self.analysis_results_widgets[widget_id] = {
-            "entry": label_entry,
-            "original_item": bar,
-            "section": "bars",
-            "type": "bar_label",
-        }
+                for col_idx, column in enumerate(column_specs):
+                    column_id = str(column.get("id", ""))
+                    value = values.get(column_id)
+                    if value is None:
+                        display_value = ""
+                    elif isinstance(value, float):
+                        display_value = f"{value:.6g}"
+                    else:
+                        display_value = str(value)
 
-        bbox = bar.get("xyxy")
+                    item = QTableWidgetItem(display_value)
+                    item.setData(Qt.ItemDataRole.UserRole + 1, overlay_data)
 
-        def _expand_details(_event=None):
-            details_widget.setVisible(True)
-            bar_frame.setStyleSheet(expanded_style)
-            if bbox:
-                self.on_widget_hover_enter(bbox, "bar")
+                    is_editable = bool(column.get("editable")) and column_id in editable_fields
+                    if not is_editable:
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    else:
+                        parser = "str"
+                        value_type = str(column.get("value_type", "text")).lower()
+                        if column_id == "outliers":
+                            parser = "outliers"
+                        elif value_type == "float":
+                            parser = "float"
+                        elif value_type == "int":
+                            parser = "int"
+                        item.setData(
+                            Qt.ItemDataRole.UserRole,
+                            {
+                                "source": source,
+                                "element_index": element_index,
+                                "field": column_id,
+                                "parser": parser,
+                            },
+                        )
 
-        def _collapse_details(_event=None):
-            details_widget.setVisible(False)
-            bar_frame.setStyleSheet(default_style)
-            if bbox:
-                self.on_widget_hover_leave()
+                    self.data_table.setItem(row_idx, col_idx, item)
 
-        # Expansion and highlight are intentionally bound only to the small badge.
-        bar_badge.enterEvent = _expand_details
-        bar_badge.leaveEvent = _collapse_details
+            self.data_table.setSortingEnabled(True)
 
-        return bar_frame
+            sort_state = self.data_tab_sort_state.get(chart_type)
+            if sort_state and sort_state[0] < self.data_table.columnCount():
+                self.data_table.sortItems(sort_state[0], sort_state[1])
+
+            self._rebuild_data_bindings_from_table()
+        finally:
+            self.data_table.blockSignals(False)
 
     def _populate_view_tab(self):
         """Populate visibility options including baseline."""
@@ -2536,8 +2869,35 @@ Click to configure advanced options."""
         self.view_content_layout.addWidget(chart_label, row, 0, 1, 2)
         row += 1
         
-        chart_classes = ["bar", "line", "scatter", "box", "data_point", "scale_label", "tick_label"]
-        
+        preferred_chart_order = [
+            "bar",
+            "slice",
+            "line",
+            "scatter",
+            "box",
+            "data_point",
+            "cell",
+            "color_bar",
+            "range_indicator",
+            "outlier",
+            "scale_label",
+            "tick_label",
+        ]
+        general_set = {"chart_title", "axis_title", "legend", "axis_labels", "other"}
+        chart_classes = []
+        for class_name, items in detections.items():
+            if class_name in general_set or class_name == "unknown":
+                continue
+            if isinstance(items, list) and items:
+                chart_classes.append(class_name)
+
+        def _sort_key(name: str):
+            if name in preferred_chart_order:
+                return (0, preferred_chart_order.index(name), name)
+            return (1, 999, name)
+
+        chart_classes.sort(key=_sort_key)
+
         for class_name in chart_classes:
             if class_name in detections and detections[class_name]:
                 self._add_view_checkbox(class_name, detections[class_name], row, col)
@@ -2625,6 +2985,187 @@ Click to configure advanced options."""
         self.view_content_layout.addWidget(checkbox, row, col)
         self.visibility_checks[class_name] = checkbox
 
+    # ------------------------------------------------------------------
+    # Protocol tab population & interaction
+    # ------------------------------------------------------------------
+
+    def _populate_protocol_tab(self):
+        if not self.current_analysis_result:
+            return
+        if 'protocol_rows' not in self.current_analysis_result:
+            from core.protocol_row_builder import build_protocol_rows
+            context = self.context.data_manager.get_context()
+            rows = build_protocol_rows(self.current_analysis_result, context)
+            self.current_analysis_result['protocol_rows'] = rows
+        self._refresh_filter_combos()
+        self._apply_protocol_filters()
+
+    def _refresh_filter_combos(self):
+        rows = (self.current_analysis_result or {}).get('protocol_rows', [])
+        outcomes = sorted({r.get('outcome', '') for r in rows} - {''})
+        groups = sorted({r.get('group', '') for r in rows} - {''})
+
+        for combo, values in [
+            (self.proto_outcome_combo, outcomes),
+            (self.proto_group_combo, groups),
+        ]:
+            combo.blockSignals(True)
+            current = combo.currentText()
+            combo.clear()
+            combo.addItem("All")
+            combo.addItems(values)
+            idx = combo.findText(current)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+
+    def _apply_protocol_filters(self):
+        rows = (self.current_analysis_result or {}).get('protocol_rows', [])
+        outcome_filter = self.proto_outcome_combo.currentText()
+        group_filter = self.proto_group_combo.currentText()
+        status_filter = self.proto_status_combo.currentText()
+
+        filtered = rows
+        if outcome_filter != "All":
+            filtered = [r for r in filtered if r.get('outcome') == outcome_filter]
+        if group_filter != "All":
+            filtered = [r for r in filtered if r.get('group') == group_filter]
+        if status_filter != "All":
+            filtered = [r for r in filtered if r.get('review_status') == status_filter]
+        self._render_protocol_table(filtered)
+
+    def _render_protocol_table(self, filtered_rows):
+        table = self.protocol_table
+        table.blockSignals(True)
+        table.setRowCount(len(filtered_rows))
+
+        status_colors = {
+            'corrected': QColor('#FF9800'),
+            'reviewed': QColor('#4CAF50'),
+        }
+
+        for r_idx, row_dict in enumerate(filtered_rows):
+            for c_idx, col_name in enumerate(PROTOCOL_COLUMNS):
+                raw = row_dict.get(col_name, '')
+                text = '' if raw is None else str(raw)
+                item = QTableWidgetItem(text)
+                item.setData(Qt.ItemDataRole.UserRole, id(row_dict))
+
+                if col_name in READONLY_COLUMNS:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    item.setBackground(QColor('#2a2a2a'))
+
+                if col_name == 'review_status' and text in status_colors:
+                    item.setForeground(status_colors[text])
+
+                table.setItem(r_idx, c_idx, item)
+        table.blockSignals(False)
+
+    def _on_protocol_cell_changed(self, row_idx, col_idx):
+        col_name = PROTOCOL_COLUMNS[col_idx]
+        if col_name in READONLY_COLUMNS:
+            return
+
+        table = self.protocol_table
+        item = table.item(row_idx, 0)
+        if item is None:
+            return
+        row_id = item.data(Qt.ItemDataRole.UserRole)
+
+        rows = (self.current_analysis_result or {}).get('protocol_rows', [])
+        row_dict = None
+        for r in rows:
+            if id(r) == row_id:
+                row_dict = r
+                break
+        if row_dict is None:
+            return
+
+        new_text = table.item(row_idx, col_idx).text()
+
+        # Snapshot _original on first edit
+        if row_dict.get('_original') is None:
+            row_dict['_original'] = {
+                k: row_dict.get(k)
+                for k in PROTOCOL_COLUMNS
+            }
+
+        # Coerce numeric columns
+        numeric_cols = {'value', 'error_bar_value', 'baseline_value'}
+        if col_name in numeric_cols:
+            try:
+                row_dict[col_name] = float(new_text) if new_text.strip() else None
+            except ValueError:
+                pass
+        else:
+            row_dict[col_name] = new_text
+
+        # Auto-set corrected status on value edits
+        if col_name != 'review_status':
+            row_dict['review_status'] = 'corrected'
+            status_col = PROTOCOL_COLUMNS.index('review_status')
+            table.blockSignals(True)
+            status_item = table.item(row_idx, status_col)
+            if status_item:
+                status_item.setText('corrected')
+                status_item.setForeground(QColor('#FF9800'))
+            table.blockSignals(False)
+
+    def _load_context_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Context", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            ctx = self.context.data_manager.load_context(path)
+            self.update_status(
+                f"Context loaded: {len(ctx.get('outcomes', []))} outcomes, "
+                f"{len(ctx.get('groups', []))} groups"
+            )
+            if self.current_analysis_result:
+                existing_rows = self.current_analysis_result.get('protocol_rows')
+                if existing_rows:
+                    from core.protocol_row_builder import merge_context_into_rows
+                    self.current_analysis_result['protocol_rows'] = merge_context_into_rows(
+                        existing_rows, self.current_analysis_result, ctx
+                    )
+                else:
+                    from core.protocol_row_builder import build_protocol_rows
+                    self.current_analysis_result['protocol_rows'] = build_protocol_rows(
+                        self.current_analysis_result, ctx
+                    )
+                self._populate_protocol_tab()
+        except Exception as e:
+            QMessageBox.warning(self, "Context Error", f"Failed to load context: {e}")
+
+    def _export_protocol_csv(self):
+        if not self.current_analysis_result:
+            QMessageBox.information(self, "Export", "No analysis results to export.")
+            return
+        rows = self.current_analysis_result.get('protocol_rows', [])
+        if not rows:
+            QMessageBox.information(self, "Export", "No protocol rows to export.")
+            return
+
+        out_dir = self.output_path_edit.text().strip()
+        if not out_dir:
+            out_dir, _ = QFileDialog.getSaveFileName(self, "Save Protocol CSV", "", "CSV (*.csv)")
+            if not out_dir:
+                return
+            dest = out_dir
+        else:
+            dest = str(Path(out_dir) / "_protocol_export.csv")
+
+        from core.export_manager import ExportManager
+        outcome_f = self.proto_outcome_combo.currentText()
+        group_f = self.proto_group_combo.currentText()
+        ok = ExportManager.export_protocol_csv(
+            rows, dest,
+            filter_outcome=outcome_f if outcome_f != "All" else None,
+            filter_group=group_f if group_f != "All" else None,
+        )
+        if ok:
+            self.update_status(f"Protocol CSV exported: {dest}")
+        else:
+            QMessageBox.warning(self, "Export Error", "Failed to export protocol CSV.")
 
     def schedule_image_update(self):
         """
@@ -2796,38 +3337,53 @@ Click to configure advanced options."""
                     if checkbox and checkbox.isChecked():
                         for item in items:
                             bbox = item.get('xyxy')
-                            if bbox:
-                                x1, y1, x2, y2 = bbox
-                                
-                                # Scale bbox coordinates
-                                scaled_x1 = int(x1 * scale_x)
-                                scaled_y1 = int(y1 * scale_y)
-                                scaled_x2 = int(x2 * scale_x)
-                                scaled_y2 = int(y2 * scale_y)
-                                
-                                # Check if this is the highlighted bbox
-                                is_highlight = (bbox == highlight_bbox and class_name == highlight_class)
-                                
-                                if is_highlight:
-                                    # HIGHLIGHTED BOX: Expand bbox and use highlight color
-                                    expanded_bbox = [
-                                        max(0, scaled_x1 - highlight_expansion),
-                                        max(0, scaled_y1 - highlight_expansion),
-                                        min(img_copy.width, scaled_x2 + highlight_expansion),
-                                        min(img_copy.height, scaled_y2 + highlight_expansion)
-                                    ]
-                                    
-                                    color = self.colors.get(class_name, self.colors['other'])['highlight']
-                                    line_width = line_width_highlight  # Still 1px!
-                                    
-                                    draw.rectangle(expanded_bbox, outline=color, width=line_width)
-                                else:
-                                    # NORMAL BOX: Standard size with 1px width
-                                    scaled_bbox = [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
-                                    color = self.colors.get(class_name, self.colors['other'])['normal']
-                                    line_width = line_width_normal  # 1px
-                                    
-                                    draw.rectangle(scaled_bbox, outline=color, width=line_width)
+                            if not bbox and class_name != "slice":
+                                continue
+
+                            # Keep highlight identity based on bbox equality for backward compatibility.
+                            is_highlight = (bbox == highlight_bbox and class_name == highlight_class)
+                            color = self.colors.get(class_name, self.colors['other'])
+                            line_color = color['highlight'] if is_highlight else color['normal']
+
+                            if class_name == "slice":
+                                pie_overlay = extract_slice_overlay_points(
+                                    item,
+                                    scale_x=scale_x,
+                                    scale_y=scale_y,
+                                    expected_keypoints=5,
+                                )
+                                if pie_overlay is not None:
+                                    center_pt, arc_pts = pie_overlay
+                                    slice_width = 4 if is_highlight else line_width_normal
+                                    draw.line([center_pt, arc_pts[0]], fill=line_color, width=slice_width)
+                                    draw.line([center_pt, arc_pts[-1]], fill=line_color, width=slice_width)
+                                    draw.line(arc_pts, fill=line_color, width=slice_width)
+                                    continue
+
+                            if not bbox:
+                                continue
+
+                            x1, y1, x2, y2 = bbox
+
+                            # Scale bbox coordinates
+                            scaled_x1 = int(x1 * scale_x)
+                            scaled_y1 = int(y1 * scale_y)
+                            scaled_x2 = int(x2 * scale_x)
+                            scaled_y2 = int(y2 * scale_y)
+
+                            if is_highlight:
+                                # HIGHLIGHTED BOX: Expand bbox and use highlight color
+                                expanded_bbox = [
+                                    max(0, scaled_x1 - highlight_expansion),
+                                    max(0, scaled_y1 - highlight_expansion),
+                                    min(img_copy.width, scaled_x2 + highlight_expansion),
+                                    min(img_copy.height, scaled_y2 + highlight_expansion)
+                                ]
+                                draw.rectangle(expanded_bbox, outline=line_color, width=line_width_highlight)
+                            else:
+                                # NORMAL BOX: Standard size with base line width
+                                scaled_bbox = [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
+                                draw.rectangle(scaled_bbox, outline=line_color, width=line_width_normal)
             
             # Draw baseline (controlled by checkbox)
             baseline_checkbox = self.visibility_checks.get('baseline')
@@ -2864,8 +3420,18 @@ Click to configure advanced options."""
             if checkbox and checkbox.isChecked():
                 color_set = self.colors.get(class_name, {"normal": (128, 128, 128)})
                 for item in items:
-                    bbox = item['xyxy']
-                    draw.rectangle(bbox, outline=color_set["normal"], width=1)
+                    if class_name == "slice":
+                        pie_overlay = extract_slice_overlay_points(item, expected_keypoints=5)
+                        if pie_overlay is not None:
+                            center_pt, arc_pts = pie_overlay
+                            draw.line([center_pt, arc_pts[0]], fill=color_set["normal"], width=1)
+                            draw.line([center_pt, arc_pts[-1]], fill=color_set["normal"], width=1)
+                            draw.line(arc_pts, fill=color_set["normal"], width=1)
+                            continue
+
+                    bbox = item.get('xyxy')
+                    if bbox:
+                        draw.rectangle(bbox, outline=color_set["normal"], width=1)
         
         # Check for new key first, with fallback to old key for backward compatibility
         baseline_coord = (self.current_analysis_result.get('baseline_coord') or 
@@ -3105,17 +3671,83 @@ Click to configure advanced options."""
 
     def _update_results_from_gui(self):
         logging.debug("Updating results from GUI...")
-        
+
         for widget_id, widget_info in self.analysis_results_widgets.items():
             new_text = widget_info['entry'].text()
             original_item = widget_info['original_item']
-            
+
             if widget_info.get('type') == 'bar_label':
                 logging.debug("Updating bar_label from '%s' to '%s'", original_item.get('bar_label'), new_text)
                 original_item['bar_label'] = new_text
             else:
                 logging.debug("Updating text from '%s' to '%s'", original_item.get('text'), new_text)
                 original_item['text'] = new_text
+
+        data_edits: List[Dict[str, Any]] = []
+        if hasattr(self, "data_table"):
+            self._rebuild_data_bindings_from_table()
+            for (row_idx, col_idx), binding in self.data_tab_bindings.items():
+                if not isinstance(binding, dict):
+                    continue
+                item = self.data_table.item(row_idx, col_idx)
+                if item is None:
+                    continue
+                edit = dict(binding)
+                edit["value"] = item.text()
+                data_edits.append(edit)
+
+        if data_edits:
+            apply_data_tab_edits(self.current_analysis_result, data_edits)
+        elif self.current_analysis_result is not None and not isinstance(
+            self.current_analysis_result.get("data_tab_model"), dict
+        ):
+            self.current_analysis_result["data_tab_model"] = build_data_tab_model(self.current_analysis_result)
+
+        self._refresh_protocol_rows_from_result()
+
+    def _refresh_protocol_rows_from_result(self):
+        if not self.current_analysis_result:
+            return
+        from core.protocol_row_builder import build_protocol_rows, merge_context_into_rows
+
+        context = self.context.data_manager.get_context() or {}
+        existing_rows = self.current_analysis_result.get("protocol_rows", [])
+        if isinstance(existing_rows, list) and existing_rows:
+            rows = merge_context_into_rows(existing_rows, self.current_analysis_result, context)
+        else:
+            rows = build_protocol_rows(self.current_analysis_result, context)
+        self.current_analysis_result['protocol_rows'] = rows
+        if hasattr(self, 'protocol_table'):
+            self._refresh_filter_combos()
+            self._apply_protocol_filters()
+
+    @staticmethod
+    def _preserve_manual_text_fields(previous: Dict[str, Any], refreshed: Dict[str, Any]) -> None:
+        def _copy_fields(old_rows: Any, new_rows: Any):
+            if not isinstance(old_rows, list) or not isinstance(new_rows, list):
+                return
+            fields = ("label", "bar_label", "text", "text_label", "row_label", "col_label")
+            for index in range(min(len(old_rows), len(new_rows))):
+                old_item = old_rows[index]
+                new_item = new_rows[index]
+                if not isinstance(old_item, dict) or not isinstance(new_item, dict):
+                    continue
+                for field in fields:
+                    value = old_item.get(field)
+                    if isinstance(value, str) and value.strip():
+                        new_item[field] = value
+                old_tick = old_item.get("tick_label")
+                if isinstance(old_tick, dict):
+                    old_tick_text = old_tick.get("text")
+                    if isinstance(old_tick_text, str) and old_tick_text.strip():
+                        new_tick = new_item.get("tick_label")
+                        if not isinstance(new_tick, dict):
+                            new_tick = {}
+                        new_tick["text"] = old_tick_text
+                        new_item["tick_label"] = new_tick
+
+        _copy_fields(previous.get("elements"), refreshed.get("elements"))
+        _copy_fields(previous.get("bars"), refreshed.get("bars"))
 
     def _save_analysis_results(self):
         if not self.current_analysis_result:
@@ -3169,63 +3801,74 @@ Click to configure advanced options."""
         if not self.current_analysis_result:
             QMessageBox.warning(self, "No Data", "No analysis results available.")
             return
-            
+
+        chart_type = str(self.current_analysis_result.get("chart_type", "")).lower()
+        cartesian_types = {"bar", "histogram", "line", "scatter", "box", "area"}
+        if chart_type not in cartesian_types:
+            QMessageBox.information(
+                self,
+                "Recalibration Disabled",
+                f"Recalibration is available only for cartesian charts. Current type: {chart_type or 'unknown'}.",
+            )
+            return
+
+        if not self.current_image_path:
+            QMessageBox.warning(self, "No Image", "No image is currently selected.")
+            return
+
         try:
             self.update_status("🔄 Recalibrating scale...")
-            
             self._update_results_from_gui()
 
-            scale_labels = self.current_analysis_result['detections'].get('scale_label', [])
-            
-            # Validate that all scale labels have coordinate data
-            if any('xyxy' not in label for label in scale_labels):
-                QMessageBox.critical(self, "Data Error", "Some scale labels are missing coordinate data and cannot be used for recalibration.")
-                return
+            previous_result = dict(self.current_analysis_result)
 
-            if len(scale_labels) < 2:
-                QMessageBox.critical(self, "Insufficient Data", 
-                                f"Need at least 2 scale labels.\nFound: {len(scale_labels)}")
-                return
+            analysis_manager = self.context.analysis_manager
+            analysis_manager.set_models(self.context.model_manager)
+            models_dir = self.models_dir_edit.text().strip()
+            if models_dir:
+                self.context.model_manager.load_models(models_dir)
+            analysis_manager.set_advanced_settings(self.advanced_settings)
 
-            bars = self.current_analysis_result.get('bars', [])
-            if not bars:
-                QMessageBox.warning(self, "No Bars", "No bars available to recalibrate.")
-                return
+            provenance = self.current_analysis_result.get("_provenance")
+            if not isinstance(provenance, dict):
+                provenance = None
 
-            scale_model, r_squared = analysis.calibrate_scale_from_ticks_numpy(scale_labels)
-            if scale_model is None:
-                QMessageBox.critical(self, "Calibration Failed", "Scale recalibration failed.")
-                return
+            output_dir = self.output_path_edit.text().strip()
+            if not output_dir:
+                output_dir = str(self.project_root / "output")
 
-            scale_info = self.current_analysis_result.setdefault('scale_info', {})
-            scale_info['r_squared'] = r_squared
-            image_dimensions = self.current_analysis_result.setdefault('image_dimensions', {})
-            if self.original_pil_image is not None:
-                image_dimensions.setdefault('height', self.original_pil_image.size[1])
-                image_dimensions.setdefault('width', self.original_pil_image.size[0])
-            h_img = image_dimensions.get('height', 0)
-            
-            slope, intercept = scale_model.coeffs
-            baseline_coord = float(np.clip((0 - intercept) / slope, 0, h_img)) if abs(slope) > 1e-9 else 0
-            self.current_analysis_result['baseline_coord'] = baseline_coord
+            refreshed = analysis_manager.run_single_analysis(
+                self.current_image_path,
+                self.conf_slider.value() / 10.0,
+                output_dir,
+                provenance=provenance,
+            )
+            if refreshed is None or self._is_error_result(refreshed):
+                message = refreshed.get("error") if isinstance(refreshed, dict) else "Reprocessing returned no result."
+                raise RuntimeError(str(message))
 
-            for i, bar in enumerate(bars):
-                height_px, value = analysis.get_bar_value_numpy(bar['xyxy'], scale_model, baseline_coord)
-                bars[i]['pixel_height'] = height_px
-                bars[i]['estimated_value'] = value
+            normalized_refreshed = self._normalize_result_for_gui(refreshed)
+            self._preserve_manual_text_fields(previous_result, normalized_refreshed)
+            normalized_refreshed["data_tab_model"] = build_data_tab_model(normalized_refreshed)
+            self.current_analysis_result = normalized_refreshed
+            self._refresh_protocol_rows_from_result()
 
             if self.base_image_with_detections:
                 self._close_pil_image_safely(self.base_image_with_detections)
                 self.base_image_with_detections = None
-                
+
+            self._update_ui_with_results()
             self.update_displayed_image()
-            
-            self._populate_bars_tab()
-            
-            self.update_status(f"✅ Recalibrated (R² = {r_squared:.4f})")
-            QMessageBox.information(self, "Success", 
-                                f"🎯 Scale recalibrated!\nR² confidence: {r_squared:.4f}")
-            
+
+            r_squared = None
+            scale_info = self.current_analysis_result.get("scale_info", {})
+            if isinstance(scale_info, dict):
+                r_squared = scale_info.get("r_squared")
+            if isinstance(r_squared, (int, float)):
+                self.update_status(f"✅ Recalibrated (R² = {float(r_squared):.4f})")
+            else:
+                self.update_status("✅ Recalibrated")
+
         except Exception as e:
             error_msg = f"❌ Recalibration error: {str(e)}"
             self.update_status(error_msg)
@@ -3283,8 +3926,8 @@ if __name__ == "__main__":
     from pathlib import Path
 
     # Configure logging to file
-    project_root = Path(__file__).resolve().parent.parent
-    log_file = project_root / "analysis.log"
+    _state_root = resolve_state_root()
+    log_file = _state_root / "analysis.log"
     
     # Get the root logger
     root_logger = logging.getLogger()

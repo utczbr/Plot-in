@@ -101,6 +101,8 @@ MODE_CONFIGS = {
 class ModelsConfig:
     classification: str
     detection: Dict[str, str]
+    detection_output_type: Dict[str, str]
+    detection_keypoints: Dict[str, int]
     ocr: Dict[str, str]
 
 MODELS_CONFIG = ModelsConfig(
@@ -112,7 +114,21 @@ MODELS_CONFIG = ModelsConfig(
         'scatter': 'detect_scatter.onnx',
         'histogram': 'detect_histogram.onnx',
         'heatmap': 'detect_heatmap.onnx',
-        'pie': 'Pie_pose.onnx'
+        'pie': 'Pie_pose.onnx',
+        'area': 'detect_line.onnx',
+    },
+    detection_output_type={
+        'bar': 'bbox',
+        'box': 'bbox',
+        'line': 'bbox',
+        'scatter': 'bbox',
+        'histogram': 'bbox',
+        'heatmap': 'bbox',
+        'pie': 'pose',
+        'area': 'bbox',
+    },
+    detection_keypoints={
+        'pie': 5,
     },
     ocr={
         'det': 'models/OCR/PP-OCRv5_server_det.onnx',

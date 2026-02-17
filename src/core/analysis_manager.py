@@ -139,17 +139,19 @@ class AnalysisManager:
             calibration_engine=calibration_engine
         )
     
-    def run_single_analysis(self, image_path: str, conf: float, output_path: str) -> Optional[Dict[str, Any]]:
+    def run_single_analysis(self, image_path: str, conf: float, output_path: str,
+                            provenance: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """Run analysis on a single image."""
         pipeline = self._create_pipeline()
         if not pipeline:
             return None
-            
+
         result = pipeline.run(
             image_input=Path(image_path),
             output_dir=output_path,
             annotated=True, # GUI usually expects annotated
-            advanced_settings=self._advanced_settings
+            advanced_settings=self._advanced_settings,
+            provenance=provenance,
         )
         
         if result:
@@ -171,30 +173,32 @@ class AnalysisManager:
         if not input_dir.exists():
              return 0, 0
              
-        images = sorted(
-            p for p in input_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'}
-        )
-        total = len(images)
+        from core.input_resolver import resolve_input_assets, asset_provenance_dict
+
+        render_dir = Path(output_path) / "pdf_renders"
+        assets = resolve_input_assets(input_path=input_dir, render_dir=render_dir)
+        total = len(assets)
         processed = 0
-        
-        for i, img_path in enumerate(images):
+
+        for i, asset in enumerate(assets):
             if cancel_event and cancel_event.is_set():
                 break
-                
+
             if status_callback:
-                status_callback.emit(f"Processing {i+1}/{total}: {img_path.name}")
-                
+                status_callback.emit(f"Processing {i+1}/{total}: {asset.image_path.name}")
+
             try:
+                prov = asset_provenance_dict(asset)
                 pipeline.run(
-                    image_input=img_path,
+                    image_input=asset.image_path,
                     output_dir=output_path,
-                    annotated=True
+                    annotated=True,
+                    provenance=prov,
                 )
                 processed += 1
             except Exception as e:
-                self.logger.error(f"Batch error on {img_path}: {e}")
-                
+                self.logger.error(f"Batch error on {asset.image_path}: {e}")
+
         return processed, total
     
     def cancel_analysis(self, thread_id: str):

@@ -10,6 +10,7 @@ from typing import Dict, Optional, Any, List, Union, Tuple
 from .base_pipeline import BasePipeline
 from .types import PipelineResult
 from core.model_manager import ModelManager
+from core.config import MODELS_CONFIG
 from core.chart_registry import get_chart_element_key, normalize_chart_type
 from utils import run_inference_on_image, sanitize_for_json
 from services.orientation_detection_service import OrientationDetectionService
@@ -54,11 +55,12 @@ class ChartAnalysisPipeline(BasePipeline):
         # Ensure classifiers and detectors are ready
         # self.models_manager.load_models() # Assumed to be managed externally or lazy loaded
 
-    def run(self, 
-            image_input: Union[str, Path], 
+    def run(self,
+            image_input: Union[str, Path],
             output_dir: Optional[Union[str, Path]] = None,
             annotated: bool = False,
-            advanced_settings: Optional[Dict] = None) -> Optional[PipelineResult]:
+            advanced_settings: Optional[Dict] = None,
+            provenance: Optional[Dict[str, Any]] = None) -> Optional[PipelineResult]:
         """
         Run the analysis pipeline on a single image.
         
@@ -125,7 +127,11 @@ class ChartAnalysisPipeline(BasePipeline):
             return None
             
         final_result = self._format_result(result, image_path, detections)
-        
+
+        # 7b. Attach provenance metadata if provided (PDF source, page, figure ID)
+        if provenance:
+            final_result['_provenance'] = provenance
+
         # 8. Save Outputs
         if output_dir:
             self._save_results(final_result, img, Path(output_dir), annotated)
@@ -171,6 +177,7 @@ class ChartAnalysisPipeline(BasePipeline):
             return {}
             
         class_map = get_class_map(chart_type)
+        model_output_type, expected_keypoints = self._get_detection_output_config(chart_type)
         
         # Adaptive thresholds
         conf_thresh = 0.25 if chart_type == 'box' else (0.2 if chart_type == 'histogram' else 0.4)
@@ -194,7 +201,20 @@ class ChartAnalysisPipeline(BasePipeline):
                         f"Invalid NMS override for {chart_type}: {det_nms[chart_type]!r}"
                     )
         
-        raw_dets = run_inference_on_image(model, img, conf_thresh, class_map, nms_threshold=nms_thresh)
+        raw_dets = run_inference_on_image(
+            model,
+            img,
+            conf_thresh,
+            class_map,
+            nms_threshold=nms_thresh,
+            model_output_type=model_output_type,
+            expected_keypoints=expected_keypoints,
+        )
+        if chart_type == 'pie' and len(raw_dets) > 50:
+            self.logger.warning(
+                "Pie detection produced an unusually high detection count (%s).",
+                len(raw_dets),
+            )
         
         # Fallback logic for histograms
         if chart_type == 'histogram':
@@ -234,7 +254,13 @@ class ChartAnalysisPipeline(BasePipeline):
             self.logger.warning("No bars in histogram, trying fallback...")
             # Try lower threshold
             model = self.models_manager.get_model('histogram')
-            lower_dets = run_inference_on_image(model, img, fallback_conf, class_map)
+            lower_dets = run_inference_on_image(
+                model,
+                img,
+                fallback_conf,
+                class_map,
+                model_output_type='bbox',
+            )
             
             if any(class_map.get(d['cls']) == 'bar' for d in lower_dets):
                 return lower_dets
@@ -244,7 +270,13 @@ class ChartAnalysisPipeline(BasePipeline):
             bar_model = self.models_manager.get_model('bar')
             if bar_model:
                 bar_map = get_class_map('bar')
-                bar_dets = run_inference_on_image(bar_model, img, fallback_conf, bar_map)
+                bar_dets = run_inference_on_image(
+                    bar_model,
+                    img,
+                    fallback_conf,
+                    bar_map,
+                    model_output_type='bbox',
+                )
                 # Filter only bars and convert cls ID
                 fallback_bars = []
                 for d in bar_dets:
@@ -257,6 +289,16 @@ class ChartAnalysisPipeline(BasePipeline):
                     current_dets.extend(fallback_bars)
                     
         return current_dets
+
+    @staticmethod
+    def _get_detection_output_config(chart_type: str) -> Tuple[str, Optional[int]]:
+        """Return output parser type and expected keypoints for chart model."""
+        output_type_map = getattr(MODELS_CONFIG, 'detection_output_type', {}) or {}
+        keypoint_map = getattr(MODELS_CONFIG, 'detection_keypoints', {}) or {}
+
+        output_type = output_type_map.get(chart_type, 'bbox')
+        expected_keypoints = keypoint_map.get(chart_type)
+        return output_type, expected_keypoints
 
     def _detect_orientation(self, img: np.ndarray, chart_type: str, detections: Dict) -> Orientation:
         """Detects chart orientation."""

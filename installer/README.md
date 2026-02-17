@@ -11,6 +11,12 @@ This directory contains the cross-platform installer implementation.
   - `install_linux.sh`
 - Executable build helper:
   - `installer/build_executables.py`
+- PyInstaller spec:
+  - `installer/installer.spec`
+- Build dependency pin file:
+  - `installer/requirements-build.txt`
+- Compatibility analysis report:
+  - `installer/CROSS_PLATFORM_COMPATIBILITY_ANALYSIS.md`
 
 ## What it does
 
@@ -27,14 +33,50 @@ This directory contains the cross-platform installer implementation.
 
 For Debian-family systems, `--install-scope global` generates manual privileged commands instead of executing them automatically.
 
+## Runtime UI mode (`install.py`)
+
+`install.py` now supports installer UI selection via:
+
+- `--ui-mode auto` (default): try GUI first, fallback to CLI if GUI/tkinter is unavailable.
+- `--ui-mode gui`: require GUI; exits with an error if GUI/tkinter cannot load.
+- `--ui-mode cli`: never attempt GUI loading.
+- `--cli`: compatibility alias for `--ui-mode cli`.
+
 ## Build executable installers
 
-Local build examples:
+Build script behavior:
 
-- Linux/Windows-style onefile:
-  - `python installer/build_executables.py --name chart-analysis-installer-linux --target onefile`
+- Creates a fresh isolated venv at `.build/pyinstaller-venv`.
+- Installs only pinned build deps from `installer/requirements-build.txt`.
+- Runs PyInstaller from that isolated venv.
+- Uses `installer/installer.spec` to control included files and excluded heavy modules.
+
+Build options:
+
+- `--target auto|onefile|app`
+  - `auto` => `app` on macOS, `onefile` elsewhere.
+- `--ui-policy auto|gui|cli`
+  - `auto` => include GUI only if tkinter is available in the isolated build venv.
+  - `gui` => require tkinter in build env.
+  - `cli` => force CLI-only packaging path.
+
+Local examples:
+
+- Linux/Windows onefile with auto GUI inclusion:
+  - `python installer/build_executables.py --name chart-analysis-installer-linux --target onefile --ui-policy auto`
 - macOS app bundle:
-  - `python installer/build_executables.py --name chart-analysis-installer-macos --target app`
+  - `python installer/build_executables.py --name chart-analysis-installer-macos --target app --ui-policy auto`
+
+## Wrapper behavior
+
+- `install_linux.sh`, `install_macos.command`, and `install_windows.bat` now:
+  1. Prefer packaged installer artifacts in the same directory.
+  2. Fall back to source mode (`python install.py`) when no artifact is present.
+
+## Dependency expectations
+
+- Packaged artifacts: do not require end users to preinstall Python package dependencies.
+- Source-mode wrappers (`python install.py`): still require a compatible Python environment.
 
 CI workflow:
 
@@ -42,3 +84,6 @@ CI workflow:
   - `ubuntu-latest`
   - `windows-latest`
   - `macos-latest`
+- Workflow also runs smoke tests:
+  - `--help` startup check
+  - `--ui-mode cli --help` CLI-path startup check

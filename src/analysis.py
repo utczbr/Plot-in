@@ -4,6 +4,7 @@ import sys
 import logging
 import argparse
 import json
+import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -63,13 +64,17 @@ def _create_easyocr_reader(languages: List[str]):
 def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'Paddle',
                           ocr_accuracy: str = 'Optimized',
                           calibration_method: str = 'PROSAC', models_dir: str = 'models',
-                          annotated: bool = False, languages: Optional[List[str]] = None):
+                          annotated: bool = False, languages: Optional[List[str]] = None,
+                          input_type: str = 'auto',
+                          context_path: Optional[str] = None,
+                          filter_outcome: Optional[str] = None,
+                          filter_group: Optional[str] = None):
     if languages is None:
         languages = ['en']
 
     input_path = Path(input_dir)
     if not input_path.exists():
-        raise FileNotFoundError(f"Input directory does not exist: {input_dir}")
+        raise FileNotFoundError(f"Input path does not exist: {input_dir}")
     models_dir_path = _resolve_models_dir(models_dir)
 
     # 1. Initialize Components
@@ -119,35 +124,100 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
         calibration_engine=calibration_engine
     )
 
-    image_paths = sorted(
-        p for p in input_path.iterdir()
-        if p.is_file() and p.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'}
+    from core.input_resolver import resolve_input_assets, asset_provenance_dict
+
+    output_path_obj = Path(output_dir)
+    output_path_obj.mkdir(parents=True, exist_ok=True)
+    render_dir = output_path_obj / "pdf_renders"
+
+    assets = resolve_input_assets(
+        input_path=input_path,
+        render_dir=render_dir,
+        input_type=input_type,
     )
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    
+
+    # Load optional context-of-interest
+    context_metadata = None
+    if context_path:
+        with open(context_path, 'r', encoding='utf-8') as f:
+            context_metadata = json.load(f)
+
+    from core.protocol_row_builder import build_protocol_rows
     results = []
-    
+
     # 4. Run Pipeline
-    for i, image_path in enumerate(image_paths):
-        logging.info(f"Processing {i+1}/{len(image_paths)}: {image_path.name}")
+    for i, asset in enumerate(assets):
+        logging.info(f"Processing {i+1}/{len(assets)}: {asset.image_path.name}")
         try:
+            prov = asset_provenance_dict(asset)
             result = pipeline.run(
-                image_input=image_path,
+                image_input=asset.image_path,
                 output_dir=output_dir,
-                annotated=annotated
+                annotated=annotated,
+                provenance=prov,
             )
-            
+
             if result:
+                result['protocol_rows'] = build_protocol_rows(result, context_metadata)
                 results.append(result)
         except Exception as e:
             import traceback
-            logging.error(f"Failed to process {image_path}: {e}\n{traceback.format_exc()}")
+            logging.error(f"Failed to process {asset.image_path}: {e}\n{traceback.format_exc()}")
 
     # 5. Save Consolidated Results
     consolidated_path = Path(output_dir) / "_consolidated_results.json"
     with open(consolidated_path, 'w', encoding='utf-8') as f:
         json.dump(sanitize_for_json(results), f, ensure_ascii=False, indent=2)
-    
+
+    # 6. Export Protocol CSV
+    all_rows = [row for r in results for row in r.get('protocol_rows', [])]
+    if all_rows:
+        from core.export_manager import ExportManager
+        focus_outcomes = (context_metadata or {}).get('focus_outcomes')
+        focus_groups = (context_metadata or {}).get('focus_groups')
+        f_outcome = filter_outcome or (
+            focus_outcomes[0] if focus_outcomes and len(focus_outcomes) == 1 else None
+        )
+        f_group = filter_group or (
+            focus_groups[0] if focus_groups and len(focus_groups) == 1 else None
+        )
+        proto_path = str(Path(output_dir) / "_protocol_export.csv")
+        ExportManager.export_protocol_csv(all_rows, proto_path,
+                                          filter_outcome=f_outcome, filter_group=f_group)
+        logging.info(f"Protocol CSV exported: {proto_path}")
+
+    # 7. Save run manifest
+    manifest = {
+        'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+        'input_path': str(input_path),
+        'input_type': input_type,
+        'output_dir': str(output_dir),
+        'asset_count': len(assets),
+        'result_count': len(results),
+        'settings': {
+            'ocr_backend': ocr_backend,
+            'ocr_accuracy': ocr_accuracy,
+            'calibration_method': calibration_method,
+            'annotated': annotated,
+            'languages': languages,
+        },
+        'context_path': context_path,
+        'filter_outcome': filter_outcome,
+        'filter_group': filter_group,
+        'provenance_summary': [
+            {
+                'source_file': r.get('_provenance', {}).get('source_document', r.get('image_file', '')),
+                'page_index': r.get('_provenance', {}).get('page_index'),
+                'protocol_rows_count': len(r.get('protocol_rows', [])),
+            }
+            for r in results
+        ],
+    }
+    manifest_path = Path(output_dir) / '_run_manifest.json'
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    logging.info(f"Run manifest saved: {manifest_path}")
+
     logging.info(f"Analysis complete. Processed {len(results)} images.")
     return results
 
@@ -169,7 +239,12 @@ def main():
                         help='Calibration method (neural recommended for log-scale/non-linear axes)')
     parser.add_argument('--annotated', action='store_true', help='Save annotated images')
     parser.add_argument('--language', default=None, help='Comma-separated list of languages for OCR')
-    
+    parser.add_argument('--input-type', default='auto', choices=['auto', 'image', 'pdf'],
+                        help='Input type filter: auto | image | pdf')
+    parser.add_argument('--context', default=None, help='Context-of-interest JSON file')
+    parser.add_argument('--filter-outcome', default=None, help='Filter protocol rows to this outcome')
+    parser.add_argument('--filter-group', default=None, help='Filter protocol rows to this group')
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
@@ -201,7 +276,11 @@ def main():
         calibration_method=args.calibration,
         models_dir=models_dir,
         annotated=args.annotated,
-        languages=languages
+        languages=languages,
+        input_type=args.input_type,
+        context_path=args.context,
+        filter_outcome=args.filter_outcome,
+        filter_group=args.filter_group,
     )
 
 

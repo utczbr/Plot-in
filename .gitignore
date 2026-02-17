@@ -30,6 +30,7 @@ ENV/
 # PyInstaller
 *.manifest
 *.spec
+!installer/installer.spec
 
 # IDEs
 .idea/
@@ -42,13 +43,20 @@ models/
 runs/
 *.log
 Backup/
-tests/
+tests/*
+!tests/installer_tests/
+tests/installer_tests/*
+!tests/installer_tests/test_install_ui_modes.py
+!tests/installer_tests/test_build_executables.py
 output/
 *_annotated.png
 *_analysis.json
-
+installer/CROSS_PLATFORM_COMPATIBILITY_ANALYSIS.md
 src/Critic.md
 src/verify_histogram_classifier.py
 
 src/ui/rendering/icons/guideicon.pdf
 src/train/gerador_charts/*
+.claude
+Protocol_gap.md
+protocol_text.txt

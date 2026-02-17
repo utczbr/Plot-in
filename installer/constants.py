@@ -3,20 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-def _repo_root_from_runtime() -> Path:
-    """
-    Resolve repo root for both source and frozen executable modes.
-
-    Frozen mode tries executable parent first, then parent parent, then cwd.
-    """
-    if getattr(sys, "frozen", False):
-        executable_dir = Path(sys.executable).resolve().parent
-        candidates = [executable_dir, executable_dir.parent, Path.cwd().resolve()]
-        for candidate in candidates:
-            if (candidate / "src").exists() and (candidate / "config").exists():
-                return candidate
-        return executable_dir
-    return Path(__file__).resolve().parents[1]
+from shared.state_root import resolve_code_root, resolve_state_root
 
 
 def _bundle_root() -> Path | None:
@@ -30,7 +17,7 @@ def _resolve_resource(relative_path: str) -> Path:
     """
     Prefer repository file when available, otherwise use bundled PyInstaller data.
     """
-    repo_candidate = REPO_ROOT / relative_path
+    repo_candidate = CODE_ROOT / relative_path
     if repo_candidate.exists():
         return repo_candidate
     bundle = _bundle_root()
@@ -41,14 +28,20 @@ def _resolve_resource(relative_path: str) -> Path:
     return repo_candidate
 
 
-REPO_ROOT = _repo_root_from_runtime()
-SRC_DIR = REPO_ROOT / "src"
-CONFIG_DIR = REPO_ROOT / "config"
-INSTALLER_DIR = REPO_ROOT / "installer"
+CODE_ROOT = resolve_code_root()
+STATE_ROOT = resolve_state_root()
 
-MODEL_MANIFEST_PATH = _resolve_resource("installer/model_manifest.json")
+# Deprecated alias — use CODE_ROOT or STATE_ROOT instead.
+REPO_ROOT = STATE_ROOT
+
+SRC_DIR = CODE_ROOT / "src"
+INSTALLER_DIR = CODE_ROOT / "installer"
+
+CONFIG_DIR = STATE_ROOT / "config"
 PROFILE_MANIFEST_PATH = CONFIG_DIR / "install_profile_manifest.json"
 PROFILES_DIR = CONFIG_DIR / "install_profiles"
+
+MODEL_MANIFEST_PATH = _resolve_resource("installer/model_manifest.json")
 
 REQUIREMENTS_BY_PLATFORM = {
     "darwin": _resolve_resource("src/requirements-mac.txt"),

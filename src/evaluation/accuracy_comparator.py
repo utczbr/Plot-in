@@ -12,6 +12,31 @@ from scipy.spatial.distance import cdist
 from sklearn.metrics import mean_absolute_error, precision_recall_fscore_support
 
 
+def _lin_ccc(y_true: np.ndarray, y_pred: np.ndarray) -> Optional[float]:
+    """Lin's Concordance Correlation Coefficient."""
+    mask = np.isfinite(y_true) & np.isfinite(y_pred)
+    y_true, y_pred = y_true[mask], y_pred[mask]
+    if len(y_true) < 2:
+        return None
+    r = np.corrcoef(y_true, y_pred)[0, 1]
+    if np.isnan(r):
+        return None
+    sx, sy = np.std(y_true), np.std(y_pred)
+    mx, my = np.mean(y_true), np.mean(y_pred)
+    denom = sx**2 + sy**2 + (mx - my)**2
+    if denom == 0:
+        return None
+    return float(2 * r * sx * sy / denom)
+
+
+def _safe_cohens_kappa(y_true: list, y_pred: list) -> Optional[float]:
+    """Cohen's Kappa, returning None for degenerate cases."""
+    if len(y_true) < 2 or len(set(y_true) | set(y_pred)) < 2:
+        return None
+    from sklearn.metrics import cohen_kappa_score
+    return float(cohen_kappa_score(y_true, y_pred))
+
+
 class AccuracyComparator:
     """Compares ground truth with extracted data for accuracy metrics."""
     
@@ -42,13 +67,19 @@ class AccuracyComparator:
         
         chart_type = self._infer_chart_type(gt)
         
+        pred_chart_type = self._infer_pred_chart_type(pred)
         metrics = {
             "image_path": gt.get("image_path", ""),
             "chart_type": chart_type,
             "detection_metrics": self._compute_detection_metrics(gt, pred),
-            "value_metrics": self._compute_value_metrics(gt, pred, chart_type)
+            "value_metrics": self._compute_value_metrics(gt, pred, chart_type),
+            "categorical_metrics": {
+                "gt_chart_type": chart_type,
+                "pred_chart_type": pred_chart_type,
+                "chart_type_match": chart_type == pred_chart_type,
+            },
         }
-        
+
         return metrics
     
     def _infer_chart_type(self, gt: Dict) -> str:
@@ -56,6 +87,10 @@ class AccuracyComparator:
         if "charts" in gt and len(gt["charts"]) > 0:
             return gt["charts"][0].get("chart_type", "unknown")
         return "unknown"
+
+    def _infer_pred_chart_type(self, pred: Dict) -> str:
+        """Infer chart type from prediction output."""
+        return pred.get("chart_type", pred.get("detected_chart_type", "unknown"))
     
     def _compute_detection_metrics(self, gt: Dict, pred: Dict) -> Dict[str, float]:
         """
@@ -164,14 +199,19 @@ class AccuracyComparator:
         within_tolerance = np.abs((gt_sorted - pred_sorted) / (gt_sorted + 1e-10)) < 0.05
         relaxed_accuracy = np.mean(within_tolerance)
         
-        return {
+        result = {
             "mae": float(mae),
             "relative_error_pct": float(relative_error),
             "relaxed_accuracy": float(relaxed_accuracy),
             "count_match": len(gt_values) == len(pred_values),
             "num_gt": len(gt_values),
-            "num_pred": len(pred_values)
+            "num_pred": len(pred_values),
         }
+        if len(gt_sorted) >= 2 and len(pred_sorted) >= 2:
+            ccc = _lin_ccc(gt_sorted, pred_sorted)
+            if ccc is not None:
+                result["ccc"] = ccc
+        return result
     
     def _compare_point_values(self, gt: Dict, pred: Dict) -> Dict[str, float]:
         """Compare line/scatter points using Hungarian matching."""
@@ -262,11 +302,16 @@ class AccuracyComparator:
         min_len = min(len(gt_freqs), len(pred_freqs))
         mae = mean_absolute_error(gt_freqs[:min_len], pred_freqs[:min_len])
         
-        return {
+        result = {
             "frequency_mae": float(mae),
             "num_bins_gt": len(gt_bins),
-            "num_bins_pred": len(pred_freqs)
+            "num_bins_pred": len(pred_freqs),
         }
+        if min_len >= 2:
+            ccc = _lin_ccc(gt_freqs[:min_len], pred_freqs[:min_len])
+            if ccc is not None:
+                result["ccc"] = ccc
+        return result
 
 
 class BatchEvaluator:
@@ -366,6 +411,20 @@ class BatchEvaluator:
             if relaxed_accs:
                 summary["avg_relaxed_accuracy"] = float(np.mean(relaxed_accs))
         
+        # CCC aggregate
+        cccs = [v.get('ccc') for v in val_metrics if v.get('ccc') is not None]
+        if cccs:
+            summary["avg_value_ccc"] = float(np.mean(cccs))
+
+        # Cohen's Kappa for chart type classification
+        gt_types = [m["categorical_metrics"]["gt_chart_type"] for m in all_metrics
+                    if "categorical_metrics" in m]
+        pred_types = [m["categorical_metrics"]["pred_chart_type"] for m in all_metrics
+                      if "categorical_metrics" in m]
+        kappa = _safe_cohens_kappa(gt_types, pred_types)
+        if kappa is not None:
+            summary["cohens_kappa"] = kappa
+
         # Per-chart-type breakdown
         by_type = {}
         for m in all_metrics:

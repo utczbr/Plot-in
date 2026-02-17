@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+# Add project root to path so shared module is importable from runtime context
+_project_root = Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MANIFEST_PATH = REPO_ROOT / "config" / "install_profile_manifest.json"
-DEFAULT_PROFILES_DIR = REPO_ROOT / "config" / "install_profiles"
+from shared.state_root import resolve_state_root
+
+_STATE_ROOT = resolve_state_root()
+MANIFEST_PATH = _STATE_ROOT / "config" / "install_profile_manifest.json"
+DEFAULT_PROFILES_DIR = _STATE_ROOT / "config" / "install_profiles"
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -33,7 +40,7 @@ def load_install_profile(profile_name: Optional[str] = None) -> Dict[str, Any]:
     if profiles_dir:
         profiles_root = Path(profiles_dir)
         if not profiles_root.is_absolute():
-            profiles_root = REPO_ROOT / profiles_root
+            profiles_root = _STATE_ROOT / profiles_root
     else:
         profiles_root = DEFAULT_PROFILES_DIR
 

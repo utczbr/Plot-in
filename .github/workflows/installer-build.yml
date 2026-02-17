@@ -44,14 +44,33 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install build dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller
-
       - name: Build installer
         run: |
-          python installer/build_executables.py --name chart-analysis-installer-${{ matrix.os_tag }} --target ${{ matrix.target }}
+          python installer/build_executables.py --name chart-analysis-installer-${{ matrix.os_tag }} --target ${{ matrix.target }} --ui-policy auto
+
+      - name: Smoke test artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == "app" ]]; then
+            artifact="dist/chart-analysis-installer-${{ matrix.os_tag }}.app/Contents/MacOS/chart-analysis-installer-${{ matrix.os_tag }}"
+          else
+            artifact="dist/chart-analysis-installer-${{ matrix.os_tag }}"
+          fi
+          test -x "$artifact"
+          "$artifact" --help >/dev/null
+          "$artifact" --ui-mode cli --help >/dev/null
+
+      - name: Smoke test artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifact = "dist/chart-analysis-installer-${{ matrix.os_tag }}.exe"
+          if (-not (Test-Path $artifact)) {
+            throw "Artifact not found: $artifact"
+          }
+          & $artifact --help | Out-Null
+          & $artifact --ui-mode cli --help | Out-Null
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

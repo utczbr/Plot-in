@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .constants import CONFIG_DIR, PROFILE_MANIFEST_PATH, PROFILES_DIR, REPO_ROOT
+from .constants import CONFIG_DIR, PROFILE_MANIFEST_PATH, PROFILES_DIR, STATE_ROOT
 from .install_types import InstallOptions
 
 
@@ -79,7 +79,7 @@ def write_profile(options: InstallOptions) -> Path:
 
     manifest = {
         "active_profile": options.profile_name,
-        "profiles_dir": str(PROFILES_DIR.relative_to(REPO_ROOT)),
+        "profiles_dir": str(PROFILES_DIR.relative_to(STATE_ROOT)),
         "profiles": sorted(p.stem for p in PROFILES_DIR.glob("*.json")),
     }
     _write_json(PROFILE_MANIFEST_PATH, manifest)
@@ -95,7 +95,7 @@ def load_profile(profile_name: Optional[str] = None) -> Dict[str, Any]:
 
     profiles_dir = Path(manifest.get("profiles_dir", "config/install_profiles"))
     if not profiles_dir.is_absolute():
-        profiles_dir = REPO_ROOT / profiles_dir
+        profiles_dir = STATE_ROOT / profiles_dir
 
     profile_path = profiles_dir / f"{resolved_name}.json"
     return _read_json(profile_path)

@@ -5,7 +5,7 @@ import shlex
 from pathlib import Path
 from typing import List
 
-from .constants import MODEL_MANIFEST_PATH, REPO_ROOT
+from .constants import MODEL_MANIFEST_PATH, STATE_ROOT
 from .dependencies import install_requirements, resolve_requirements
 from .environment import (
     build_manual_global_commands,
@@ -26,22 +26,22 @@ def run_installation(options: InstallOptions, platform_info: PlatformInfo) -> In
     try:
         options.models_dir = Path(options.models_dir)
         if not options.models_dir.is_absolute():
-            options.models_dir = (REPO_ROOT / options.models_dir).resolve()
+            options.models_dir = (STATE_ROOT / options.models_dir).resolve()
 
         if options.easyocr_model_storage_dir is not None and not options.easyocr_model_storage_dir.is_absolute():
-            options.easyocr_model_storage_dir = (REPO_ROOT / options.easyocr_model_storage_dir).resolve()
+            options.easyocr_model_storage_dir = (STATE_ROOT / options.easyocr_model_storage_dir).resolve()
         if options.paddle_model_cache_dir is not None and not options.paddle_model_cache_dir.is_absolute():
-            options.paddle_model_cache_dir = (REPO_ROOT / options.paddle_model_cache_dir).resolve()
+            options.paddle_model_cache_dir = (STATE_ROOT / options.paddle_model_cache_dir).resolve()
 
         requirements = resolve_requirements(options, platform_info.os_name)
         steps.append(f"Resolved {len(requirements)} dependency specs")
 
-        python_executable = resolve_python_for_install(options, REPO_ROOT)
+        python_executable = resolve_python_for_install(options, STATE_ROOT)
         steps.append(f"Using Python executable: {python_executable}")
 
         if options.install_scope == "global" and platform_info.is_debian_family:
             commands = build_manual_global_commands(python_executable, requirements)
-            script = maybe_write_manual_command_script(REPO_ROOT, commands)
+            script = maybe_write_manual_command_script(STATE_ROOT, commands)
             steps.append("Prepared manual global-install commands for Debian")
             return InstallResult(
                 success=True,

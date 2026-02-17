@@ -17,6 +17,7 @@ CHART_ELEMENT_KEY_MAP = {
     ChartType.HISTOGRAM.value: "bar",
     ChartType.HEATMAP.value: "cell",
     ChartType.PIE.value: "slice",
+    ChartType.AREA.value: "data_point",
 }
 
 

@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from typing import Dict, Any, Tuple, Optional
 from pathlib import Path
+from visual.pie_geometry import extract_slice_overlay_points
 
 class VisualizationService:
     """Service for creating annotated images and visualizations."""
@@ -47,14 +48,53 @@ class VisualizationService:
             "chart_title": (255, 255, 100), "axis_title": (255, 100, 255), "legend": (100, 255, 255),
             "data_label": (200, 200, 100), "other": (200, 200, 200),
             "box": (255, 150, 50), "line": (50, 150, 255), "scatter": (150, 50, 255),
-            "data_point": (150, 255, 50)
+            "data_point": (150, 255, 50), "slice": (255, 120, 120)
         }
 
         # Draw all detection boxes
         if 'detections' in analysis_data:
             for class_name, items in analysis_data['detections'].items():
                 for item in items:
-                    if 'xyxy' not in item: continue
+                    color = colors.get(class_name, (128, 128, 128))
+
+                    if class_name == "slice":
+                        pie_overlay = extract_slice_overlay_points(
+                            item,
+                            scale_x=w_ratio,
+                            scale_y=h_ratio,
+                            expected_keypoints=5,
+                        )
+                        if pie_overlay is not None:
+                            center_pt, arc_pts = pie_overlay
+                            cv2.line(img_annotated, center_pt, arc_pts[0], color, thickness, cv2.LINE_AA)
+                            cv2.line(img_annotated, center_pt, arc_pts[-1], color, thickness, cv2.LINE_AA)
+                            cv2.polylines(
+                                img_annotated,
+                                [np.array(arc_pts, dtype=np.int32).reshape((-1, 1, 2))],
+                                False,
+                                color,
+                                thickness,
+                                cv2.LINE_AA,
+                            )
+
+                            label_text = f"{class_name}"
+                            if 'text' in item and item['text']:
+                                label_text += f": {item['text']}"
+                            label_x, label_y = arc_pts[0]
+                            cv2.putText(
+                                img_annotated,
+                                label_text,
+                                (label_x, label_y - int(10 * font_scale)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                font_scale * 0.8,
+                                color,
+                                thickness,
+                            )
+                            continue
+
+                    if 'xyxy' not in item:
+                        continue
+
                     # Scale coordinates to original image if needed
                     x1, y1, x2, y2 = item['xyxy']
                     if original_dims:
@@ -64,15 +104,14 @@ class VisualizationService:
                         y2 = int(y2 * h_ratio)
                     else:
                         x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
-                        
-                    color = colors.get(class_name, (128, 128, 128))
+
                     cv2.rectangle(img_annotated, (x1, y1), (x2, y2), color, thickness)
-                    
+
                     label_text = f"{class_name}"
                     if 'text' in item and item['text']:
                         label_text += f": {item['text']}"
-                    
-                    cv2.putText(img_annotated, label_text, (x1, y1 - int(10 * font_scale)), 
+
+                    cv2.putText(img_annotated, label_text, (x1, y1 - int(10 * font_scale)),
                                 cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, color, thickness)
         
         # Draw classified tick labels separately (if they exist)

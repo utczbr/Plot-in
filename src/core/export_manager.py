@@ -3,7 +3,7 @@ Export Manager - Service for handling data export operations.
 """
 import json
 import csv
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import numpy as np
 
@@ -127,6 +127,47 @@ class ExportManager:
         else:
             return obj
             
+    PROTOCOL_COLUMNS = [
+        'source_file', 'page_index', 'chart_type', 'series_id',
+        'group', 'outcome', 'value', 'unit',
+        'error_bar_type', 'error_bar_value', 'baseline_value',
+        'confidence', 'review_status', 'notes',
+    ]
+
+    @staticmethod
+    def export_protocol_csv(
+        protocol_rows: List[Dict[str, Any]],
+        filename: str,
+        filter_outcome: Optional[str] = None,
+        filter_group: Optional[str] = None,
+    ) -> bool:
+        """Export protocol rows to CSV with required column ordering."""
+        try:
+            columns = ExportManager.PROTOCOL_COLUMNS
+            filtered = protocol_rows
+            if filter_outcome:
+                filtered = [r for r in filtered if r.get('outcome') == filter_outcome]
+            if filter_group:
+                filtered = [r for r in filtered if r.get('group') == filter_group]
+
+            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=columns, extrasaction='ignore')
+                writer.writeheader()
+                for row in filtered:
+                    writer.writerow({k: row.get(k, '') for k in columns})
+
+            # Post-write schema validation
+            with open(filename, 'r', encoding='utf-8') as vf:
+                reader = csv.reader(vf)
+                written_header = next(reader)
+                if written_header != columns:
+                    print(f"Warning: protocol CSV header mismatch: {written_header} != {columns}")
+                    return False
+            return True
+        except Exception as e:
+            print(f"Error exporting protocol CSV: {e}")
+            return False
+
     def export_data(self, data: Dict[str, Any], export_type: str, filename: str) -> bool:
         """Main export method that routes to appropriate export method."""
         if export_type.lower() == 'csv':
@@ -135,5 +176,8 @@ class ExportManager:
             return self.export_to_json(data, filename)
         elif export_type.lower() == 'txt':
             return self.export_to_txt(data, filename)
+        elif export_type.lower() == 'protocol_csv':
+            rows = data.get('protocol_rows', [])
+            return self.export_protocol_csv(rows, filename)
         else:
             raise ValueError(f"Unsupported export type: {export_type}")

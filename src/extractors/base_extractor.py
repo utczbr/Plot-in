@@ -68,7 +68,7 @@ class BaseExtractor(ABC):
         elif chart_type == 'box':
             element_key = 'boxes'
             count_key = 'num_boxes'
-        elif chart_type in ['scatter', 'line', 'data_point']:
+        elif chart_type in ['scatter', 'line', 'data_point', 'area']:
             element_key = 'data_points'
             count_key = 'num_points'
         else:

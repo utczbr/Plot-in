@@ -35,6 +35,7 @@ from handlers.line_handler import LineHandler
 from handlers.scatter_handler import ScatterHandler
 from handlers.heatmap_handler import HeatmapHandler  # NEW
 from handlers.pie_handler import PieHandler          # NEW
+from handlers.area_handler import AreaHandler
 
 from services.dual_axis_service import DualAxisDetectionService
 from services.meta_clustering_service import MetaClusteringService
@@ -61,6 +62,7 @@ class ChartAnalysisOrchestrator:
         "histogram": HistogramHandler,
         "heatmap": HeatmapHandler,
         "pie": PieHandler,
+        "area": AreaHandler,
     }
 
     _HANDLER_EXTRAS: Dict[str, Callable[["ChartAnalysisOrchestrator"], Dict[str, Any]]] = {

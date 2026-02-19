@@ -104,9 +104,11 @@ def run_protocol_validation(
     gold_csv: str,
     out_json: str,
     min_success_rate: float = 0.99,
-    min_accuracy: float = 0.90,
+    min_accuracy: float = 0.95,
     min_ccc: float = 0.90,
     min_kappa: float = 0.81,
+    require_ccc: bool = True,
+    require_kappa: bool = True,
     pred_runtime_seconds: Optional[float] = None,
     manual_runtime_seconds: Optional[float] = None,
     comparator_runtime_seconds: Optional[float] = None,
@@ -177,11 +179,13 @@ def run_protocol_validation(
         },
         'ccc': {
             'observed': ccc_val, 'threshold': min_ccc,
-            'pass': ccc_val is not None and ccc_val >= min_ccc,
+            'pass': (not require_ccc) if ccc_val is None else (ccc_val >= min_ccc),
+            'skipped': ccc_val is None and not require_ccc,
         },
         'cohens_kappa': {
             'observed': kappa_val, 'threshold': min_kappa,
-            'pass': kappa_val is not None and kappa_val >= min_kappa,
+            'pass': (not require_kappa) if kappa_val is None else (kappa_val >= min_kappa),
+            'skipped': kappa_val is None and not require_kappa,
         },
     }
     all_passed = all(g['pass'] for g in gates.values())
@@ -203,6 +207,34 @@ def run_protocol_validation(
         'gates': gates,
         'all_thresholds_met': all_passed,
     }
+
+    # Per-chart-type breakdown
+    if matched:
+        type_groups: Dict[str, list] = defaultdict(list)
+        for g, p in matched:
+            ct = g.get('chart_type', 'unknown')
+            type_groups[ct].append((g, p))
+
+        per_type: Dict[str, Any] = {}
+        for ct, pairs in type_groups.items():
+            ct_sig_matches = sum(1 for g, p in pairs if _signature(g) == _signature(p))
+            ct_acc = ct_sig_matches / len(pairs) if pairs else 0.0
+
+            ct_gold_vals, ct_pred_vals = [], []
+            for g, p in pairs:
+                gv = _safe_float(g.get('value', ''))
+                pv = _safe_float(p.get('value', ''))
+                if gv is not None and pv is not None:
+                    ct_gold_vals.append(gv)
+                    ct_pred_vals.append(pv)
+
+            ct_ccc = None
+            if len(ct_gold_vals) >= 2:
+                ct_ccc = _lin_ccc(np.array(ct_gold_vals), np.array(ct_pred_vals))
+
+            per_type[ct] = {'count': len(pairs), 'accuracy': ct_acc, 'ccc': ct_ccc}
+
+        report['per_chart_type'] = per_type
 
     # Timing comparison
     if pred_runtime_seconds is not None and manual_runtime_seconds is not None:
@@ -249,9 +281,13 @@ def main() -> int:
     parser.add_argument('--gold', required=True, help='Gold standard protocol CSV')
     parser.add_argument('--out', required=True, help='Output report JSON')
     parser.add_argument('--min-success-rate', type=float, default=0.99)
-    parser.add_argument('--min-accuracy', type=float, default=0.90)
+    parser.add_argument('--min-accuracy', type=float, default=0.95)
     parser.add_argument('--min-ccc', type=float, default=0.90)
     parser.add_argument('--min-kappa', type=float, default=0.81)
+    parser.add_argument('--no-require-ccc', dest='require_ccc', action='store_false', default=True,
+                        help='Skip CCC gate when metric cannot be computed')
+    parser.add_argument('--no-require-kappa', dest='require_kappa', action='store_false', default=True,
+                        help='Skip Kappa gate when metric cannot be computed')
     parser.add_argument('--pred-runtime-seconds', type=float, default=None)
     parser.add_argument('--manual-runtime-seconds', type=float, default=None)
     parser.add_argument('--comparator-runtime-seconds', type=float, default=None)
@@ -265,6 +301,8 @@ def main() -> int:
         min_accuracy=args.min_accuracy,
         min_ccc=args.min_ccc,
         min_kappa=args.min_kappa,
+        require_ccc=args.require_ccc,
+        require_kappa=args.require_kappa,
         pred_runtime_seconds=args.pred_runtime_seconds,
         manual_runtime_seconds=args.manual_runtime_seconds,
         comparator_runtime_seconds=args.comparator_runtime_seconds,

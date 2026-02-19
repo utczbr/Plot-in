@@ -93,6 +93,7 @@ def _collect_gui_options(default_models_dir: Path) -> Tuple[Optional[InstallOpti
 def _collect_options(args: argparse.Namespace) -> InstallOptions:
     ui_mode = _effective_ui_mode(args)
     if ui_mode in {"auto", "gui"}:
+        print("Opening installer window...")
         gui_options, gui_error = _collect_gui_options((STATE_ROOT / "src/models").resolve())
         if gui_options is not None:
             return gui_options
@@ -100,10 +101,13 @@ def _collect_options(args: argparse.Namespace) -> InstallOptions:
         if gui_error:
             if ui_mode == "gui":
                 raise RuntimeError(gui_error)
+            print(f"Note: {gui_error}")
+            print("Continuing with default settings...")
             logging.warning("%s Falling back to CLI options.", gui_error)
         else:
             if ui_mode == "gui":
                 raise RuntimeError("GUI installer was cancelled by user.")
+            print("Installer window closed. Continuing with default settings...")
             logging.info("GUI installer closed without selection; falling back to CLI options.")
 
     options = InstallOptions()
@@ -129,15 +133,19 @@ def main() -> int:
     configure_logging(args.verbose)
 
     platform_info = detect_platform()
+    py_version = ".".join(map(str, platform_info.python_version))
     logging.info(
         "Detected platform: os=%s machine=%s python=%s",
         platform_info.os_name,
         platform_info.machine,
-        ".".join(map(str, platform_info.python_version)),
+        py_version,
     )
+    print(f"Platform: {platform_info.os_name} ({platform_info.machine})")
+    print(f"Python:   {py_version}")
 
     py_error = validate_python_version()
     if py_error:
+        print(f"ERROR: {py_error}")
         logging.error(py_error)
         if args.auto_install_python:
             suggestion = attempt_auto_python_install(platform_info)
@@ -147,6 +155,7 @@ def main() -> int:
     try:
         options = _collect_options(args)
     except RuntimeError as exc:
+        print(f"ERROR: {exc}")
         logging.error("%s", exc)
         return 3
 
@@ -154,6 +163,7 @@ def main() -> int:
         suggestion = attempt_auto_python_install(platform_info)
         logging.info("Auto-install Python workflow hint: %s", suggestion)
 
+    print("\nRunning installation...")
     result = run_installation(options, platform_info)
 
     print("\n=== Installer Summary ===")

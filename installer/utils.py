@@ -34,15 +34,15 @@ def run_command(
         env=merged_env,
         check=False,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     if proc.stdout:
-        logging.debug(proc.stdout.strip())
-    if proc.stderr:
-        logging.debug(proc.stderr.strip())
+        for line in proc.stdout.strip().splitlines():
+            logging.info("  %s", line)
     if proc.returncode != 0 and not allow_failure:
         raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(command)}\n{proc.stderr.strip()}"
+            f"Command failed ({proc.returncode}): {' '.join(command)}\n{proc.stdout.strip()}"
         )
     return proc
 

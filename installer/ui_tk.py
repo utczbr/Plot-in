@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -21,6 +22,13 @@ def run_minimal_gui(default_models_dir: Path) -> Optional[InstallOptions]:
     root.title("Chart Analysis Installer")
     root.geometry("640x460")
     root.resizable(False, False)
+
+    # macOS: bring window to foreground (tkinter windows launch behind Terminal)
+    if sys.platform == "darwin":
+        root.attributes('-topmost', True)
+        root.after(200, lambda: root.attributes('-topmost', False))
+        root.lift()
+        root.focus_force()
 
     options = InstallOptions()
 

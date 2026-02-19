@@ -1,0 +1,36 @@
+name: Evaluation & Validation Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/evaluation/**
+      - src/validation/**
+      - tests/evaluation_tests/**
+      - tests/fixtures/protocol/**
+  pull_request:
+    branches: [main]
+    paths:
+      - src/evaluation/**
+      - src/validation/**
+      - tests/evaluation_tests/**
+      - tests/fixtures/protocol/**
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install numpy scipy scikit-learn pytest
+
+      - name: Run evaluation tests
+        run: pytest tests/evaluation_tests/ -v

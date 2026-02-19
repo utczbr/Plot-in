@@ -5,6 +5,7 @@ import logging
 import argparse
 import json
 import datetime
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -146,6 +147,7 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
     results = []
 
     # 4. Run Pipeline
+    t_pipeline_start = time.perf_counter()
     for i, asset in enumerate(assets):
         logging.info(f"Processing {i+1}/{len(assets)}: {asset.image_path.name}")
         try:
@@ -163,6 +165,8 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
         except Exception as e:
             import traceback
             logging.error(f"Failed to process {asset.image_path}: {e}\n{traceback.format_exc()}")
+
+    runtime_seconds = time.perf_counter() - t_pipeline_start
 
     # 5. Save Consolidated Results
     consolidated_path = Path(output_dir) / "_consolidated_results.json"
@@ -194,6 +198,7 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
         'output_dir': str(output_dir),
         'asset_count': len(assets),
         'result_count': len(results),
+        'runtime_seconds': round(runtime_seconds, 3),
         'settings': {
             'ocr_backend': ocr_backend,
             'ocr_accuracy': ocr_accuracy,

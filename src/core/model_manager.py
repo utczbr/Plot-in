@@ -62,6 +62,10 @@ class ModelManager:
     def get_last_load_errors(self) -> Dict[str, str]:
         return dict(self._last_load_errors)
 
+    # Models that are optional: missing or failing to load will log a warning
+    # instead of raising RuntimeError, and their session is stored as None.
+    _OPTIONAL_MODELS = frozenset({'doclayout'})
+
     def load_models(self, models_dir: str, force_reload: bool = False):
         """Load all required models atomically and reuse across all images."""
         models_dir_path = Path(models_dir)
@@ -71,7 +75,7 @@ class ModelManager:
             and self._loaded_models_dir == models_dir_path
         ):
             return self._models
-        
+
         with self._lock:
             if (
                 self._models is not None
@@ -89,10 +93,16 @@ class ModelManager:
             providers = self._get_providers()
 
             for model_name, filename in model_files.items():
+                is_optional = model_name in self._OPTIONAL_MODELS
                 model_path = models_dir_path / filename
                 if not model_path.exists():
-                    load_errors[model_name] = f"Model file not found: {model_path}"
-                    logging.error("❌ %s", load_errors[model_name])
+                    msg = f"Model file not found: {model_path}"
+                    if is_optional:
+                        logging.warning("⚠️ Optional model '%s' not found, skipping. %s", model_name, msg)
+                        loaded_models[model_name] = None
+                    else:
+                        load_errors[model_name] = msg
+                        logging.error("❌ %s", msg)
                     continue
 
                 try:
@@ -103,8 +113,13 @@ class ModelManager:
                     loaded_models[model_name] = session
                     logging.info(f"✓ Loaded {model_name} ({model_path.stat().st_size/1024:.1f}KB)")
                 except Exception as exc:
-                    load_errors[model_name] = self._format_load_error(model_path, exc)
-                    logging.error("❌ Failed to load %s: %s", model_name, load_errors[model_name])
+                    error_msg = self._format_load_error(model_path, exc)
+                    if is_optional:
+                        logging.warning("⚠️ Optional model '%s' failed to load, skipping: %s", model_name, error_msg)
+                        loaded_models[model_name] = None
+                    else:
+                        load_errors[model_name] = error_msg
+                        logging.error("❌ Failed to load %s: %s", model_name, error_msg)
 
             if load_errors:
                 self._last_load_errors = load_errors

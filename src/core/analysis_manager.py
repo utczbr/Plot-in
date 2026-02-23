@@ -40,6 +40,35 @@ class AnalysisManager:
         """Set advanced settings for analysis."""
         self._advanced_settings = settings
 
+    def _prepare_settings_for_pipeline(self) -> Dict[str, Any]:
+        """Translate GUI settings keys to pipeline-expected format.
+
+        The settings dialog stores thresholds under ``detection_thresholds``
+        with keys like ``bar_detection``, ``box_detection``, etc.  The pipeline
+        reads ``detection_confidence_overrides`` keyed by chart type (``bar``,
+        ``box``, …).  This method bridges the two formats.
+        """
+        settings = dict(self._advanced_settings)
+        thresholds = settings.get('detection_thresholds', {})
+
+        conf_overrides: Dict[str, float] = {}
+        nms_overrides: Dict[str, float] = {}
+        for key, val in thresholds.items():
+            if key == 'nms_threshold':
+                for ct in ('bar', 'box', 'line', 'scatter', 'histogram', 'heatmap', 'pie', 'area'):
+                    nms_overrides[ct] = val
+            elif key == 'classification':
+                settings['classification_confidence'] = val
+            elif key == 'doclayout_detection':
+                settings['doclayout_conf_threshold'] = val
+            elif key.endswith('_detection'):
+                chart_type = key.replace('_detection', '')
+                conf_overrides[chart_type] = val
+
+        settings['detection_confidence_overrides'] = conf_overrides
+        settings['detection_nms_overrides'] = nms_overrides
+        return settings
+
     @staticmethod
     def _default_models_dir() -> Path:
         return Path(__file__).resolve().parents[1] / "models"
@@ -150,13 +179,13 @@ class AnalysisManager:
             image_input=Path(image_path),
             output_dir=output_path,
             annotated=True, # GUI usually expects annotated
-            advanced_settings=self._advanced_settings,
+            advanced_settings=self._prepare_settings_for_pipeline(),
             provenance=provenance,
         )
-        
+
         if result:
             self.data_manager.store_analysis_result(image_path, result)
-        
+
         return result
     
     def run_batch_analysis(self, input_path: str, output_path: str, models_dir: str, conf: float,
@@ -193,6 +222,7 @@ class AnalysisManager:
                     image_input=asset.image_path,
                     output_dir=output_path,
                     annotated=True,
+                    advanced_settings=self._prepare_settings_for_pipeline(),
                     provenance=prov,
                 )
                 processed += 1

@@ -506,7 +506,7 @@ def _save_processing_metadata(processed_charts: List[dict], output_dir: Path, pd
         logger.warning(f"⚠️ Não foi possível salvar metadados: {e}")
 
 
-def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: str, figure_class_id: int = 0):
+def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: str, figure_class_id: int = 3):
     """Extract charts using DocLayout-YOLO with proper error handling."""
     if not Path(model_path).exists():
         logger.error(f"❌ Model not found: {model_path}")

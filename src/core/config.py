@@ -116,6 +116,7 @@ MODELS_CONFIG = ModelsConfig(
         'heatmap': 'detect_heatmap.onnx',
         'pie': 'Pie_pose.onnx',
         'area': 'detect_line.onnx',
+        'doclayout': 'doclayout_yolo.onnx',
     },
     detection_output_type={
         'bar': 'bbox',
@@ -126,6 +127,7 @@ MODELS_CONFIG = ModelsConfig(
         'heatmap': 'bbox',
         'pie': 'pose',
         'area': 'bbox',
+        'doclayout': 'bbox',
     },
     detection_keypoints={
         'pie': 5,

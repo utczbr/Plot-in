@@ -5,8 +5,8 @@
 # Core Dependencies
 numpy==1.26.4; python_version >= "3.8"
 opencv-python==4.8.1.78
-onnxruntime==1.24.1; platform_machine == "x86_64"
-onnxruntime-silicon==1.24.1; platform_machine == "arm64"
+# macOS arm64 now uses mainline onnxruntime.
+onnxruntime==1.24.1
 scikit-learn==1.3.2
 
 # Machine Learning

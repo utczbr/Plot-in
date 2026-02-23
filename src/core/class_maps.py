@@ -72,6 +72,24 @@ CLASS_MAP_AREA: Dict[int, str] = {
 # Backward compatibility alias
 CLASS_MAP_LINE_OBJ = CLASS_MAP_LINE
 
+# DocLayout-YOLO document layout detection model (doclayout_yolo.onnx)
+# Output format: [1, 14, 21504] → 4 bbox coords + 10 class scores per anchor
+CLASS_MAP_DOCLAYOUT: Dict[int, str] = {
+    0: 'title',
+    1: 'plain_text',
+    2: 'abandon',
+    3: 'figure',
+    4: 'figure_caption',
+    5: 'table',
+    6: 'table_caption',
+    7: 'table_footnote',
+    8: 'isolate_formula',
+    9: 'formula_caption',
+}
+
+# Class IDs from CLASS_MAP_DOCLAYOUT that should be sent to OCR
+DOCLAYOUT_TEXT_CLASS_IDS: frozenset = frozenset({0, 1, 4})  # title, plain_text, figure_caption
+
 
 def get_class_map(chart_type: str) -> Dict[int, str]:
     """Get the appropriate class map for a chart type.
@@ -107,5 +125,7 @@ __all__ = [
     'CLASS_MAP_PIE_POSE',
     'CLASS_MAP_PIE',
     'CLASS_MAP_AREA',
+    'CLASS_MAP_DOCLAYOUT',
+    'DOCLAYOUT_TEXT_CLASS_IDS',
     'get_class_map',
 ]

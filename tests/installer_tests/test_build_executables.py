@@ -47,3 +47,35 @@ def test_build_passes_gui_env_to_pyinstaller(monkeypatch, tmp_path):
     assert captured["env"]["INSTALLER_TARGET_MODE"] == "onefile"
     assert captured["env"]["INSTALLER_UI_POLICY"] == "auto"
     assert captured["env"]["INSTALLER_INCLUDE_GUI"] == "1"
+
+
+def test_build_preserves_requested_gui_policy(monkeypatch, tmp_path):
+    spec_file = tmp_path / "installer.spec"
+    spec_file.write_text("# test spec\n", encoding="utf-8")
+
+    monkeypatch.setattr(be, "SPEC_FILE", spec_file)
+    monkeypatch.setattr(be, "_recreate_build_venv", lambda *_: Path("/tmp/fake-python"))
+    monkeypatch.setattr(be, "_install_build_dependencies", lambda *_: 0)
+    monkeypatch.setattr(be, "_tkinter_available", lambda *_: True)
+
+    captured = {}
+
+    def _fake_run(command, *, env=None):
+        captured["command"] = command
+        captured["env"] = env
+        return 0
+
+    monkeypatch.setattr(be, "_run_command", _fake_run)
+
+    result = be.build("chart-analysis-installer-test", target="app", ui_policy="gui")
+    assert result == 0
+    assert captured["env"]["INSTALLER_TARGET_MODE"] == "app"
+    assert captured["env"]["INSTALLER_UI_POLICY"] == "gui"
+    assert captured["env"]["INSTALLER_INCLUDE_GUI"] == "1"
+
+
+def test_installer_workflow_uses_explicit_ui_policy_matrix():
+    workflow = Path(".github/workflows/installer-build.yml").read_text(encoding="utf-8")
+    assert "ui_policy: auto" in workflow
+    assert "ui_policy: gui" in workflow
+    assert "--ui-policy ${{ matrix.ui_policy }}" in workflow

@@ -114,6 +114,32 @@ class VisualizationService:
                     cv2.putText(img_annotated, label_text, (x1, y1 - int(10 * font_scale)),
                                 cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, color, thickness)
         
+        # Draw DocLayout text regions (cyan rectangles with dashed appearance)
+        layout_regions = (analysis_data.get('detections') or {}).get('layout_text_regions', [])
+        layout_color = (0, 220, 180)  # cyan-green
+        for region in layout_regions:
+            if 'xyxy' not in region:
+                continue
+            rx1, ry1, rx2, ry2 = region['xyxy']
+            if original_dims:
+                rx1 = int(rx1 * w_ratio)
+                ry1 = int(ry1 * h_ratio)
+                rx2 = int(rx2 * w_ratio)
+                ry2 = int(ry2 * h_ratio)
+            else:
+                rx1, ry1, rx2, ry2 = map(int, [rx1, ry1, rx2, ry2])
+            # Draw a thin rectangle to distinguish from chart-model detections
+            cv2.rectangle(img_annotated, (rx1, ry1), (rx2, ry2), layout_color, max(1, thickness - 1))
+            region_label = region.get('class_name', 'text')
+            if 'text' in region and region['text']:
+                region_label += f": {region['text']}"
+            cv2.putText(
+                img_annotated, region_label,
+                (rx1, ry1 - int(8 * font_scale)),
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.7,
+                layout_color, max(1, thickness - 1),
+            )
+
         # Draw classified tick labels separately (if they exist)
         if 'tick_labels' in analysis_data:
             for item in analysis_data['tick_labels']:

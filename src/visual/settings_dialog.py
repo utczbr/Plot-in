@@ -169,7 +169,15 @@ class SettingsDialog(QDialog):
         self.aggressive_preprocess_check = QCheckBox("Aggressive Preprocessing")
         self.aggressive_preprocess_check.setChecked(self.settings['ocr_settings']['aggressive_preprocessing'])
         engine_layout.addWidget(self.aggressive_preprocess_check, 4, 0, 1, 2)
-        
+
+        self.use_doclayout_check = QCheckBox("Use DocLayout YOLO for text region detection")
+        self.use_doclayout_check.setChecked(self.settings.get('use_doclayout_text', True))
+        self.use_doclayout_check.setToolTip(
+            "Run doclayout_yolo.onnx to detect text blocks (titles, labels, captions) "
+            "before OCR. Especially useful for pie charts that lack axis labels."
+        )
+        engine_layout.addWidget(self.use_doclayout_check, 5, 0, 1, 2)
+
         scroll_layout.addWidget(engine_group)
         
         # OCR Whitelists
@@ -269,7 +277,12 @@ class SettingsDialog(QDialog):
             ('box_detection', '📦 Box Plot Detection', 0.1, 1.0, 0.05),
             ('line_detection', '📈 Line Chart Detection', 0.1, 1.0, 0.05),
             ('scatter_detection', '⚫ Scatter Plot Detection', 0.1, 1.0, 0.05),
-            ('nms_threshold', '🎯 NMS Threshold', 0.1, 1.0, 0.05)
+            ('histogram_detection', '📊 Histogram Detection', 0.1, 1.0, 0.05),
+            ('heatmap_detection', '🔥 Heatmap Detection', 0.1, 1.0, 0.05),
+            ('pie_detection', '🥧 Pie Chart Detection', 0.1, 1.0, 0.05),
+            ('area_detection', '📐 Area Chart Detection', 0.1, 1.0, 0.05),
+            ('doclayout_detection', '📄 DocLayout Text Detection', 0.1, 1.0, 0.05),
+            ('nms_threshold', '🎯 NMS Threshold', 0.1, 1.0, 0.05),
         ]
         
         for key, label, min_val, max_val, step in threshold_configs:
@@ -703,10 +716,15 @@ class SettingsDialog(QDialog):
             'detection_thresholds': {
                 'classification': 0.25,
                 'bar_detection': 0.4,
-                'box_detection': 0.4,
+                'box_detection': 0.25,
                 'line_detection': 0.4,
                 'scatter_detection': 0.4,
-                'nms_threshold': 0.45
+                'histogram_detection': 0.2,
+                'heatmap_detection': 0.4,
+                'pie_detection': 0.4,
+                'area_detection': 0.4,
+                'doclayout_detection': 0.3,
+                'nms_threshold': 0.45,
             },
             'calibration_settings': {
                 'min_r_squared': 0.95,
@@ -746,7 +764,8 @@ class SettingsDialog(QDialog):
             'calibration': {
                 'method': 'auto',  # 'auto', 'gradient_descent', 'polyfit'
                 'use_robust_gd': True
-            }
+            },
+            'use_doclayout_text': True,
         }
 
     def _get_high_accuracy_preset(self):
@@ -835,6 +854,7 @@ class SettingsDialog(QDialog):
         self.use_gpu_check.setChecked(ocr_settings.get('easyocr_gpu', True))
         self.retry_suspicious_check.setChecked(ocr_settings.get('retry_on_suspicious', True))
         self.aggressive_preprocess_check.setChecked(ocr_settings.get('aggressive_preprocessing', False))
+        self.use_doclayout_check.setChecked(self.settings.get('use_doclayout_text', True))
         self.scale_factor_spin.setValue(ocr_settings.get('scale_factor', 3.0))
         self.contrast_ths_spin.setValue(ocr_settings.get('easyocr_contrast_ths', 0.1))
         self.tesseract_psm_spin.setValue(ocr_settings.get('tesseract_psm', 6))
@@ -902,6 +922,7 @@ class SettingsDialog(QDialog):
         self.settings['ocr_settings']['easyocr_gpu'] = self.use_gpu_check.isChecked()
         self.settings['ocr_settings']['retry_on_suspicious'] = self.retry_suspicious_check.isChecked()
         self.settings['ocr_settings']['aggressive_preprocessing'] = self.aggressive_preprocess_check.isChecked()
+        self.settings['use_doclayout_text'] = self.use_doclayout_check.isChecked()
         self.settings['ocr_settings']['scale_factor'] = self.scale_factor_spin.value()
         self.settings['ocr_settings']['easyocr_contrast_ths'] = self.contrast_ths_spin.value()
         self.settings['ocr_settings']['tesseract_psm'] = self.tesseract_psm_spin.value()

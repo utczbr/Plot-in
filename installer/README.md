@@ -64,8 +64,8 @@ Local examples:
 
 - Linux/Windows onefile with auto GUI inclusion:
   - `python installer/build_executables.py --name chart-analysis-installer-linux --target onefile --ui-policy auto`
-- macOS app bundle:
-  - `python installer/build_executables.py --name chart-analysis-installer-macos --target app --ui-policy auto`
+- macOS app bundle (deterministic GUI policy):
+  - `python installer/build_executables.py --name chart-analysis-installer-macos --target app --ui-policy gui`
 
 ## Wrapper behavior
 
@@ -87,3 +87,18 @@ CI workflow:
 - Workflow also runs smoke tests:
   - `--help` startup check
   - `--ui-mode cli --help` CLI-path startup check
+
+## macOS signing and notarization
+
+- CI uses conditional signing/notarization for macOS artifacts.
+- If all Apple secrets are present, CI signs (`codesign`), notarizes (`notarytool`), and staples the `.app`.
+- If any secret is missing, CI keeps the build green but warns that the artifact is unsigned and for internal testing only.
+
+Required secrets:
+
+- `APPLE_DEVELOPER_ID_CERTIFICATE` (base64-encoded `.p12`)
+- `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD`
+- `APPLE_SIGNING_IDENTITY`
+- `APPLE_ID`
+- `APPLE_APP_SPECIFIC_PASSWORD`
+- `APPLE_TEAM_ID`

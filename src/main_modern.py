@@ -4,31 +4,52 @@ project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root / 'scripts'))
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
-from shared.state_root import resolve_state_root
+from shared.state_root import ensure_state_dirs, resolve_state_root
 
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFileDialog, QMessageBox, QScrollArea, QFrame, QSlider, QTabWidget,
-    QCheckBox, QSplitter, QProgressBar, QProgressDialog, QGridLayout, QGroupBox,
-    QDialog, QSizePolicy, QComboBox, QTableWidget, QTableWidgetItem
-)
-from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR, QSize
+def _is_pyqt_missing_error(exc: ModuleNotFoundError) -> bool:
+    missing_name = getattr(exc, "name", "") or ""
+    return missing_name.startswith("PyQt6") or "PyQt6" in str(exc)
+
+
+def _print_pyqt_missing_guidance() -> None:
+    sys.stderr.write(
+        "ERROR: PyQt6 is required to run the GUI.\n"
+        "Install it in the active environment with:\n"
+        "  python3 -m pip install PyQt6==6.6.1\n"
+        "Then retry: python3 src/main_modern.py\n"
+    )
+
+
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+        QPushButton, QFileDialog, QMessageBox, QScrollArea, QFrame, QSlider, QTabWidget,
+        QCheckBox, QSplitter, QProgressBar, QProgressDialog, QGridLayout, QGroupBox,
+        QDialog, QSizePolicy, QComboBox, QTableWidget, QTableWidgetItem
+    )
+    from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR, QSize
+    from PyQt6.QtGui import (
+        QPixmap,
+        QImage,
+        QKeyEvent,
+        QCloseEvent,
+        QFont,
+        QGuiApplication,
+        QPixmapCache,
+        QIcon,
+        QPainter,
+        QColor,
+    )
+except ModuleNotFoundError as exc:
+    if _is_pyqt_missing_error(exc) and __name__ == "__main__":
+        _print_pyqt_missing_guidance()
+        raise SystemExit(2)
+    raise
+
 import multiprocessing
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
-from PyQt6.QtGui import (
-    QPixmap,
-    QImage,
-    QKeyEvent,
-    QCloseEvent,
-    QFont,
-    QGuiApplication,
-    QPixmapCache,
-    QIcon,
-    QPainter,
-    QColor,
-)
 import os
 from PIL import Image, ImageDraw, ImageQt
 import numpy as np
@@ -956,9 +977,9 @@ class ModernChartAnalysisApp(QMainWindow):
     def apply_advanced_settings(self):
         if not self.advanced_settings:
             return
-        
+
         try:
-            detection_thresh = self.advanced_settings['detection_thresholds'].get('bar_detection', 0.4)
+            detection_thresh = self.advanced_settings.get('detection_thresholds', {}).get('bar_detection', 0.4)
             self.conf_slider.setValue(int(detection_thresh * 10))
             self.update_status("Advanced settings applied.")
         except Exception as e:
@@ -967,19 +988,26 @@ class ModernChartAnalysisApp(QMainWindow):
     def update_settings_tooltip(self, button=None):
         if button is None:
             button = self.settings_btn
-        
+
         if button is None or not self.advanced_settings:
             return
-        
+
         ocr_engine = self.advanced_settings.get('ocr_engine', 'EasyOCR')
         gpu_enabled = self.advanced_settings.get('ocr_settings', {}).get('easyocr_gpu', True)
-        bar_threshold = self.advanced_settings.get('detection_thresholds', {}).get('bar_detection', 0.4)
-        
+        doclayout_enabled = self.advanced_settings.get('use_doclayout_text', True)
+
+        thresholds = self.advanced_settings.get('detection_thresholds', {})
+        det_keys = [k for k in thresholds if k.endswith('_detection') and k != 'doclayout_detection']
+        det_values = [thresholds[k] for k in det_keys]
+        det_range = f"{min(det_values):.2f}\u2013{max(det_values):.2f}" if det_values else "0.40"
+        doclayout_conf = thresholds.get('doclayout_detection', 0.3)
+
         tooltip = f"""Advanced Settings
 
 OCR Engine: {ocr_engine.upper()}
 GPU Enabled: {'Yes' if gpu_enabled else 'No'}
-Bar Detection Threshold: {bar_threshold:.2f}
+Detection Thresholds: {det_range}
+DocLayout Text Detection: {'Enabled' if doclayout_enabled else 'Disabled'} (conf: {doclayout_conf:.2f})
 
 Click to configure advanced options."""
         button.setToolTip(tooltip)
@@ -1331,10 +1359,11 @@ Click to configure advanced options."""
             ("chart_title", "Chart Title"),
             ("axis_title", "Axis Titles"),
             ("scale_label", "Scale Labels"),
-            ("tick_label", "Bar/Tick Labels"),
+            ("tick_label", "Tick Labels"),
             ("legend", "Legend"),
             ("data_label", "Data Labels"),
-            ("other", "Other Text")
+            ("other", "Other Text"),
+            ("layout_text", "Layout Text (DocLayout)")
         ]
         
         for section_key, section_title in section_order:
@@ -2396,6 +2425,7 @@ Click to configure advanced options."""
                 "legend": [],
                 "data_label": [],
                 "other": [],
+                "layout_text": [],
             }
 
             def _extend_section(section_key: str, source_class: str, items: Any):
@@ -2470,16 +2500,46 @@ Click to configure advanced options."""
                     target_section = "scale_label" if looks_numeric else "tick_label"
                     _extend_section(target_section, "axis_labels", [item])
 
-            # Fallback: use extracted bar tick labels only for bar-like charts.
-            if not section_records["tick_label"] and chart_type in {"bar", "histogram"}:
-                for bar in self.current_analysis_result.get("bars", []):
-                    if isinstance(bar, dict):
-                        tick_label = bar.get("tick_label")
+            # Fallback: use extracted element tick labels for bar-like and box charts.
+            if not section_records["tick_label"] and chart_type in {"bar", "histogram", "box"}:
+                element_key = "bars" if chart_type != "box" else "elements"
+                for element in self.current_analysis_result.get(element_key, []):
+                    if isinstance(element, dict):
+                        tick_label = element.get("tick_label")
                         if isinstance(tick_label, dict):
                             _extend_section("tick_label", "tick_label", [tick_label])
 
+            # Pie charts: extract legend labels from handler elements
+            if chart_type == "pie":
+                for element in self.current_analysis_result.get("elements", []):
+                    if isinstance(element, dict):
+                        label = element.get("label")
+                        if label and label != "Unknown":
+                            synthetic = {"text": label, "xyxy": element.get("bbox", [])}
+                            _extend_section("legend", "pie_legend", [synthetic])
+
+            # Heatmap: extract unique row/col labels from elements as tick labels
+            if chart_type == "heatmap" and not section_records["tick_label"]:
+                seen_labels = set()
+                for element in self.current_analysis_result.get("elements", []):
+                    if not isinstance(element, dict):
+                        continue
+                    for label_key in ("row_label", "col_label"):
+                        label_text = element.get(label_key, "")
+                        if label_text and label_text not in seen_labels:
+                            seen_labels.add(label_text)
+                            synthetic = {"text": label_text}
+                            _extend_section("tick_label", label_key, [synthetic])
+
+            # DocLayout text regions
+            layout_regions = detections.get("layout_text_regions", [])
+            if isinstance(layout_regions, list):
+                for region in layout_regions:
+                    if isinstance(region, dict) and region.get("text"):
+                        _extend_section("layout_text", region.get("class_name", "text"), [region])
+
             widgets_created = 0
-            for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "other"):
+            for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "other", "layout_text"):
                 section_info = self.ocr_section_widgets.get(section_key)
                 if not section_info:
                     continue
@@ -3927,6 +3987,7 @@ if __name__ == "__main__":
 
     # Configure logging to file
     _state_root = resolve_state_root()
+    ensure_state_dirs(_state_root)
     log_file = _state_root / "analysis.log"
     
     # Get the root logger

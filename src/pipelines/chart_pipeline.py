@@ -19,6 +19,7 @@ from ChartAnalysisOrchestrator import ChartAnalysisOrchestrator
 from visual.visualization_service import VisualizationService
 from visual.box_plot_visualizer import BoxPlotVisualizer
 from handlers.types import HandlerContext
+from services.text_layout_service import TextLayoutService
 
 # Class maps
 from core.class_maps import (
@@ -92,12 +93,16 @@ class ChartAnalysisPipeline(BasePipeline):
         if not detections:
             self.logger.warning("No detections found.")
             # We continue even if empty, orchestrator handles it
-            
+
+        # 3b. Text layout detection via DocLayout-YOLO (optional)
+        layout_regions = self._detect_text_layout(img, advanced_settings)
+        detections['layout_text_regions'] = layout_regions
+
         # 4. Orientation
         orientation = self._detect_orientation(img, chart_type, detections)
         self.logger.info(f"Orientation: {orientation.value}")
-        
-        # 5. OCR on Axis Labels
+
+        # 5. OCR on Axis Labels + DocLayout text regions
         self._process_ocr(img, detections)
         
         # 6. Orchestration (Logic & Calibration)
@@ -233,6 +238,30 @@ class ChartAnalysisPipeline(BasePipeline):
                 
         return organized
 
+    def _detect_text_layout(
+        self,
+        img: np.ndarray,
+        advanced_settings: Optional[Dict] = None,
+    ) -> List[Dict]:
+        """Detect text regions using DocLayout-YOLO (optional step).
+
+        Returns an empty list when the feature is disabled in settings or
+        when the doclayout model was not loaded.
+        """
+        if isinstance(advanced_settings, dict) and not advanced_settings.get('use_doclayout_text', True):
+            return []
+
+        session = self.models_manager.get_model('doclayout')
+        if session is None:
+            return []
+
+        conf_threshold = self._resolve_float_setting(
+            advanced_settings,
+            keys=('doclayout_conf_threshold',),
+            default=TextLayoutService.DEFAULT_CONF,
+        )
+        return TextLayoutService.detect_text_regions(img, session, conf_threshold)
+
     def _histogram_fallback(
         self,
         current_dets,
@@ -281,8 +310,9 @@ class ChartAnalysisPipeline(BasePipeline):
                 fallback_bars = []
                 for d in bar_dets:
                     if bar_map.get(d['cls']) == 'bar':
-                        # Remap to histogram 'bar' class ID (usually 1, but safe to hardcode if consistent)
-                        d['cls'] = 1 # Hacky, ideally look up 'bar' in hist map
+                        # Remap to histogram 'bar' class ID via reverse lookup
+                        hist_bar_cls = next((k for k, v in get_class_map('histogram').items() if v == 'bar'), 1)
+                        d['cls'] = hist_bar_cls
                         fallback_bars.append(d)
                 
                 if fallback_bars:
@@ -314,32 +344,45 @@ class ChartAnalysisPipeline(BasePipeline):
         return result.orientation
 
     def _process_ocr(self, img: np.ndarray, detections: Dict):
-        """Runs OCR on detected axis labels in-place."""
-        axis_labels = detections.get('axis_labels', [])
-        if not self.ocr_engine or not axis_labels:
+        """Runs OCR on axis labels and DocLayout text regions in-place."""
+        if not self.ocr_engine:
             return
-            
+
+        axis_labels = detections.get('axis_labels', [])
+
+        # Merge DocLayout text regions that do not duplicate existing axis_labels
+        layout_regions = detections.get('layout_text_regions', [])
+        extra_regions = TextLayoutService.merge_with_axis_labels(layout_regions, axis_labels)
+
+        all_regions = list(axis_labels) + extra_regions
+        if not all_regions:
+            return
+
+        h, w = img.shape[:2]
         crops = []
-        for label in axis_labels:
-            x1, y1, x2, y2 = [int(c) for c in label['xyxy']]
-            # Clip to image bounds
-            h, w = img.shape[:2]
+        for region in all_regions:
+            x1, y1, x2, y2 = [int(c) for c in region['xyxy']]
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
             crop = img[y1:y2, x1:x2]
-            crops.append((crop, 'axis_label'))
-            
+            label_type = region.get('ocr_source', 'axis_label')
+            crops.append((crop, label_type))
+
         try:
             results = self.ocr_engine.process_batch(crops)
             for i, res in enumerate(results):
+                target = all_regions[i]
                 if isinstance(res, dict):
-                    axis_labels[i]['text'] = res.get('text', '')
-                    axis_labels[i]['ocr_confidence'] = res.get('confidence', 0.0)
+                    target['text'] = res.get('text', '')
+                    target['ocr_confidence'] = res.get('confidence', 0.0)
                 else:
-                    axis_labels[i]['text'] = res
-                    axis_labels[i]['ocr_confidence'] = 0.8
+                    target['text'] = res
+                    target['ocr_confidence'] = 0.8
         except Exception as e:
             self.logger.error(f"OCR failed: {e}")
+
+        # Store the additional doclayout OCR results back into detections
+        detections['layout_text_regions'] = extra_regions
 
     def _format_result(self, orchestration_result, image_path, detections) -> PipelineResult:
         """Formats the final output dictionary."""

@@ -2334,7 +2334,20 @@ Click to configure advanced options."""
             self.results_tab_widget.setVisible(False)
             QMessageBox.critical(self, "Analysis Error", user_message)
         else:
-            self.current_analysis_result = self._normalize_result_for_gui(result)
+            logging.debug(
+                "_on_analysis_complete: result type=%s, keys=%s",
+                type(result).__name__,
+                list(result.keys()) if isinstance(result, dict) else "N/A",
+            )
+            try:
+                self.current_analysis_result = self._normalize_result_for_gui(result)
+            except Exception as norm_exc:
+                logging.exception("_normalize_result_for_gui raised an exception: %s", norm_exc)
+                self._clear_display()
+                self.results_tab_widget.setVisible(False)
+                QMessageBox.critical(self, "Display Error",
+                                     f"Analysis succeeded but the result could not be displayed:\n{norm_exc}")
+                return
             self.update_status("✅ Processing complete")
             self._update_ui_with_results()
             self.update_displayed_image()

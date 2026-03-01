@@ -17,7 +17,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None, current_settings=None):
         super().__init__(parent)
         
-        self.setWindowTitle("⚙️ Advanced Settings")
+        self.setWindowTitle("Advanced Settings")
         self.setMinimumSize(700, 600)
         self.setModal(True)
         
@@ -63,13 +63,13 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Title
-        title_label = QLabel("⚙️ Advanced Configuration")
+        title_label = QLabel("Advanced Configuration")
         title_label.setFont(QFont("system-ui", 14, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #4a90e2; padding: 5px;")
         layout.addWidget(title_label)
         
         # ADD PRESETS SECTION
-        presets_group = QGroupBox("🚀 Presets")
+        presets_group = QGroupBox("Presets")
         presets_layout = QHBoxLayout(presets_group)
         presets_layout.setSpacing(10)
 
@@ -80,7 +80,7 @@ class SettingsDialog(QDialog):
         self.presets_combo.addItems(self.presets.keys())
         presets_layout.addWidget(self.presets_combo)
 
-        load_preset_btn = QPushButton("📂 Load Preset")
+        load_preset_btn = QPushButton("Load Preset")
         load_preset_btn.clicked.connect(self._load_preset)
         presets_layout.addWidget(load_preset_btn)
         presets_layout.addStretch()
@@ -102,15 +102,15 @@ class SettingsDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
-        reset_btn = QPushButton("🔄 Reset to Defaults")
+        reset_btn = QPushButton("Reset to Defaults")
         reset_btn.clicked.connect(self._reset_to_defaults)
         button_layout.addWidget(reset_btn)
         
-        cancel_btn = QPushButton("❌ Cancel")
+        cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
         
-        save_btn = QPushButton("💾 Save Settings")
+        save_btn = QPushButton("Save Settings")
         save_btn.setDefault(True)
         save_btn.clicked.connect(self._save_settings)
         button_layout.addWidget(save_btn)
@@ -143,7 +143,7 @@ class SettingsDialog(QDialog):
         scroll_layout = QVBoxLayout(scroll_widget)
         
         # OCR Engine Selection
-        engine_group = QGroupBox("🔧 OCR Engine Configuration")
+        engine_group = QGroupBox("OCR Engine Configuration")
         engine_layout = QGridLayout(engine_group)
         
         engine_layout.addWidget(QLabel("OCR Engine:"), 0, 0)
@@ -181,11 +181,11 @@ class SettingsDialog(QDialog):
         scroll_layout.addWidget(engine_group)
         
         # OCR Whitelists
-        whitelist_group = QGroupBox("📝 OCR Character Whitelists")
+        whitelist_group = QGroupBox("OCR Character Whitelists")
         whitelist_layout = QGridLayout(whitelist_group)
         whitelist_layout.setSpacing(8)
         
-        info_label = QLabel("ℹ️ Leave empty to allow all characters")
+        info_label = QLabel("Leave empty to allow all characters")
         info_label.setStyleSheet("color: #888888; font-style: italic; font-size: 9px;")
         whitelist_layout.addWidget(info_label, 0, 0, 1, 2)
         
@@ -193,13 +193,13 @@ class SettingsDialog(QDialog):
         row = 1
         
         whitelist_configs = [
-            ('scale_label', '🔢 Scale Labels', 'Numeric values only (default: 0-9, ., -, e, E, +)'),
-            ('axis_title', '📐 Axis Titles', 'Full text (letters, numbers, spaces)'),
-            ('bar_label', '🏷️ Bar Labels', 'Category names (alphanumeric)'),
-            ('chart_title', '📋 Chart Title', 'Full text'),
-            ('legend', '📖 Legend', 'Text and numbers'),
-            ('data_label', '🔢 Data Labels', 'Numbers with units (%, +, -)'),
-            ('other', '📄 Other Text', 'Any text')
+            ('scale_label', 'Scale Labels', 'Numeric values only (default: 0-9, ., -, e, E, +)'),
+            ('axis_title', 'Axis Titles', 'Full text (letters, numbers, spaces)'),
+            ('bar_label', 'Bar Labels', 'Category names (alphanumeric)'),
+            ('chart_title', 'Chart Title', 'Full text'),
+            ('legend', 'Legend', 'Text and numbers'),
+            ('data_label', 'Data Labels', 'Numbers with units (%, +, -)'),
+            ('other', 'Other Text', 'Any text')
         ]
         
         for key, label, tooltip in whitelist_configs:
@@ -218,7 +218,7 @@ class SettingsDialog(QDialog):
         scroll_layout.addWidget(whitelist_group)
         
         # Advanced OCR Parameters
-        advanced_group = QGroupBox("🔬 Advanced OCR Parameters")
+        advanced_group = QGroupBox("Advanced OCR Parameters")
         advanced_layout = QGridLayout(advanced_group)
         
         advanced_layout.addWidget(QLabel("Image Scale Factor:"), 0, 0)
@@ -248,7 +248,7 @@ class SettingsDialog(QDialog):
         
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
-        self.tabs.addTab(tab, "📝 OCR Settings")
+        self.tabs.addTab(tab, "OCR Settings")
 
     def _create_detection_tab(self):
         """Create detection thresholds tab."""
@@ -261,10 +261,10 @@ class SettingsDialog(QDialog):
         scroll_layout = QVBoxLayout(scroll_widget)
         
         # Detection Thresholds
-        thresh_group = QGroupBox("🎯 Detection Confidence Thresholds")
+        thresh_group = QGroupBox("Detection Confidence Thresholds")
         thresh_layout = QGridLayout(thresh_group)
         
-        info_label = QLabel("ℹ️ Lower values = more detections (but more false positives)")
+        info_label = QLabel("Lower values = more detections (but more false positives)")
         info_label.setStyleSheet("color: #888888; font-style: italic; font-size: 9px;")
         thresh_layout.addWidget(info_label, 0, 0, 1, 2)
         
@@ -272,17 +272,17 @@ class SettingsDialog(QDialog):
         row = 1
         
         threshold_configs = [
-            ('classification', '📊 Chart Type Classification', 0.01, 1.0, 0.05),
-            ('bar_detection', '📊 Bar Detection', 0.1, 1.0, 0.05),
-            ('box_detection', '📦 Box Plot Detection', 0.1, 1.0, 0.05),
-            ('line_detection', '📈 Line Chart Detection', 0.1, 1.0, 0.05),
-            ('scatter_detection', '⚫ Scatter Plot Detection', 0.1, 1.0, 0.05),
-            ('histogram_detection', '📊 Histogram Detection', 0.1, 1.0, 0.05),
-            ('heatmap_detection', '🔥 Heatmap Detection', 0.1, 1.0, 0.05),
-            ('pie_detection', '🥧 Pie Chart Detection', 0.1, 1.0, 0.05),
-            ('area_detection', '📐 Area Chart Detection', 0.1, 1.0, 0.05),
-            ('doclayout_detection', '📄 DocLayout Text Detection', 0.1, 1.0, 0.05),
-            ('nms_threshold', '🎯 NMS Threshold', 0.1, 1.0, 0.05),
+            ('classification', 'Chart Type Classification', 0.01, 1.0, 0.05),
+            ('bar_detection', 'Bar Detection', 0.1, 1.0, 0.05),
+            ('box_detection', 'Box Plot Detection', 0.1, 1.0, 0.05),
+            ('line_detection', 'Line Chart Detection', 0.1, 1.0, 0.05),
+            ('scatter_detection', 'Scatter Plot Detection', 0.1, 1.0, 0.05),
+            ('histogram_detection', 'Histogram Detection', 0.1, 1.0, 0.05),
+            ('heatmap_detection', 'Heatmap Detection', 0.1, 1.0, 0.05),
+            ('pie_detection', 'Pie Chart Detection', 0.1, 1.0, 0.05),
+            ('area_detection', 'Area Chart Detection', 0.1, 1.0, 0.05),
+            ('doclayout_detection', 'DocLayout Text Detection', 0.1, 1.0, 0.05),
+            ('nms_threshold', 'NMS Threshold', 0.1, 1.0, 0.05),
         ]
         
         for key, label, min_val, max_val, step in threshold_configs:
@@ -302,7 +302,7 @@ class SettingsDialog(QDialog):
         scroll_layout.addWidget(thresh_group)
         
         # Bar Label Association
-        bar_label_group = QGroupBox("🏷️ Bar Label Association Parameters")
+        bar_label_group = QGroupBox("Bar Label Association Parameters")
         bar_label_layout = QGridLayout(bar_label_group)
         
         bar_label_layout.addWidget(QLabel("Max Horizontal Distance Factor:"), 0, 0)
@@ -331,14 +331,14 @@ class SettingsDialog(QDialog):
         
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
-        self.tabs.addTab(tab, "🎯 Detection")
+        self.tabs.addTab(tab, "Detection")
 
     def _create_calibration_tab(self):
         """Create calibration settings tab."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
-        group = QGroupBox("📏 Scale Calibration Parameters")
+        group = QGroupBox("Scale Calibration Parameters")
         grid = QGridLayout(group)
 
         grid.addWidget(QLabel("Calibration Method:"), 0, 0)
@@ -378,14 +378,14 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(group)
         layout.addStretch()
-        self.tabs.addTab(tab, "📏 Calibration")
+        self.tabs.addTab(tab, "Calibration")
 
     def _create_processing_tab(self):
         """Create image processing settings tab."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        method_group = QGroupBox("⚙️ Spatial Classification Method")
+        method_group = QGroupBox("Spatial Classification Method")
         method_layout = QGridLayout(method_group)
         method_layout.addWidget(QLabel("Method:"), 0, 0)
         self.spatial_method_combo = QComboBox()
@@ -393,7 +393,7 @@ class SettingsDialog(QDialog):
         method_layout.addWidget(self.spatial_method_combo, 0, 1)
         layout.addWidget(method_group)
         
-        group = QGroupBox("🖼️ Image Processing Parameters")
+        group = QGroupBox("Image Processing Parameters")
         grid = QGridLayout(group)
         
         # CLAHE settings
@@ -419,7 +419,7 @@ class SettingsDialog(QDialog):
         grid.addWidget(self.bilateral_d_spin, 2, 1)
         
         # Performance
-        perf_group = QGroupBox("⚡ Performance Settings")
+        perf_group = QGroupBox("Performance Settings")
         perf_layout = QGridLayout(perf_group)
         
         perf_layout.addWidget(QLabel("Batch Processing Workers:"), 0, 0)
@@ -438,14 +438,14 @@ class SettingsDialog(QDialog):
         layout.addWidget(group)
         layout.addWidget(perf_group)
         layout.addStretch()
-        self.tabs.addTab(tab, "🖼️ Processing")
+        self.tabs.addTab(tab, "Processing")
 
     def _create_output_tab(self):
         """Create output settings tab with import/export."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
-        group = QGroupBox("💾 Output Configuration")
+        group = QGroupBox("Output Configuration")
         grid = QGridLayout(group)
         
         self.save_annotated_check = QCheckBox("Save Annotated Images")
@@ -475,7 +475,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(group)
 
         # ADD IMPORT/EXPORT SECTION
-        import_export_group = QGroupBox("📥📤 Settings Management")
+        import_export_group = QGroupBox("Settings Management")
         ie_layout = QVBoxLayout(import_export_group)
         
         ie_info = QLabel("Save or load custom settings profiles")
@@ -484,11 +484,11 @@ class SettingsDialog(QDialog):
         
         ie_buttons = QHBoxLayout()
         
-        export_btn = QPushButton("📤 Export Settings")
+        export_btn = QPushButton("Export Settings")
         export_btn.clicked.connect(self._export_settings)
         ie_buttons.addWidget(export_btn)
         
-        import_btn = QPushButton("📥 Import Settings")
+        import_btn = QPushButton("Import Settings")
         import_btn.clicked.connect(self._import_settings)
         ie_buttons.addWidget(import_btn)
         
@@ -496,7 +496,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(import_export_group)
         
         layout.addStretch()
-        self.tabs.addTab(tab, "💾 Output")
+        self.tabs.addTab(tab, "Output")
 
     def _create_nn_classifier_tab(self):
         """Create neural network classifier configuration tab"""
@@ -531,7 +531,7 @@ class SettingsDialog(QDialog):
         
         # Info label
         info = QLabel(
-            "ℹ️ The NN classifier provides additional accuracy for ambiguous charts.\n"
+            "The NN classifier provides additional accuracy for ambiguous charts.\n"
             "Train using: python train_chart_classifier.py train"
         )
         info.setWordWrap(True)
@@ -539,7 +539,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(info)
         
         layout.addStretch()
-        self.tabs.addTab(tab, "🧠 NN Classifier")
+        self.tabs.addTab(tab, "NN Classifier")
 
     def _browse_file(self, line_edit, file_filter="All Files (*)"):
         """Open file dialog and set the selected file path to the line edit."""

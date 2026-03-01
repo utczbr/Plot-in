@@ -188,6 +188,11 @@ class BarExtractor(BaseExtractor):
             img_dimensions=img_dimensions
         )
         
+        # Sort enriched bars by spatial position so output order is deterministic and
+        # matches reading direction: left-to-right for vertical bars (sort by x1),
+        # top-to-bottom for horizontal bars (sort by y1).
+        enriched_bars.sort(key=lambda b: b['xyxy'][0] if is_vertical else b['xyxy'][1])
+
         # Add orientation diagnostics
         result['orientation_info'] = {
             'orientation': orientation,

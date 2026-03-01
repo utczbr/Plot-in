@@ -30,9 +30,12 @@ class LineExtractor(BaseExtractor):
         result = self._create_result_template('line', detections, len(data_points))
         
         r_squared = img_dimensions.get('r_squared', None)
-        
+
         # Resolve scale function
         scale_func = self._resolve_scale_func(scale_model)
+
+        # Sort data points left-to-right by x-center so output order matches the X-axis.
+        data_points.sort(key=lambda p: (p['xyxy'][0] + p['xyxy'][2]) / 2)
 
         for i, point in enumerate(data_points):
             x1, y1, x2, y2 = point['xyxy']
@@ -76,13 +79,23 @@ class LineExtractor(BaseExtractor):
                     point_info['estimated_value'] = assoc_data_label['cleanedvalue']
 
             assoc_error_bar = find_closest_element(point, error_bars, orientation='vertical')
-            if assoc_error_bar and scale_model:
-                eb_y1, eb_y2 = assoc_error_bar['xyxy'][1], assoc_error_bar['xyxy'][3]
-                try:
-                    error_margin = abs(float(scale_func(eb_y1)) - float(scale_func(eb_y2)))
-                    point_info['error_bar'] = {'margin': error_margin, 'bbox': assoc_error_bar['xyxy']}
-                except Exception as e:
-                    logging.warning(f"Could not calculate error bar value for line point: {e}")
+            if assoc_error_bar:
+                if scale_model is None:
+                    logging.warning(
+                        "Line point %d: error bar detected but scale_model is None — "
+                        "cannot compute margin; error_bar will be None.", i
+                    )
+                else:
+                    eb_y1, eb_y2 = assoc_error_bar['xyxy'][1], assoc_error_bar['xyxy'][3]
+                    try:
+                        error_margin = abs(float(scale_func(eb_y1)) - float(scale_func(eb_y2)))
+                        point_info['error_bar'] = {'margin': error_margin, 'bbox': assoc_error_bar['xyxy']}
+                    except Exception as e:
+                        logging.warning(f"Could not calculate error bar value for line point: {e}")
+            elif error_bars:
+                logging.debug(
+                    "Line point %d: %d error bar(s) in detections but none associated spatially.", i, len(error_bars)
+                )
 
             result['data_points'].append(point_info)
         

@@ -8,6 +8,7 @@ Cartesian, Polar, and Grid coordinate systems.
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+import types as _types
 import numpy as np
 import logging
 
@@ -263,6 +264,12 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         }
 
         # Stage 2: Label classification
+        # Failure here is treated as a recoverable warning, not a fatal abort, so that
+        # charts with garbled/non-Latin OCR text can still reach geometric calibration
+        # and return bar/point values.  Scale and tick labels default to empty lists.
+        _empty_classification = _types.SimpleNamespace(
+            scale_labels=[], tick_labels=[], axis_titles=[], confidence=0.0, metadata={}
+        )
         try:
             classified = self.spatial_classifier.classify(
                 chart_type=self.get_chart_type(),
@@ -274,8 +281,13 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             )
             diagnostics["label_classification"] = classified
         except Exception as exc:
-            errors.append(f"Label classification failed: {exc}")
-            return self._fail_result("Label classification", errors, warnings, orientation)
+            warnings.append(f"Label classification failed (continuing with empty labels): {exc}")
+            self.logger.warning(
+                "Stage 2 label classification failed for %s — falling back to empty labels: %s",
+                self.get_chart_type(), exc,
+            )
+            classified = _empty_classification
+            diagnostics["label_classification"] = None
 
         # Stage 3: Dual-axis detection
         try:

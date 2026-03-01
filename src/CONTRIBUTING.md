@@ -1,47 +1,101 @@
-# Contributing to the Chart Analysis System
+# Contributing Guide
 
-We welcome contributions to improve the Chart Analysis System. To ensure a smooth and effective development process, please adhere to the following guidelines.
+Last verified: **February 23, 2026**.
 
-## 1. Coding Standards
+## Goals
+Contributions should preserve runtime stability, protocol output integrity, and documentation accuracy.
 
-This project follows a strict set of coding standards to maintain code quality, readability, and maintainability.
+## Core Rules
+1. Keep behavior claims evidence-based.
+2. Preserve backward compatibility unless the PR explicitly changes contracts.
+3. Add or update tests for any behavior or contract change.
+4. Keep docs synchronized with code in the same PR.
 
-- **Style Guide**: All Python code must be compliant with [PEP 8](https://www.python.org/dev/peps/pep-0008/). We use automated tools to enforce this.
-- **Formatting**: We use `black` for code formatting and `isort` for import sorting. Please run these tools on your code before submitting a contribution.
-- **Type Hinting**: All function and method signatures must include type hints for all arguments and return values, as specified in [PEP 484](https://www.python.org/dev/peps/pep-0484/).
-- **Docstrings**: Every module, class, and public function/method must have a comprehensive docstring that follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html#3.8-comments-and-docstrings). Docstrings should include:
-    - A brief one-line summary.
-    - A more detailed description of the object's purpose.
-    - `Args:` section for all arguments.
-    - `Returns:` section describing the return value.
-    - `Raises:` section for any exceptions that can be raised.
-- **Naming Conventions**: Use `snake_case` for functions, methods, and variables. Use `PascalCase` for classes.
-- **Code Quality**:
-    - **No Temporary Flags**: Do not commit any temporary flags, such as `DEBUG_MODE` or `TEMP_FIX`. Use the `logging` module with appropriate levels (`DEBUG`, `INFO`, `WARNING`) for debugging information.
-    - **No Commented-Out Code**: Remove all commented-out code blocks before committing. Code that is not used should be deleted.
-    - **Magic Numbers**: Avoid magic numbers. Use named constants or configuration parameters instead.
+## Coding Standards
+- Python style: PEP 8
+- Formatting: `black`
+- Import ordering: `isort`
+- Type hints: required on new/changed public functions
+- Logging: use `logging`; do not add ad-hoc debug flags
+- Remove dead/commented-out code before merge
 
-## 2. Pull Request (PR) Process
+Recommended local checks:
+```bash
+black src tests
+isort src tests
+```
 
-1.  **Fork the Repository**: Start by forking the main repository.
-2.  **Create a Branch**: Create a new branch from `main` for your feature or bug fix. Use a descriptive name (e.g., `feature/new-chart-handler` or `fix/orchestrator-bug`).
-3.  **Develop**: Make your changes, adhering to the coding standards above.
-4.  **Test**: Add or update unit/integration tests to cover your changes. Ensure that all existing tests pass.
-5.  **Lint and Format**: Run `black` and `isort` on your code to ensure it is formatted correctly.
-    ```bash
-    black .
-    isort .
-    ```
-6.  **Submit a Pull Request**: Push your branch to your fork and open a pull request to the `main` branch of the original repository.
-7.  **Code Review**: Your PR will be reviewed by maintainers. Be prepared to address feedback and make changes.
+## Runtime Contract Areas (High-Risk)
+If your PR touches any of these, include explicit contract notes in the PR description:
+- `src/pipelines/types.py` (`PipelineResult`)
+- `src/core/protocol_row_builder.py` (protocol row schema)
+- `src/core/export_manager.py` (protocol CSV columns)
+- `src/validation/run_protocol_validation.py` (gating metrics)
 
-## 3. Testing Requirements
+## Required Test Matrix By Change Type
 
-- **Unit Tests**: All new functions and classes should have corresponding unit tests.
-- **Integration Tests**: For larger features that involve multiple components, add integration tests to ensure the components work together correctly.
-- **Test Coverage**: Aim to maintain or increase the existing test coverage.
-- **Running Tests**: A script or command for running the test suite should be provided (e.g., `pytest`). Ensure all tests pass before submitting a PR.
-  ```bash
-  pytest
-  ```
-  *(Note: The testing framework and commands need to be formally defined for the project.)*
+### Input/PDF/ingestion changes
+```bash
+python3 -m pytest tests/core_tests/test_input_resolver.py
+```
+
+### Chart routing/handler support changes
+```bash
+python3 -m pytest tests/core_tests/test_orchestrator_registry.py
+python3 -m pytest tests/handlers_tests/test_area_handler.py
+```
+
+### Protocol row or CSV changes
+```bash
+python3 -m pytest tests/core_tests/test_protocol_row_builder.py
+python3 -m pytest tests/core_tests/test_export_manager_protocol.py
+```
+
+### Validation metric or gate changes
+```bash
+python3 -m pytest tests/evaluation_tests/test_protocol_validation.py
+python3 -m pytest tests/evaluation_tests/test_accuracy_comparator_metrics.py
+```
+
+## CI Awareness
+Current workflows:
+- `.github/workflows/evaluation-tests.yml`
+- `.github/workflows/installer-build.yml`
+
+If your change introduces a new mandatory quality gate, update workflow coverage in the same PR.
+
+## Documentation Sync Requirements
+When changing runtime behavior, update docs in the same branch:
+- `Protocol_gap.md`
+- `src/Critic.md`
+- `src/README.md`
+- `src/CONTRIBUTING.md` (if process changed)
+
+Use `src/docs/DOC_ACCURACY_CHECKLIST.md` and ensure major claims cite current code paths and tests.
+Use `src/docs/README.md` to keep active-doc vs archive links correct.
+
+## Pull Request Checklist
+- [ ] Code formatted and imports sorted
+- [ ] Relevant tests pass locally
+- [ ] Runtime contract changes documented
+- [ ] Protocol output implications documented
+- [ ] Docs updated with evidence references
+- [ ] Backward compatibility impact stated
+
+## Branch And PR Workflow
+1. Create feature branch from `main`.
+2. Implement change + tests.
+3. Run relevant local test matrix.
+4. Update affected docs.
+5. Open PR with:
+   - problem statement
+   - behavior delta
+   - test evidence
+   - contract impact
+
+## Guidance For Protocol-Output Changes
+Any change affecting protocol rows, CSV schema, or validation metrics must include:
+1. Before/after schema notes.
+2. Fixture updates (if required).
+3. Evidence from protocol row and export tests.
+4. Validation harness impact summary.

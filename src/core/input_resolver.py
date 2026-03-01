@@ -44,14 +44,15 @@ def _run_pdf_processor(
 ) -> List[dict]:
     """Lazy-import wrapper around process_pdf_charts_optimized.
 
-    Catches ImportError/ModuleNotFoundError when PyMuPDF is not installed,
-    logs a clear message, and returns [].  This is also the test patch target.
+    Catches ImportError/ModuleNotFoundError when core.pdf_processor (or one of
+    its dependencies) is unavailable, logs a clear message, and returns [].
+    This is also the test patch target.
     """
     try:
         from core.pdf_processor import process_pdf_charts_optimized
     except (ImportError, ModuleNotFoundError) as exc:
         logger.warning(
-            "PDF support unavailable (PyMuPDF not installed): %s. "
+            "PDF support unavailable (missing dependency while importing core.pdf_processor): %s. "
             "Skipping %s.", exc, pdf_path.name,
         )
         return []

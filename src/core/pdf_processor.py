@@ -25,7 +25,6 @@ import cv2
 import os
 import json
 from datetime import datetime
-from doclayout_yolo import YOLOv10
 
 # --- Configuração de logging específica ---
 logger = logging.getLogger(__name__)
@@ -510,6 +509,15 @@ def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: 
     """Extract charts using DocLayout-YOLO with proper error handling."""
     if not Path(model_path).exists():
         logger.error(f"❌ Model not found: {model_path}")
+        return []
+
+    try:
+        from doclayout_yolo import YOLOv10
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.warning(
+            "DocLayout extraction unavailable (missing optional dependency 'doclayout_yolo'): %s",
+            exc,
+        )
         return []
     
     try:

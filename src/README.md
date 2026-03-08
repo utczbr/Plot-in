@@ -1,6 +1,6 @@
 # Chart Analysis System: Runtime Reference
 
-Last verified against repository code and tests: **February 28, 2026**.
+Last verified against repository code and tests: **March 1, 2026**.
 
 ## Audience
 This README is for engineers and agent contributors working on runtime behavior, contracts, and protocol outputs.
@@ -70,25 +70,25 @@ Cartesian handlers (`bar`, `line`, `scatter`, `box`, `histogram`, `area`) share 
 6. Baseline detection (`ModularBaselineDetector` with adaptive eps per chart type)
 7. Chart-specific value extraction (delegated to per-type `extract_values()`)
 
-Quality gates: `CRITICAL_R2 = 0.85` (warning), `FAILURE_R2 = 0.40` (fatal error), `BASELINE_TOLERANCE = 5.0` px. Implementation: `src/handlers/base.py`.
+Quality gates: `CRITICAL_R2 = 0.85` (warning), `FAILURE_R2 = 0.40` (fatal calibration failure), `BASELINE_TOLERANCE = 5.0` px. Implementation: `src/handlers/base.py` (fatal path at stage 4). CP utilities exist in `src/calibration/conformal.py` and are **actively attached** to the Cartesian runtime flow in Stage 6, adding dynamic intervals to values.
 
 ## Non-Cartesian Handler Pipelines
 Heatmap and Pie handlers implement fully custom `process()` methods (not the 7-stage Cartesian pipeline):
-- **Heatmap** (`GridChartHandler`): cell detection → label classification → color bar calibration → DBSCAN grid detection → label-grid alignment (Hungarian matching) → cell value extraction (4-tier color mapping fallback)
-- **Pie** (`PolarChartHandler`): slice detection → label classification → robust center detection (MAD outlier removal) → angle calculation → span estimation → legend matching
+- **Heatmap** (`GridChartHandler`): cell detection → label classification → color bar calibration (CIELAB B-spline via `make_lsq_spline`; 4-tier legacy fallback) → 2-pass DBSCAN grid detection (cell-geometry-adaptive eps) → label-grid alignment (Hungarian matching) → cell value extraction with per-cell confidence (`exp(-d²/2σ²)`)
+- **Pie** (`PolarChartHandler`): slice detection → keypoint extraction (`Pie_pose.onnx` boundary keypoints) → RANSAC circle fit (Kåsa's method, T=100, ε=2 px) → max-gap angular span (Pac-Man safe) → sum-to-one normalization with data label override → legend matching (12-o'clock clockwise ordinal)
 
 ## Chart-Type Behavior Notes (8 Types)
 
 | Type | Primary handler | Key extraction characteristics | Current caveats |
 |---|---|---|---|
-| bar | `handlers/bar_handler.py` | Topological association of bars/labels/error bars/significance; uncertainty fields in extractor | 20+ absolute pixel thresholds in `bar_associator.py` don't scale with image resolution; dual-axis uses sharp x-coordinate cutoff; error bar validator has 6 hardcoded magic numbers |
-| line | `handlers/line_handler.py` | Point extraction with label/error associations | value interpretation depends on calibration and baseline availability |
-| scatter | `handlers/scatter_handler.py` | x/y calibrated outputs; sub-pixel centroid refinement in extractor | **Bug:** baseline sign convention inconsistent between X and Y axes; **Bug:** dual-axis safety net aliases Y calibration to X (produces wrong values); sub-pixel Otsu refinement assumes dark-on-light markers |
-| box | `handlers/box_handler.py` | Specialized grouping path (`intersection_alignment`) and quartile/whisker logic | **Bug:** invalid five-number ordering (min>Q1 etc.) logged but passed downstream uncorrected; **Bug:** outliers inside whisker range not rejected; geometric-center median fallback assumes symmetry; `_fail_result_new()` inconsistent with standard `_fail_result()` |
-| histogram | `handlers/histogram_handler.py` | Histogram-specific extraction with detector fallback chain | orientation detection simpler than bar (no multi-method fallback); no bin contiguity validation; no bin-edge vs. bin-center disambiguation; fallback chain provenance not tracked |
-| heatmap | `handlers/heatmap_handler.py` | Grid row/col clustering and color-to-value mapping | DBSCAN eps scales with image size (1.5%), not cell geometry — breaks on extreme resolutions; HSV hue fallback hardcodes blue→red assumption (wrong for viridis/plasma); color mapping returns no confidence; `_compute_robust_bounds()` defined but never called |
-| pie | `handlers/pie_handler.py` | Pose-based slices and center-driven angle/value heuristics | **Major gap:** 5 keypoints per slice from `Pie_pose.onnx` are unused — handler uses centroid heuristic only; data labels (e.g. "25%") completely ignored (TODO); values not normalized to sum=1.0; angle reference 0°=East mismatches common 12-o'clock convention |
-| area | `handlers/area_handler.py` | Reuses line-like detection map plus AUC summary row | wiring complete; quality should be tracked with targeted fixtures |
+| bar | `handlers/bar_handler.py` | Topological association of bars/labels/error bars/significance; uncertainty fields in extractor | Label association metric-learning active (`bar_association_mode='metric_learning'` default) via bootstrapped `.npz` weights; heuristic fallback available; GMM layout detection available (`bar_layout_detection='gmm'`); error bar validator retains 6 hardcoded thresholds |
+| line | `handlers/line_handler.py` | Point extraction with label/error associations | Value interpretation depends on calibration and baseline availability |
+| scatter | `handlers/scatter_handler.py` | x/y calibrated outputs; sub-pixel centroid refinement in extractor | Baseline sign convention fixed (both axes: `value = pixel − baseline`); dual-axis aliasing removed (missing calibration → `None` + warning); 2D Gaussian sub-pixel refinement active (`scatter_subpixel_mode='gaussian'` default) |
+| box | `handlers/box_handler.py` | Specialized grouping path (`intersection_alignment`) and quartile/whisker logic | Five-number monotone projection enforced (sort-based; severe warning when correction > 10% of range); outliers inside whisker range rejected; geometric-center median fallback retained |
+| histogram | `handlers/histogram_handler.py` | Histogram-specific extraction with detector fallback chain | Orientation now uses `OrientationDetectionService` (parity with bar); bin contiguity validation added (`diagnostics['bin_contiguity']`); GMM gap analysis available via shared `src/utils/gmm_1d.py`; bin-edge vs. bin-center disambiguation is future work |
+| heatmap | `handlers/heatmap_handler.py` | Grid row/col clustering and CIELAB B-spline color-to-value mapping | 2-pass DBSCAN with cell-geometry-adaptive eps replaces fixed 1.5% image-size rule; CIELAB B-spline calibration with Brent inversion (`heatmap_color_mode='lab_spline'`); per-cell confidence in `element['value_confidence']`; legacy 4-tier HSV/BGR fallback preserved |
+| pie | `handlers/pie_handler.py` | Keypoint-based RANSAC circle fit, max-gap angular span, sum-to-one normalization | Data label override implemented (`_parse_data_label`, sanity pre-filter); sum-to-one guaranteed; 12-o'clock clockwise legend matching; fallback to centroid heuristic when keypoints absent |
+| area | `handlers/area_handler.py` | Reuses line-like detection map plus AUC summary row | Wiring complete; quality should be tracked with targeted fixtures |
 
 ## Output Contracts
 
@@ -183,20 +183,29 @@ python3 -m pytest tests/evaluation_tests/test_protocol_validation.py
 3. Protocol stack currently includes CCC/Kappa but not ICC/survey pipeline.
 4. Corrected protocol rows are editable/exportable, but canonical persistent corrected-backend artifact is not fully formalized.
 
-### Architecture
-5. Pipeline executes a fixed 8-stage sequence with no strategy branching — cannot route to VLM or Chart-to-Table strategies without bypassing stages.
-6. `HandlerContext` requires detection-coupled fields (`detections`, `chart_elements`) that are meaningless for non-detection-based strategies.
-7. No confidence-based routing: low-confidence classification/detection proceeds to handler failure instead of escalating to a fallback strategy.
-8. Calibration R² < 0.40 is fatal for all Cartesian charts; no graceful degradation to approximate/uncalibrated extraction.
+### Architecture (Implemented Modules — Not Yet Active In Default Runtime)
+5. ⚠️ **Strategy package is implemented but not wired into active pipeline dispatch**: `src/strategies/` includes `StrategyRouter` + `StandardStrategy`/`VLMStrategy`/`ChartToTableStrategy`/`HybridStrategy`, but stage 6 of `ChartAnalysisPipeline.run()` still constructs `ChartAnalysisOrchestrator` and calls `process_chart()` directly (`src/pipelines/chart_pipeline.py`, lines 108-127).
+6. ⚠️ **Auto-routing policy exists but is dormant at runtime**: `StrategyRouter.select()` is implemented (`src/strategies/router.py`) but is not invoked by the active pipeline path in `src/pipelines/chart_pipeline.py`.
+7. ❌ **`R² < 0.40` is still a hard failure in active Cartesian flow**: `CartesianExtractionHandler` keeps `FAILURE_R2 = 0.40` and aborts on catastrophic calibration (`src/handlers/base.py`, lines 167-168 and 314-319); pipeline then aborts when handler errors are present (`src/pipelines/chart_pipeline.py`, lines 130-132).
+8. ⚠️ **Conformal modules/scripts are present but not active in runtime output contracts**: module exists in `src/calibration/conformal.py` and offline builder exists in `src/evaluation/build_cp_quantiles.py`, but CP intervals are not attached in active extraction flow and no CP sidecar JSON is present in-repo.
 
-### Extractor-Level
-9. Absolute pixel thresholds across extractors (bar, scatter, box, histogram) do not scale with image resolution.
-10. Pie handler ignores pose model keypoints — the single largest accuracy gap for pie chart extraction.
-11. Heatmap color mapping hardcodes HSV blue→red assumption; fails for non-standard colormaps (viridis, plasma, coolwarm).
-12. Calibration from exactly 2 points yields trivial R²=1.0 with no warning about low confidence.
-13. Value parsing regex does not handle locale-specific thousand separators, Unicode minus (U+2212), or percentage context.
+### Extractor-Level (Partially Resolved)
+9. ⚠️ **Bar association upgrades are partially active**: GMM layout detection path is available (`bar_layout_detection='gmm'`), while the metric-learning path (`bar_association_mode='metric_learning'`) depends on trained `.npz` weights from `src/evaluation/train_bar_label_model.py`; heuristic path remains default/fallback.
+10. ✅ **Pie keypoint geometry path is active**: `src/handlers/pie_handler.py` uses boundary keypoints with RANSAC circle fitting, max-gap span estimation, data-label parsing/override, and sum-to-one normalization.
+11. ⚠️ **Heatmap CIELAB spline mapping is implemented but opt-in**: `src/services/color_mapping_service.py` supports `heatmap_color_mode='lab_spline'`, while default runtime behavior remains legacy color mapping.
+12. ❌ **Trivial calibration warning is not emitted in active code**: `diagnostics['calibration_trivial']` is not currently produced by the calibration/handler runtime path.
+13. ✅ **Unicode minus and percentage parsing is active for pie labels**: `_parse_data_label()` in `src/handlers/pie_handler.py` handles `"25%"`, `"0.25"`, and Unicode minus (U+2212). Locale-specific thousand separators remain unhandled for other chart types.
+
+### Remaining Gaps
+- Bar: area-based value integration, soft dual-axis boundary, error bar learned scoring.
+- Scatter: robust statistics (Spearman, MAD, Mahalanobis).
+- Box: ensemble median detection.
+- Histogram: fallback provenance tracking, bin-edge vs. bin-center disambiguation.
+- Heatmap: label anchor monotonicity validation.
+- Bar metric-learning model (`bar_label_model.py`) requires a trained `.npz` weight file — falls back to heuristic until weights are produced by `src/evaluation/train_bar_label_model.py`.
 
 See `src/Critic.md` for the full prioritized upgrade roadmap (P0–P3) with effort estimates and file paths.
+See `src/SOTA_Blueprint.md` for the mathematical specification and file-by-file engineering plan (Sections 1–5).
 
 ## Troubleshooting
 

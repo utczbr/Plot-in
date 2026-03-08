@@ -51,16 +51,21 @@ class RobustBarAssociator:
         self.spacing_factor = 0.4     # Within 40% of spacing
         self.zone_factor = 2.0        # Fallback: within 2× spacing
     
-    def detect_layout(self, bars: List[Dict], orientation: str) -> ChartLayout:
+    def detect_layout(self, bars: List[Dict], orientation: str,
+                      advanced_settings: Optional[Dict] = None) -> ChartLayout:
         """
         Detect chart layout type from bar positions.
-        
+
+        §3a.3: When bar_layout_detection='gmm', uses 1D GMM/BIC on normalized
+        inter-bar gaps to detect grouped layouts probabilistically.
+        Default ('heuristic') preserves the legacy 2.5× rule.
+
         Returns:
             ChartLayout enum indicating layout complexity
         """
         if len(bars) < 2:
             return ChartLayout.SIMPLE
-        
+
         # Extract bar positions along relevant axis
         if orientation == 'vertical':
             positions = sorted([(b['xyxy'][0] + b['xyxy'][2])/2.0 for b in bars])
@@ -68,24 +73,34 @@ class RobustBarAssociator:
         else:
             positions = sorted([(b['xyxy'][1] + b['xyxy'][3])/2.0 for b in bars])
             widths = [b['xyxy'][3] - b['xyxy'][1] for b in bars]
-        
+
         spacings = np.diff(positions)
         median_spacing = np.median(spacings)
         median_width = np.median(widths)
-        
-        # Check for grouped bars (bimodal spacing distribution)
+
+        # Determine layout detection mode
+        settings = advanced_settings or {}
+        mode = settings.get('bar_layout_detection', 'heuristic')
+
+        # Check for grouped bars
         if len(spacings) >= 3:
-            min_spacing = np.min(spacings)
-            max_spacing = np.max(spacings)
-            
-            # Grouped: large gap between groups, small gap within groups
-            if max_spacing > 2.5 * min_spacing:
-                self.logger.info(
-                    f"Detected GROUPED layout: "
-                    f"max_spacing={max_spacing:.1f}px, min_spacing={min_spacing:.1f}px"
-                )
+            if mode == 'gmm':
+                # §3a.3: 1D GMM on normalized gaps
+                grouped = self._detect_grouped_gmm(spacings, median_width)
+            else:
+                # Legacy heuristic: max_spacing > 2.5 × min_spacing
+                min_spacing = np.min(spacings)
+                max_spacing = np.max(spacings)
+                grouped = max_spacing > 2.5 * min_spacing
+                if grouped:
+                    self.logger.info(
+                        f"Detected GROUPED layout (heuristic): "
+                        f"max_spacing={max_spacing:.1f}px, min_spacing={min_spacing:.1f}px"
+                    )
+
+            if grouped:
                 return ChartLayout.GROUPED
-        
+
         # Check for stacked bars (overlapping positions)
         position_tolerance = median_width * 0.3
         for i in range(len(positions) - 1):
@@ -95,22 +110,53 @@ class RobustBarAssociator:
                     f"bars overlap at position {positions[i]:.1f}px"
                 )
                 return ChartLayout.STACKED
-        
+
         # Check for mixed/irregular layout
         if len(spacings) > 1:
             spacing_cv = np.std(spacings) / (median_spacing + 1e-6)
             width_cv = np.std(widths) / (median_width + 1e-6)
-            
+
             if spacing_cv > 0.5 or width_cv > 0.5:
                 self.logger.info(
                     f"Detected MIXED layout: "
                     f"spacing_cv={spacing_cv:.2f}, width_cv={width_cv:.2f}"
                 )
                 return ChartLayout.MIXED
-        
+
         # Default: simple layout
         self.logger.info("Detected SIMPLE layout")
         return ChartLayout.SIMPLE
+
+    def _detect_grouped_gmm(self, spacings: np.ndarray, median_width: float) -> bool:
+        """
+        §3a.3: Detect grouped layout using 1D GMM on normalized inter-bar gaps.
+
+        Normalizes gaps by median bar width, fits K=1 and K=2 GMMs,
+        and uses BIC model selection to determine if gaps are bimodal.
+        """
+        from utils.gmm_1d import fit_gmm_1d
+
+        # §3a.3.1: Normalize gaps by median bar width
+        median_width = max(median_width, 1.0)  # Prevent division by zero
+        normalized_gaps = spacings / median_width
+
+        # §3a.3.2-3: Fit GMM and compare BIC
+        result = fit_gmm_1d(normalized_gaps, max_k=2, bic_delta=3.0)
+
+        if result.best_k == 2:
+            # Verify the two components have meaningfully different means
+            means = sorted([c.mean for c in result.components])
+            if len(means) == 2 and means[1] > 1.5 * means[0]:
+                self.logger.info(
+                    f"Detected GROUPED layout (GMM): K=2 selected, "
+                    f"gap means={means[0]:.2f}/{means[1]:.2f} (normalized), "
+                    f"BIC(1)={result.bic_scores.get(1, 0):.1f}, BIC(2)={result.bic_scores.get(2, 0):.1f}"
+                )
+                # Store group separator info for downstream use
+                self._gmm_group_assignments = result.group_assignments
+                return True
+
+        return False
     
     def _compute_overlap_1d(self, bar_min: float, bar_max: float, 
                            label_min: float, label_max: float) -> float:

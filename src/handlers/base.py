@@ -11,7 +11,9 @@ from typing import Any, Dict, List, Optional
 import types as _types
 import numpy as np
 import logging
+from pathlib import Path
 
+from calibration.conformal import ConformalPredictor
 from handlers.types import ChartCoordinateSystem, ExtractionResult
 from services.orientation_service import Orientation, OrientationService
 from services.dual_axis_service import DualAxisDecision
@@ -190,6 +192,7 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         self.last_image_size = None
         self.last_chart_elements = None
         self._axis_labels: List[Dict[str, Any]] = []
+        self._conformal_predictor: Optional[ConformalPredictor] = None
 
     @abstractmethod
     def get_chart_type(self) -> str:
@@ -302,21 +305,40 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             errors.append(f"Dual-axis detection failed: {exc}")
             return self._fail_result("Dual-axis detection", errors, warnings, orientation)
 
-        # Stage 4: Calibration with recovery
+        # Stage 4: Calibration with graceful degradation.
+        # §2.8: R² < FAILURE_R2 is demoted to a WARNING, not a hard failure.
+        # calibration_quality is derived and attached to diagnostics for the
+        # StrategyRouter and HybridStrategy to act upon.
+        low_calibration = False
         try:
             calibrations = self._calibrate_axes(classified, dual_decision, orientation)
+            worst_r2 = None
             for axis_id, cal in calibrations.items():
                 if cal is None:
                     continue
                 r2 = getattr(cal, "r_squared", getattr(cal, "r2", None))
                 if r2 is None:
                     continue
+                if worst_r2 is None or r2 < worst_r2:
+                    worst_r2 = r2
                 if r2 < self.FAILURE_R2:
-                    errors.append(f"{axis_id} calibration catastrophic: R²={r2:.3f}")
+                    # Demoted: append to warnings, set flag, DO NOT abort.
+                    warnings.append(
+                        f"{axis_id} calibration poor (R²={r2:.3f} < {self.FAILURE_R2}); "
+                        f"continuing with uncalibrated extraction."
+                    )
+                    low_calibration = True
                 elif r2 < self.CRITICAL_R2:
                     warnings.append(f"{axis_id} calibration quality low: R²={r2:.3f}")
-            if errors:
-                return self._fail_result("Calibration failure", errors, warnings, orientation)
+
+            # Derive calibration_quality for router / downstream consumers.
+            if worst_r2 is None or worst_r2 < 0.15 or low_calibration:
+                calibration_quality = "uncalibrated"
+            elif worst_r2 < self.CRITICAL_R2:
+                calibration_quality = "approximate"
+            else:
+                calibration_quality = "high"
+            diagnostics["calibration_quality"] = calibration_quality
         except Exception as exc:
             errors.append(f"Calibration failed: {exc}")
             return self._fail_result("Calibration", errors, warnings, orientation)
@@ -335,6 +357,7 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             elements = self.extract_values(
                 image, detections, calibrations, baselines, orientation
             )
+            elements = self._attach_cp_intervals(elements)
         except Exception as exc:
             errors.append(f"Value extraction failed: {exc}")
             return self._fail_result("Value extraction", errors, warnings, orientation)
@@ -459,10 +482,27 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         orientation: Orientation,
         dual_decision: DualAxisDecision,
     ):
-        """Detect baselines through ModularBaselineDetector composition."""
+        """Detect baselines through ModularBaselineDetector composition.
+
+        §2.8.1 Safety: when primary calibration is degenerate (R²≈0 or absent),
+        zero-crossing computation is skipped and the detector falls back to
+        geometric-only baseline detection, preventing the hard-fail from
+        migrating from Stage 4 to Stage 5.
+        """
         primary_calibration = calibrations.get("primary")
         primary_calibration_zero = None
-        if primary_calibration is not None and hasattr(primary_calibration, "coeffs"):
+
+        # Only compute zero-crossing when calibration is meaningful.
+        primary_r2 = getattr(primary_calibration, "r_squared",
+                             getattr(primary_calibration, "r2", None))
+        calibration_is_usable = (
+            primary_calibration is not None
+            and primary_r2 is not None
+            and primary_r2 >= 0.10  # below this the fit is essentially noise
+            and hasattr(primary_calibration, "coeffs")
+        )
+
+        if calibration_is_usable:
             if primary_calibration.coeffs and len(primary_calibration.coeffs) >= 2:
                 m, b = primary_calibration.coeffs[0], primary_calibration.coeffs[1]
                 if abs(m) > 1e-6:
@@ -470,14 +510,23 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
                     self.logger.info(
                         "✅ Primary calibration zero-crossing: %.1fpx (R²=%.4f)",
                         primary_calibration_zero,
-                        getattr(primary_calibration, "r2", 0.0),
+                        primary_r2,
                     )
+        else:
+            self.logger.warning(
+                "Skipping calibration zero-crossing: primary calibration is degenerate "
+                "(R²=%s). Falling back to geometric baseline detection.",
+                f"{primary_r2:.3f}" if primary_r2 is not None else "N/A",
+            )
+            # Pass None so the detector uses pixel-geometry only.
+            primary_calibration = None
 
         config = DetectorConfig(
             cluster_backend=self.clustering_recommendation.algorithm,
             dbscan_eps_px=0.04 * image.shape[0],
             stack_band_frac=0.02,
         )
+
 
         if self.get_chart_type() in {"bar", "histogram"}:
             config.dbscan_eps_px = 0.04 * image.shape[0]
@@ -517,6 +566,45 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             warnings=warnings,
             orientation=orientation,
         )
+        
+    def _attach_cp_intervals(self, elements: List[Dict]) -> List[Dict]:
+        """§2.4: Attach Conformal Prediction uncertainty intervals."""
+        if self._conformal_predictor is None:
+            self._conformal_predictor = ConformalPredictor(Path("models/cp_quantiles.json"))
+            
+        cp = self._conformal_predictor
+        if not cp.loaded:
+            return elements
+
+        chart_type = self.get_chart_type()
+        family_map = {
+            'bar': [('value', 'bar.y')],
+            'scatter': [('x', 'scatter.x'), ('y', 'scatter.y')],
+            'line': [('x', 'line.x'), ('y', 'line.y')],
+            'box': [('median', 'box.median'), ('q1', 'box.q1'), ('q3', 'box.q3')],
+            'histogram': [('value', 'histogram.value')]
+        }
+        
+        mappings = family_map.get(chart_type, [])
+        if not mappings:
+            return elements
+
+        for el in elements:
+            for val_key, family in mappings:
+                if val_key in el and isinstance(el[val_key], (int, float)):
+                    # For bins we use absolute chart-space value as the bin_feature proxy
+                    bin_feature = abs(el[val_key]) 
+                    interval = cp.interval(
+                        y_hat=float(el[val_key]),
+                        value_family=family,
+                        bin_feature=bin_feature
+                    )
+                    if interval:
+                        if 'uncertainty' not in el:
+                            el['uncertainty'] = {}
+                        el['uncertainty'][val_key] = interval
+
+        return elements
 
 
 class GridChartHandler(BaseHandler):

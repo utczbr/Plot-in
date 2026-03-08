@@ -21,6 +21,11 @@ from visual.box_plot_visualizer import BoxPlotVisualizer
 from handlers.types import HandlerContext
 from services.text_layout_service import TextLayoutService
 
+# Strategy layer
+from strategies.router import StrategyRouter
+from strategies.standard import StandardStrategy
+from strategies.base import StrategyServices
+
 # Class maps
 from core.class_maps import (
     CLASS_MAP_CLASSIFICATION,
@@ -52,7 +57,10 @@ class ChartAnalysisPipeline(BasePipeline):
         self.ocr_engine = ocr_engine
         self.calibration_engine = calibration_engine
         self.orchestrator = None
-        
+        # Strategy layer (lazy-initialised on first run, like orchestrator)
+        self._strategy_router: Optional[StrategyRouter] = None
+        self._standard_strategy: Optional[StandardStrategy] = None
+
         # Ensure classifiers and detectors are ready
         # self.models_manager.load_models() # Assumed to be managed externally or lazy loaded
 
@@ -105,31 +113,71 @@ class ChartAnalysisPipeline(BasePipeline):
         # 5. OCR on Axis Labels + DocLayout text regions
         self._process_ocr(img, detections)
         
-        # 6. Orchestration (Logic & Calibration)
+        # 6. Strategy-based Orchestration
+        # Lazy-init orchestrator + strategy layer on first run.
         if self.orchestrator is None:
             self.orchestrator = ChartAnalysisOrchestrator(
                 calibration_service=self.calibration_engine,
                 logger=logging.getLogger("Orchestrator"),
             )
+        if self._standard_strategy is None:
+            self._standard_strategy = StandardStrategy(orchestrator=self.orchestrator)
+        if self._strategy_router is None:
+            self._strategy_router = StrategyRouter(standard=self._standard_strategy)
 
         element_key = get_chart_element_key(chart_type)
         chart_elements = detections.get(element_key, [])
         axis_labels = detections.get('axis_labels', [])
 
-        context = HandlerContext(
+        # Resolve pipeline_mode from advanced_settings (default='standard')
+        pipeline_mode = 'standard'
+        if isinstance(advanced_settings, dict):
+            pipeline_mode = str(advanced_settings.get('pipeline_mode', 'standard'))
+
+        # Derive routing quality signals
+        classification_confidence = 1.0
+        if isinstance(advanced_settings, dict):
+            classification_confidence = float(
+                advanced_settings.get('_classification_confidence', 1.0)
+            )
+        n_expected = max(len(chart_elements), 1)
+        detection_coverage = min(1.0, len(chart_elements) / n_expected)
+
+        strategy = self._strategy_router.select(
+            chart_type=chart_type,
+            classification_confidence=classification_confidence,
+            detection_coverage=detection_coverage,
+            calibration_quality=None,  # Not yet known before extraction
+            pipeline_mode=pipeline_mode,
+        )
+
+        services = StrategyServices(calibration_service=self.calibration_engine)
+        result = strategy.execute(
             image=img,
             chart_type=chart_type,
             detections=detections,
             axis_labels=axis_labels,
             chart_elements=chart_elements,
             orientation=orientation,
+            services=services,
         )
-        result = self.orchestrator.process_chart(context=context)
-        
+
         # 7. Format Result
+        # Note: result.errors now includes calibration warnings but NOT fatal R² aborts.
+        # Hard failures only occur for truly unrecoverable stages (orientation, dual-axis).
         if result.errors:
-            self.logger.error(f"Orchestration failed: {result.errors}")
-            return None
+            # Log errors as warnings; only return None if result has no elements AND the
+            # error is not a known recoverable calibration warning.
+            calibration_only_errors = all(
+                'calibration' in e.lower() for e in result.errors
+            )
+            if calibration_only_errors and result.elements is not None:
+                self.logger.warning(
+                    f"Calibration issues (non-fatal, continuing): {result.errors}"
+                )
+            else:
+                self.logger.error(f"Orchestration failed: {result.errors}")
+                return None
             
         final_result = self._format_result(result, image_path, detections)
 

@@ -52,34 +52,46 @@ class LegendMatchingService:
         # If standard deviation of x-centers is small (< 10 pixels), it's a column
         return x_std < 10.0
 
-    def _match_vertical_column(self, slices: List[Dict], labels: List[Dict]) -> List[Tuple[str, Dict]]:
+    def _match_vertical_column(self, slices: List[Dict], labels: List[Dict],
+                               angle_sorted_slices: List[Dict] = None) -> List[Tuple[str, Dict]]:
         """
-        Match vertical legend column (top-to-bottom) to slices (clockwise start from top/right).
-        Assumption: Legend order matches Slice order.
+        Match vertical legend column (top-to-bottom) to slices.
+
+        §4.7: When angle_sorted_slices is provided (from keypoint-based angular ordering),
+        slices are re-sorted from 12-o'clock clockwise to match common chart conventions
+        (Excel, Plotly, matplotlib default). This resolves the 0°=East vs 12-o'clock mismatch.
+
+        Without angle_sorted_slices, falls back to the existing ordinal matching.
         """
         # Sort labels by Y coordinate (Top to Bottom)
         sorted_labels = sorted(labels, key=lambda l: (l['xyxy'][1] + l['xyxy'][3])/2)
-        
-        # Slices are expected to be sorted by angle (done in PieHandler)
-        # However, PieHandler sorts 0-360 starting East. 
-        # Standard Excel/Plotly behavior: Starts 12 o'clock (90 deg) and goes Clockwise.
-        # Our angles are 0 (East) -> 90 (South) -> 180 (West) -> 270 (North) due to image coords (y down)
-        # Wait: arctan2(dy, dx) with y down:
-        # East (1,0) -> 0
-        # South (0,1) -> 90
-        # West (-1,0) -> 180
-        # North (0,-1) -> -90 (270)
-        # So our sort is Clockwise starting from East.
-        
-        # Most legends start at "12 o'clock" (North).
-        # We need to rotate our slices to align.
-        # Let's align by count first.
-        
-        n = min(len(slices), len(sorted_labels))
+
+        # §4.7: Use angle-sorted slices if available (12-o'clock clockwise)
+        if angle_sorted_slices is not None:
+            ordered_slices = angle_sorted_slices
+        else:
+            # Legacy: Sort slices from 12-o'clock clockwise
+            # arctan2 gives: East=0°, South=90°, West=180°, North=270° (image coords, y-down)
+            # 12-o'clock = North = 270° in this convention
+            # Clockwise from 12 o'clock: 270 → 360/0 → 90 → 180 → 270
+            def clock_order(s):
+                bbox = s['xyxy']
+                cx = (bbox[0] + bbox[2]) / 2
+                cy = (bbox[1] + bbox[3]) / 2
+                # Use angle if available (from PieHandler), otherwise compute from centroid center
+                angle = s.get('angle', None)
+                if angle is None:
+                    return 0
+                # Convert from East=0 CW to 12-o'clock CW: rotate by -270° → (angle - 270) % 360
+                return (angle - 270) % 360
+
+            ordered_slices = sorted(slices, key=clock_order)
+
+        n = min(len(ordered_slices), len(sorted_labels))
         matches = []
         for i in range(n):
-            matches.append((sorted_labels[i].get('text', ''), slices[i]))
-            
+            matches.append((sorted_labels[i].get('text', ''), ordered_slices[i]))
+
         return matches
 
     def _match_hungarian(self, slices: List[Dict], labels: List[Dict]) -> List[Tuple[str, Dict]]:

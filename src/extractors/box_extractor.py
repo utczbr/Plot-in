@@ -341,13 +341,8 @@ class BoxExtractor(BaseExtractor):
                 final_q3 = box_info['q3']
                 final_max = box_info['whisker_high']
 
-                if not (final_min <= final_q1 <= final_median <= final_q3 <= final_max):
-                    logging.warning(
-                        f"Box {i} has an invalid logical order: "
-                        f"min={final_min:.2f}, q1={final_q1:.2f}, "
-                        f"median={final_median:.2f}, q3={final_q3:.2f}, "
-                        f"max={final_max:.2f}"
-                    )
+                # §3b.4: Monotone projection — enforce valid five-number ordering
+                box_info = self._enforce_monotone_summary(box_info, i)
 
                 if 'outliers' not in box_info or not box_info['outliers']:
                     box_info['outliers'] = []
@@ -358,6 +353,9 @@ class BoxExtractor(BaseExtractor):
                         except Exception as e:
                             logging.warning(f"Scale model failed for outlier: {e}")
 
+                # §3b.5: Outlier validation gate — reject points inside whisker range
+                box_info = self._validate_outliers(box_info, i)
+
                 box_info, val_errors = validate_and_correct_box_values(box_info)
                 if val_errors:
                     logging.warning(f"Box {i} validation errors: {val_errors}")
@@ -367,6 +365,65 @@ class BoxExtractor(BaseExtractor):
 
         # Use BaseExtractor helper for calibration quality
         self._add_calibration_info(result, r_squared, baseline_coord, orientation)
+
+    def _enforce_monotone_summary(self, box_info: Dict, box_index: int) -> Dict:
+        """
+        §3b.4: Enforce valid five-number ordering via monotone projection (sort).
+
+        Guarantees whisker_low ≤ q1 ≤ median ≤ q3 ≤ whisker_high.
+        Includes severe warning guard when permutation moves values > 10% of range.
+        """
+        keys = ['whisker_low', 'q1', 'median', 'q3', 'whisker_high']
+        vals = [box_info.get(k) for k in keys]
+        if any(v is None for v in vals):
+            return box_info
+        sorted_vals = sorted(vals)
+        corrected = False
+        value_range = max(vals) - min(vals) if max(vals) != min(vals) else 1.0
+        severe = False
+        for k, old, new in zip(keys, vals, sorted_vals):
+            if old != new:
+                corrected = True
+                if abs(old - new) > 0.10 * value_range:
+                    severe = True
+                box_info[k] = new
+        if corrected:
+            box_info['five_number_corrected'] = True
+            box_info['iqr'] = box_info['q3'] - box_info['q1']
+            if severe:
+                logging.warning(
+                    f"Box {box_index}: Severe box plot topology error corrected by sorting "
+                    f"— review extraction quality. Original: {dict(zip(keys, vals))}"
+                )
+            else:
+                logging.info(
+                    f"Box {box_index}: Minor five-number ordering corrected by sorting"
+                )
+        return box_info
+
+    def _validate_outliers(self, box_info: Dict, box_index: int) -> Dict:
+        """
+        §3b.5: Reject outlier points that fall inside the whisker range.
+
+        True outliers must be outside [whisker_low, whisker_high].
+        """
+        outliers = box_info.get('outliers', [])
+        if not outliers:
+            return box_info
+        w_low = box_info.get('whisker_low')
+        w_high = box_info.get('whisker_high')
+        if w_low is None or w_high is None:
+            return box_info
+        valid_outliers = [o for o in outliers if o < w_low or o > w_high]
+        rejected = len(outliers) - len(valid_outliers)
+        if rejected > 0:
+            logging.info(
+                f"Box {box_index}: Rejected {rejected} outlier(s) inside whisker range "
+                f"[{w_low:.2f}, {w_high:.2f}]"
+            )
+        box_info['outliers'] = valid_outliers
+        box_info['outliers_rejected_count'] = rejected
+        return box_info
 
         # Legacy metadata maintenance
         result['baseline_coord'] = baseline_coord

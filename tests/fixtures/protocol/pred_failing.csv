@@ -1,0 +1,9 @@
+source_file,page_index,chart_type,group,outcome,value,unit,error_bar_type
+study_a.pdf,0,bar,Treatment,Weight,50.0,kg,SD
+study_a.pdf,0,bar,Control,Weight,1.0,kg,SD
+study_a.pdf,1,line,Treatment,Volume,0.5,ml,SEM
+study_a.pdf,1,line,Control,Volume,20.0,ml,SEM
+study_b.pdf,0,scatter,GroupA,Concentration,5.0,mg/L,SD
+study_b.pdf,0,scatter,GroupB,Concentration,90.0,mg/L,SD
+study_b.pdf,1,box,Treatment,Score,1.0,points,IQR
+study_b.pdf,1,box,Control,Score,15.0,points,IQR

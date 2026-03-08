@@ -63,14 +63,16 @@ class ScatterHandler(CartesianExtractionHandler):
                 cal_x = cal_x or cal_primary
                 cal_y = cal_y or cal_secondary
         
-        # Final safety net
-        if not cal_x: cal_x = cal_y
-        if not cal_y: cal_y = cal_x
-            
+        # Safety net: emit None + warning instead of aliasing wrong-axis calibration
+        if not cal_x:
+            self.logger.warning("X-axis calibration unavailable; x_calibrated values will be None")
+        if not cal_y:
+            self.logger.warning("Y-axis calibration unavailable; y_calibrated values will be None")
+
         # Resolve model functions
         func_x = self._resolve_model_func(cal_x)
         func_y = self._resolve_model_func(cal_y)
-        
+
         if not func_x and not func_y:
             self.logger.warning("No X or Y calibration available, using pixel coordinates only")
             

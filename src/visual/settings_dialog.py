@@ -387,10 +387,34 @@ class SettingsDialog(QDialog):
 
         method_group = QGroupBox("Spatial Classification Method")
         method_layout = QGridLayout(method_group)
-        method_layout.addWidget(QLabel("Method:"), 0, 0)
+        
+        # Pipeline Mode (SOTA feature)
+        method_layout.addWidget(QLabel("Pipeline Mode:"), 0, 0)
+        self.pipeline_mode_combo = QComboBox()
+        self.pipeline_mode_combo.addItems(['standard', 'vlm', 'chart_to_table', 'hybrid', 'auto'])
+        self.pipeline_mode_combo.setToolTip("Select the overall pipeline routing strategy (SOTA)")
+        method_layout.addWidget(self.pipeline_mode_combo, 0, 1)
+
+        # Spatial Method
+        method_layout.addWidget(QLabel("Spatial Method:"), 1, 0)
         self.spatial_method_combo = QComboBox()
         self.spatial_method_combo.addItems(['Diagonal', 'LYLAA-Reduced', 'LYLLA'])
-        method_layout.addWidget(self.spatial_method_combo, 0, 1)
+        method_layout.addWidget(self.spatial_method_combo, 1, 1)
+
+        # Scatter Subpixel Mode (SOTA feature)
+        method_layout.addWidget(QLabel("Scatter Subpixel Mode:"), 2, 0)
+        self.scatter_subpixel_combo = QComboBox()
+        self.scatter_subpixel_combo.addItems(['otsu', 'gaussian'])
+        self.scatter_subpixel_combo.setToolTip("Algorithm used to refine scatter point centers natively")
+        method_layout.addWidget(self.scatter_subpixel_combo, 2, 1)
+
+        # Bar Association Mode (SOTA feature)
+        method_layout.addWidget(QLabel("Bar Association Mode:"), 3, 0)
+        self.bar_association_combo = QComboBox()
+        self.bar_association_combo.addItems(['heuristic', 'metric_learning'])
+        self.bar_association_combo.setToolTip("Method used to associate text labels to bars")
+        method_layout.addWidget(self.bar_association_combo, 3, 1)
+
         layout.addWidget(method_group)
         
         group = QGroupBox("Image Processing Parameters")
@@ -689,7 +713,10 @@ class SettingsDialog(QDialog):
         return {
             'ocr_engine': 'Paddle',
             'ocr_accuracy': 'Optimized',
+            'pipeline_mode': 'hybrid',
             'spatial_method': 'LYLLA',
+            'scatter_subpixel_mode': 'gaussian',
+            'bar_association_mode': 'metric_learning',
             'calibration_method': 'PROSAC',
             'ocr_whitelists': {
                 'scale_label': '0123456789.,-eE+',
@@ -878,8 +905,11 @@ class SettingsDialog(QDialog):
         self.min_scale_labels_spin.setValue(calibration_settings.get('min_scale_labels', 2))
         self.baseline_tol_spin.setValue(calibration_settings.get('baseline_validation_tolerance', 0.2))
 
-        # Method
+        # Method and SOTA Flags
+        self.pipeline_mode_combo.setCurrentText(self.settings.get('pipeline_mode', 'hybrid'))
         self.spatial_method_combo.setCurrentText(self.settings.get('spatial_method', 'LYLLA'))
+        self.scatter_subpixel_combo.setCurrentText(self.settings.get('scatter_subpixel_mode', 'gaussian'))
+        self.bar_association_combo.setCurrentText(self.settings.get('bar_association_mode', 'metric_learning'))
         
         # Image processing
         image_processing = self.settings.get('image_processing', {})
@@ -945,8 +975,11 @@ class SettingsDialog(QDialog):
         self.settings['calibration_settings']['min_scale_labels'] = self.min_scale_labels_spin.value()
         self.settings['calibration_settings']['baseline_validation_tolerance'] = self.baseline_tol_spin.value()
 
-        # Method
+        # Method and SOTA Flags
+        self.settings['pipeline_mode'] = self.pipeline_mode_combo.currentText()
         self.settings['spatial_method'] = self.spatial_method_combo.currentText()
+        self.settings['scatter_subpixel_mode'] = self.scatter_subpixel_combo.currentText()
+        self.settings['bar_association_mode'] = self.bar_association_combo.currentText()
         
         # Image processing
         self.settings['image_processing']['clahe_clip_limit'] = self.clahe_clip_spin.value()

@@ -74,12 +74,36 @@ class HeatmapHandler(GridChartHandler):
                 centers.append({'cx': cx, 'cy': cy, 'cell': cell})
             
             # 2. Cluster to find unique Rows (y) and Cols (x) using DBSCAN
-            # from utils.clustering_utils import cluster_1d_dbscan
+            # §4.3: 2-pass DBSCAN — coarse pass for cell geometry, then geometry-aware eps
             h, w = image.shape[:2]
-            # Use eps calculation from original code: dim * 0.015
-            self._row_centers = cluster_1d_dbscan([c['cy'] for c in centers], h * 0.015)
-            self._col_centers = cluster_1d_dbscan([c['cx'] for c in centers], w * 0.015)
-            
+            cy_vals = [c['cy'] for c in centers]
+            cx_vals = [c['cx'] for c in centers]
+
+            # Pass 1: Coarse clustering with legacy eps to estimate cell geometry
+            coarse_rows = cluster_1d_dbscan(cy_vals, h * 0.015)
+            coarse_cols = cluster_1d_dbscan(cx_vals, w * 0.015)
+
+            # Estimate median cell dimensions from coarse grid
+            if len(coarse_rows) >= 2 and len(coarse_cols) >= 2:
+                row_diffs = np.diff(sorted(coarse_rows))
+                col_diffs = np.diff(sorted(coarse_cols))
+                median_cell_h = float(np.median(row_diffs)) if len(row_diffs) > 0 else h * 0.015
+                median_cell_w = float(np.median(col_diffs)) if len(col_diffs) > 0 else w * 0.015
+
+                # Pass 2: Re-cluster with geometry-aware eps = 0.5 × cell dimension
+                eps_y = median_cell_h * 0.5
+                eps_x = median_cell_w * 0.5
+                self._row_centers = cluster_1d_dbscan(cy_vals, eps_y)
+                self._col_centers = cluster_1d_dbscan(cx_vals, eps_x)
+                self.logger.info(
+                    f"2-pass DBSCAN: cell geometry {median_cell_w:.0f}×{median_cell_h:.0f}px, "
+                    f"eps_x={eps_x:.1f}, eps_y={eps_y:.1f}"
+                )
+            else:
+                # Fallback: use coarse pass results directly
+                self._row_centers = coarse_rows
+                self._col_centers = coarse_cols
+
             # Warn if degenerate grid
             if len(self._row_centers) < 2 or len(self._col_centers) < 2:
                 self.logger.warning(f"Degenerate grid detected: {len(self._row_centers)} rows x {len(self._col_centers)} cols")
@@ -100,9 +124,9 @@ class HeatmapHandler(GridChartHandler):
                     col_idx = self._find_closest_index(cell_data['cx'], self._col_centers)
                     
                     value = self._extract_cell_value(image, cell)
-                    
+
                     if value is not None:
-                        elements.append({
+                        element = {
                             'type': 'heatmap_cell',
                             'bbox': cell['xyxy'],
                             'value': value,
@@ -111,20 +135,36 @@ class HeatmapHandler(GridChartHandler):
                             'col': col_idx,
                             'row_label': row_labels.get(row_idx, ''),
                             'col_label': col_labels.get(col_idx, '')
-                        })
+                        }
+                        # §4.2.4: Surface value_confidence and value_source from color mapper
+                        if self.color_mapper:
+                            element['value_confidence'] = getattr(self.color_mapper, 'last_confidence', None)
+                            element['value_source'] = getattr(self.color_mapper, 'last_value_source', None)
+                        elements.append(element)
                 except Exception as e:
                     self.logger.warning(f"Error processing heatmap cell: {e}")
                     continue
+
+            # §4.2.6: Count clamped cells for diagnostics (guard against non-numeric)
+            clamped_count = sum(
+                1 for e in elements
+                if isinstance(e.get('value_confidence'), (int, float))
+                and e['value_confidence'] < 0.1
+            )
+
+            diagnostics = {
+                'cell_count': len(heatmap_cells),
+                'grid_rows': len(self._row_centers),
+                'grid_cols': len(self._col_centers),
+            }
+            if clamped_count > 0:
+                diagnostics['low_confidence_cells'] = clamped_count
 
             return ExtractionResult(
                 chart_type=self.get_chart_type(),
                 coordinate_system=self.get_coordinate_system(),
                 elements=elements,
-                diagnostics={
-                    'cell_count': len(heatmap_cells),
-                    'grid_rows': len(self._row_centers),
-                    'grid_cols': len(self._col_centers)
-                },
+                diagnostics=diagnostics,
                 orientation=orientation
             )
         except Exception as e:

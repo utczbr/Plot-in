@@ -73,5 +73,8 @@
   "calibration": {
     "method": "auto",
     "use_robust_gd": true
-  }
+  },
+  "pipeline_mode": "hybrid",
+  "scatter_subpixel_mode": "gaussian",
+  "bar_association_mode": "metric_learning"
 }

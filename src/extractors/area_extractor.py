@@ -139,7 +139,8 @@ class AreaExtractor(BaseExtractor):
 
         x_arr = np.array(x_coords)
         y_arr = np.array(y_values)
-        total_auc = float(np.trapz(y_arr, x_arr))
+        _trapezoid = getattr(np, 'trapezoid', np.trapz)  # NumPy ≥2.0 compat
+        total_auc = float(_trapezoid(y_arr, x_arr))
 
         return {
             'total_auc': total_auc,

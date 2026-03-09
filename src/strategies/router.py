@@ -72,13 +72,14 @@ class StrategyRouter:
                         "StandardStrategy not configured. "
                         "Pass orchestrator to StrategyRouter."
                     )
-                logger.warning(
+                # §1.8 contract: explicit non-standard modes MUST raise when
+                # the backend is unavailable.  The pipeline caller is
+                # responsible for catching this and returning a clear error.
+                raise ValueError(
                     f"Requested pipeline_mode='{pipeline_mode}' is not available. "
-                    f"Falling back to 'standard'."
+                    f"The '{pipeline_mode}' backend was not loaded or is missing "
+                    f"required weights/dependencies."
                 )
-                strategy = self._strategies.get('standard')
-                if strategy is None:
-                    raise ValueError("StandardStrategy not configured")
             return strategy
 
         # Auto mode: quality-signal-based selection

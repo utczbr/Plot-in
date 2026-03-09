@@ -169,6 +169,9 @@ python3 -m pytest tests/handlers_tests/test_area_handler.py
 python3 -m pytest tests/core_tests/test_protocol_row_builder.py
 python3 -m pytest tests/core_tests/test_export_manager_protocol.py
 python3 -m pytest tests/evaluation_tests/test_protocol_validation.py
+python3 -m pytest tests/evaluation_tests/test_golden_regression.py
+python3 -m pytest tests/evaluation_tests/test_synthetic_gold_builder.py
+python3 -m pytest tests/strategies_tests/test_router.py
 ```
 
 ## CI Workflows
@@ -183,11 +186,12 @@ python3 -m pytest tests/evaluation_tests/test_protocol_validation.py
 3. Protocol stack currently includes CCC/Kappa but not ICC/survey pipeline.
 4. Corrected protocol rows are editable/exportable, but canonical persistent corrected-backend artifact is not fully formalized.
 
-### Architecture (Implemented Modules — Not Yet Active In Default Runtime)
-5. ⚠️ **Strategy package is implemented but not wired into active pipeline dispatch**: `src/strategies/` includes `StrategyRouter` + `StandardStrategy`/`VLMStrategy`/`ChartToTableStrategy`/`HybridStrategy`, but stage 6 of `ChartAnalysisPipeline.run()` still constructs `ChartAnalysisOrchestrator` and calls `process_chart()` directly (`src/pipelines/chart_pipeline.py`, lines 108-127).
-6. ⚠️ **Auto-routing policy exists but is dormant at runtime**: `StrategyRouter.select()` is implemented (`src/strategies/router.py`) but is not invoked by the active pipeline path in `src/pipelines/chart_pipeline.py`.
-7. ❌ **`R² < 0.40` is still a hard failure in active Cartesian flow**: `CartesianExtractionHandler` keeps `FAILURE_R2 = 0.40` and aborts on catastrophic calibration (`src/handlers/base.py`, lines 167-168 and 314-319); pipeline then aborts when handler errors are present (`src/pipelines/chart_pipeline.py`, lines 130-132).
-8. ⚠️ **Conformal modules/scripts are present but not active in runtime output contracts**: module exists in `src/calibration/conformal.py` and offline builder exists in `src/evaluation/build_cp_quantiles.py`, but CP intervals are not attached in active extraction flow and no CP sidecar JSON is present in-repo.
+### Architecture (Implemented Modules — Active In Default Runtime)
+5. ✅ **Strategy package is wired into active pipeline dispatch**: `src/strategies/` includes `StrategyRouter` + `StandardStrategy`/`VLMStrategy`/`ChartToTableStrategy`/`HybridStrategy`, all wired via lazy initialization in `ChartAnalysisPipeline.run()`. Default `pipeline_mode='standard'` routes to `StandardStrategy`; VLM, ChartToTable, Hybrid, and auto modes are available via `advanced_settings`.
+6. ✅ **Auto-routing policy is active**: `StrategyRouter.select()` dispatches based on `pipeline_mode` and quality signals (`classification_confidence`, `detection_coverage`, `calibration_quality`).
+7. ❌ **`R² < 0.40` is a warning, not a hard failure**: `CartesianExtractionHandler` demotes `FAILURE_R2 = 0.40` to a warning and continues through baseline detection and value extraction (`src/handlers/base.py`).
+8. ✅ **Conformal modules are active in runtime**: `ConformalPredictor` in `src/calibration/conformal.py` is loaded by `CartesianExtractionHandler._attach_cp_intervals()` (invoked at Stage 6) and attaches per-element uncertainty intervals when CP sidecar JSON is present.
+   - ⚠️ **CP family coverage gap**: `models/cp_quantiles.json` contains quantiles for 4 families only: `bar.y`, `scatter.y`, `box.median`, `heatmap.value`. Line, pie, area, and histogram charts pass through without uncertainty intervals. Additional calibration data is needed to extend coverage.
 
 ### Extractor-Level (Partially Resolved)
 9. ⚠️ **Bar association upgrades are partially active**: GMM layout detection path is available (`bar_layout_detection='gmm'`), while the metric-learning path (`bar_association_mode='metric_learning'`) depends on trained `.npz` weights from `src/evaluation/train_bar_label_model.py`; heuristic path remains default/fallback.

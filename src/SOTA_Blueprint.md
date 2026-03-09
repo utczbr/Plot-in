@@ -1,5 +1,7 @@
 # SOTA Implementation Blueprint
 
+> **Phase 1 Status: Implemented (March 2026)** — StrategyRouter wiring, lazy backend initialization (VLM/ChartToTable/Hybrid), conformal prediction interval attachment, synthetic gold builder, and strategy router tests are complete. See `src/SOTA_Phase1_validation.md` for the detailed checklist.
+
 ## Context
 
 This blueprint translates the deep-research findings in `src/docs/SOTA.md` into a file-by-file engineering specification for transitioning the LYAA chart extraction pipeline from its current heuristic-heavy architecture to a SOTA-consistent design. The transition addresses three architectural gaps identified in `README.md` (lines 187-191) and `Critic.md`:

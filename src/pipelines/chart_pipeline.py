@@ -24,6 +24,9 @@ from services.text_layout_service import TextLayoutService
 # Strategy layer
 from strategies.router import StrategyRouter
 from strategies.standard import StandardStrategy
+from strategies.vlm import VLMStrategy
+from strategies.chart_to_table import ChartToTableStrategy
+from strategies.hybrid import HybridStrategy
 from strategies.base import StrategyServices
 
 # Class maps
@@ -60,6 +63,9 @@ class ChartAnalysisPipeline(BasePipeline):
         # Strategy layer (lazy-initialised on first run, like orchestrator)
         self._strategy_router: Optional[StrategyRouter] = None
         self._standard_strategy: Optional[StandardStrategy] = None
+        self._vlm_strategy: Optional[VLMStrategy] = None
+        self._chart_to_table_strategy: Optional[ChartToTableStrategy] = None
+        self._hybrid_strategy: Optional[HybridStrategy] = None
 
         # Ensure classifiers and detectors are ready
         # self.models_manager.load_models() # Assumed to be managed externally or lazy loaded
@@ -122,8 +128,35 @@ class ChartAnalysisPipeline(BasePipeline):
             )
         if self._standard_strategy is None:
             self._standard_strategy = StandardStrategy(orchestrator=self.orchestrator)
+
+        # Lazy-init optional backends — failures log warnings, never crash.
+        # NOTE: VLMStrategy is NOT instantiated here because there is no
+        # VLMBackend implementation in the repo.  Constructing VLMStrategy()
+        # with backend=None would make the router think it is available, but
+        # execute() would raise NotImplementedError.  We leave _vlm_strategy
+        # as None so the router correctly reports 'vlm' as unavailable.
+        # When a VLMBackend implementation is added, instantiate here:
+        #   self._vlm_strategy = VLMStrategy(backend=my_backend)
+
+        if self._chart_to_table_strategy is None:
+            try:
+                self._chart_to_table_strategy = ChartToTableStrategy()  # lazy Pix2Struct load
+            except Exception as e:
+                self.logger.warning(f"ChartToTable backend unavailable: {e}")
+
+        if self._hybrid_strategy is None and self._standard_strategy is not None:
+            self._hybrid_strategy = HybridStrategy(
+                standard=self._standard_strategy,
+                vlm=self._vlm_strategy,  # currently None → Hybrid uses Standard-only path
+            )
+
         if self._strategy_router is None:
-            self._strategy_router = StrategyRouter(standard=self._standard_strategy)
+            self._strategy_router = StrategyRouter(
+                standard=self._standard_strategy,
+                vlm=self._vlm_strategy,
+                chart_to_table=self._chart_to_table_strategy,
+                hybrid=self._hybrid_strategy,
+            )
 
         element_key = get_chart_element_key(chart_type)
         chart_elements = detections.get(element_key, [])
@@ -143,24 +176,53 @@ class ChartAnalysisPipeline(BasePipeline):
         n_expected = max(len(chart_elements), 1)
         detection_coverage = min(1.0, len(chart_elements) / n_expected)
 
-        strategy = self._strategy_router.select(
-            chart_type=chart_type,
-            classification_confidence=classification_confidence,
-            detection_coverage=detection_coverage,
-            calibration_quality=None,  # Not yet known before extraction
-            pipeline_mode=pipeline_mode,
-        )
+        # Strategy selection and execution with safeguards.
+        # - ValueError from select(): explicit mode backend unavailable → clear error.
+        # - NotImplementedError/RuntimeError from execute(): backend failed → clear error.
+        try:
+            strategy = self._strategy_router.select(
+                chart_type=chart_type,
+                classification_confidence=classification_confidence,
+                detection_coverage=detection_coverage,
+                calibration_quality=None,  # Not yet known before extraction
+                pipeline_mode=pipeline_mode,
+            )
+        except ValueError as e:
+            self.logger.error(
+                f"Strategy selection failed for pipeline_mode='{pipeline_mode}': {e}"
+            )
+            return None
 
         services = StrategyServices(calibration_service=self.calibration_engine)
-        result = strategy.execute(
-            image=img,
-            chart_type=chart_type,
-            detections=detections,
-            axis_labels=axis_labels,
-            chart_elements=chart_elements,
-            orientation=orientation,
-            services=services,
-        )
+        try:
+            result = strategy.execute(
+                image=img,
+                chart_type=chart_type,
+                detections=detections,
+                axis_labels=axis_labels,
+                chart_elements=chart_elements,
+                orientation=orientation,
+                services=services,
+            )
+        except (NotImplementedError, RuntimeError) as e:
+            self.logger.error(
+                f"Strategy '{getattr(strategy, 'STRATEGY_ID', '?')}' execution "
+                f"failed: {e}. Falling back to StandardStrategy."
+            )
+            # Fall back to Standard with metadata indicating the fallback.
+            result = self._standard_strategy.execute(
+                image=img,
+                chart_type=chart_type,
+                detections=detections,
+                axis_labels=axis_labels,
+                chart_elements=chart_elements,
+                orientation=orientation,
+                services=services,
+            )
+            if hasattr(result, 'diagnostics') and isinstance(result.diagnostics, dict):
+                result.diagnostics['strategy_fallback'] = True
+                result.diagnostics['original_strategy'] = getattr(strategy, 'STRATEGY_ID', '?')
+                result.diagnostics['fallback_reason'] = str(e)
 
         # 7. Format Result
         # Note: result.errors now includes calibration warnings but NOT fatal R² aborts.

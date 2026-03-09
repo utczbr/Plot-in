@@ -1989,12 +1989,17 @@ Click to configure advanced options."""
                 self.rdir = rdir
 
             def run(self):
-                result = resolve_input_assets(
-                    input_path=self.path,
-                    render_dir=self.rdir,
-                    progress_callback=lambda msg: self.status_signal.emit(msg),
-                )
-                self.finished_signal.emit(result)
+                try:
+                    result = resolve_input_assets(
+                        input_path=self.path,
+                        render_dir=self.rdir,
+                        progress_callback=lambda msg: self.status_signal.emit(msg),
+                    )
+                    self.finished_signal.emit(result)
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).error("PDF resolve worker unhandled error: %s", exc)
+                    self.finished_signal.emit([])
 
         self._resolve_worker = _ResolveWorker(input_path, render_dir, parent=self)
         self._resolve_worker.status_signal.connect(

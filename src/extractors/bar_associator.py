@@ -552,13 +552,13 @@ class RobustBarAssociator:
                             f"Detected {layout.value} but bars span {max_span:.1f}px > "
                             f"{cluster_threshold:.1f}px threshold - resolving conflict"
                         )
-                        self._resolve_single_conflict(enriched_bars, claims, label_id, label_id)
+                        self._resolve_single_conflict(enriched_bars, claims, label_id)
 
         elif layout == ChartLayout.SIMPLE:
             # SIMPLE: 1 bar per tick label (traditional conflict resolution)
             for label_id, claims in label_usage.items():
                 if len(claims) > 1:
-                    self._resolve_single_conflict(enriched_bars, claims, label_id, label_id)
+                    self._resolve_single_conflict(enriched_bars, claims, label_id)
 
         else:  # MIXED
             # MIXED: Use spatial clustering heuristics
@@ -587,7 +587,7 @@ class RobustBarAssociator:
                             enriched_bars[bar_idx]['association_diagnostics']['is_grouped'] = True
                     else:
                         # Likely true conflict
-                        self._resolve_single_conflict(enriched_bars, claims, label_id, label_id)
+                        self._resolve_single_conflict(enriched_bars, claims, label_id)
 
         return enriched_bars
 

@@ -137,7 +137,11 @@ def _resolve_single_file(
         )]
 
     if input_type in ('auto', 'pdf') and suffix == PDF_EXTENSION:
-        render_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            render_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.error("Failed to create PDF render directory %s: %s", render_dir, exc)
+            return []
         return _expand_pdf(
             file_path, render_dir, high_res_dpi,
             min_chart_width, min_chart_height, progress_callback,
@@ -177,7 +181,12 @@ def _resolve_directory(
 
     # PDFs
     if input_type in ('auto', 'pdf'):
-        render_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            render_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.error("Failed to create PDF render directory %s: %s", render_dir, exc)
+            pdf_files = []  # Skip PDF expansion if directory creation fails
+
         for pdf in pdf_files:
             pdf_assets = _expand_pdf(
                 pdf, render_dir, high_res_dpi,

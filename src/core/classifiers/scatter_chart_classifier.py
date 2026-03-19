@@ -114,7 +114,11 @@ class ScatterChartClassifier(BaseChartClassifier):
             tick_labels=[],  # Scatter plots don't have tick labels
             axis_titles=classified['axis_title'],
             confidence=confidence,
-            metadata=metadata
+            metadata=metadata,
+            # Bug B fix: propagate the per-axis split so _calibrate_axes
+            # can use correct axis_type for each axis.
+            x_scale_labels=x_scales,
+            y_scale_labels=y_scales,
         )
     
     def _extract_scatter_features(self, labels: List[Dict], w: int, h: int) -> List[Dict]:
@@ -134,7 +138,7 @@ class ScatterChartClassifier(BaseChartClassifier):
                 'width': width, 'height': height,
                 'rel_w': width / w, 'rel_h': height / h,
                 'aspect': width / (height + 1e-6),
-                'is_numeric': is_numeric,
+                'is_numeric': is_num,   # Bug A fix: was `is_numeric` (function ref, always truthy)
                 'text': text
             })
         return features

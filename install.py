@@ -85,7 +85,10 @@ def _collect_gui_options(default_models_dir: Path) -> Tuple[Optional[InstallOpti
         return run_minimal_gui(default_models_dir), None
     except Exception as exc:
         if _is_tk_runtime_error(exc):
-            return None, f"GUI installer unavailable because tkinter could not start: {exc}"
+            return None, (
+                f"GUI installer unavailable because tkinter could not start: {exc}. "
+                "On macOS with Homebrew, try: brew install python-tk@3.11"
+            )
         logging.exception("GUI installer failed unexpectedly")
         return None, f"GUI installer failed unexpectedly: {exc}"
 

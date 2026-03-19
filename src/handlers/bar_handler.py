@@ -72,5 +72,7 @@ class BarHandler(CartesianExtractionHandler):
             axis_labels=axis_labels  # Pass axis_labels for extraction
         )
         
-        # Return list of bar dictionaries
-        return extraction_result.get('bars', [])
+        # NEW: Call legend associator on extracted values
+        bars = extraction_result.get('bars', [])
+        from extractors.legend_associator import LegendAssociator
+        return LegendAssociator.associate(bars, detections)

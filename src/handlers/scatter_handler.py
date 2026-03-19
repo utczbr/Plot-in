@@ -47,22 +47,11 @@ class ScatterHandler(CartesianExtractionHandler):
             self.logger.warning(f"No data points found in detections for scatter plot. Available keys: {list(detections.keys())}")
             return []
         
-        # Resolve calibration objects
+        # Resolve calibration objects. With the _calibrate_axes override these
+        # should already be correctly split by axis.
         cal_x = calibration.get('x')
         cal_y = calibration.get('y')
-        
-        # Fallback logic for dual-axis mapping
-        if not cal_x or not cal_y:
-            cal_primary = calibration.get('primary')
-            cal_secondary = calibration.get('secondary') or cal_primary
-            
-            if orientation_enum == Orientation.VERTICAL:
-                cal_y = cal_y or cal_primary
-                cal_x = cal_x or cal_secondary
-            else:
-                cal_x = cal_x or cal_primary
-                cal_y = cal_y or cal_secondary
-        
+
         # Safety net: emit None + warning instead of aliasing wrong-axis calibration
         if not cal_x:
             self.logger.warning("X-axis calibration unavailable; x_calibrated values will be None")
@@ -98,7 +87,53 @@ class ScatterHandler(CartesianExtractionHandler):
             })
             
         self.logger.info(f"Extracted {len(extracted)} scatter points")
-        return extracted
+        
+        from extractors.legend_associator import LegendAssociator
+        return LegendAssociator.associate(extracted, detections)
+
+    def _calibrate_axes(self, classified_labels, dual_decision, orientation):
+        """
+        Scatter-specific override: calibrates X and Y axes independently using the
+        per-axis label pools produced by ScatterChartClassifier._separate_xy_scales_scatter().
+
+        This bypasses DualAxisDetectionService (designed for dual-Y bar charts) and
+        ensures each axis uses the correct pixel coordinate:
+          - x_scale_labels → axis_type='x' → (xyxy[0]+xyxy[2])/2  (horizontal center)
+          - y_scale_labels → axis_type='y' → (xyxy[1]+xyxy[3])/2  (vertical center)
+        """
+        x_labels = getattr(classified_labels, 'x_scale_labels', [])
+        y_labels = getattr(classified_labels, 'y_scale_labels', [])
+
+        # Fallback: if the classifier returned no split (e.g. all labels
+        # were assigned to one pool), use the full pool for y only and warn.
+        if not x_labels and not y_labels:
+            self.logger.warning(
+                "ScatterHandler._calibrate_axes: no x/y split from classifier — "
+                "falling back to full scale_labels pool as y-axis only (no x calibration)."
+            )
+            y_labels = list(getattr(classified_labels, 'scale_labels', []))
+
+        cal_x = None
+        cal_y = None
+
+        if x_labels:
+            try:
+                cal_x = self.calibration_service.calibrate(x_labels, axis_type='x')
+            except Exception as exc:
+                self.logger.warning("Scatter x-axis calibration failed: %s", exc)
+
+        if y_labels:
+            try:
+                cal_y = self.calibration_service.calibrate(y_labels, axis_type='y')
+            except Exception as exc:
+                self.logger.warning("Scatter y-axis calibration failed: %s", exc)
+
+        return {
+            "primary":   cal_y,   # convention: y is primary for vertical scatter
+            "secondary": cal_x,
+            "x":         cal_x,
+            "y":         cal_y,
+        }
 
     def _resolve_model_func(self, cal_obj):
         """Resolve calibration object to a callable function."""

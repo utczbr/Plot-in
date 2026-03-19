@@ -50,6 +50,8 @@ def _create_easyocr_reader(languages: List[str]):
         normalized = env_gpu.strip().lower()
         gpu_attempts = [normalized in {"1", "true", "yes", "on"}]
     else:
+        # macOS: EasyOCR hard-codes torch.device('cuda') internally; MPS not supported upstream.
+        # When EasyOCR adds MPS support, change to: [True, False]
         gpu_attempts = [False] if sys.platform == "darwin" else [True, False]
 
     last_error = None

@@ -160,6 +160,10 @@ class SettingsDialog(QDialog):
         
         self.use_gpu_check = QCheckBox("Use GPU")
         self.use_gpu_check.setChecked(self.settings['ocr_settings']['easyocr_gpu'])
+        self.use_gpu_check.setToolTip(
+            "Enable GPU acceleration for EasyOCR. "
+            "Disabled on macOS by default (no CUDA support; MPS not yet integrated)."
+        )
         engine_layout.addWidget(self.use_gpu_check, 2, 0, 1, 2)
         
         self.retry_suspicious_check = QCheckBox("Retry OCR on Suspicious Results")

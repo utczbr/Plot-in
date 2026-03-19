@@ -56,6 +56,8 @@ def _safe_float(value: Any) -> Optional[float]:
     if value is None:
         return None
     try:
+        if isinstance(value, str):
+            value = value.replace(',', '').replace('٫', '.')
         parsed = float(value)
     except (TypeError, ValueError):
         return None
@@ -237,6 +239,7 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
         bars = result.get("bars")
         if not isinstance(bars, list):
             bars = []
+        bars = sorted(bars, key=lambda b: (_bbox_from_element(b) or [0])[0])
         for idx, bar in enumerate(bars):
             if not isinstance(bar, dict):
                 continue
@@ -271,6 +274,7 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
     elements = result.get("elements")
     if not isinstance(elements, list):
         elements = []
+    elements = sorted(elements, key=lambda e: (_bbox_from_element(e) or [0])[0])
 
     for idx, element in enumerate(elements):
         if not isinstance(element, dict):

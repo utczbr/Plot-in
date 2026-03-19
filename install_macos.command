@@ -3,6 +3,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Remove quarantine flag if macOS Gatekeeper set it on this script
+xattr -d com.apple.quarantine "$0" 2>/dev/null || true
+
 echo ""
 echo "=== Chart Analysis Installer ==="
 echo ""
@@ -28,6 +31,13 @@ for candidate in \
         exec "$SCRIPT_DIR/$candidate" "$@"
     fi
 done
+
+# Warn if Xcode Command Line Tools are missing (needed by hdbscan, scipy, etc.)
+if ! xcode-select -p &>/dev/null; then
+    echo "WARNING: Xcode Command Line Tools not found."
+    echo "Some packages require them. Install with: xcode-select --install"
+    echo ""
+fi
 
 if ! command -v python3 &>/dev/null; then
     echo "ERROR: python3 is not installed."

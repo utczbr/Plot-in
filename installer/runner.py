@@ -39,7 +39,9 @@ def run_installation(options: InstallOptions, platform_info: PlatformInfo) -> In
         python_executable = resolve_python_for_install(options, STATE_ROOT)
         steps.append(f"Using Python executable: {python_executable}")
 
-        if options.install_scope == "global" and platform_info.is_debian_family:
+        if options.install_scope == "global" and (
+            platform_info.is_debian_family or platform_info.os_name == "macos"
+        ):
             commands = build_manual_global_commands(python_executable, requirements)
             script = maybe_write_manual_command_script(STATE_ROOT, commands)
             steps.append("Prepared manual global-install commands for Debian")
@@ -93,6 +95,12 @@ def run_installation(options: InstallOptions, platform_info: PlatformInfo) -> In
 
         profile_path = write_profile(options)
         steps.append(f"Wrote installation profile: {profile_path}")
+
+        if platform_info.os_name == "macos":
+            warnings.append(
+                "macOS tip: if Gatekeeper blocks the app, run: "
+                "xattr -cr /path/to/chart-analysis-installer-macos.app"
+            )
 
         metadata = {
             "python": str(python_executable),

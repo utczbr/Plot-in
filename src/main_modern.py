@@ -244,7 +244,7 @@ class OCRLoaderThread(QThread):
     def run(self):
         try:
             import easyocr
-            languages = self.settings.get('ocr_settings', {}).get('languages', ['en', 'pt'])
+            languages = self.settings.get('ocr_settings', {}).get('languages', ['en', 'pt', 'ar'])
             use_gpu = self.settings.get('ocr_settings', {}).get('easyocr_gpu', True)
             download_enabled = self.settings.get('ocr_settings', {}).get(
                 'easyocr_download_enabled',
@@ -458,6 +458,7 @@ class ModernChartAnalysisApp(QMainWindow):
         # Add explicit cleanup registry
         self._resource_registry = []
         self._cleanup_scheduled = False
+        self._orphaned_threads = []
         
         # Add performance monitor
         self.perf_monitor = PerformanceMonitor()
@@ -652,13 +653,13 @@ class ModernChartAnalysisApp(QMainWindow):
     def _scaled_ui_px(self, px: int) -> int:
         """Slightly upscale compact controls on macOS for visual parity."""
         if self._is_macos:
-            return max(1, int(round(px * 1.08)))
+            return max(1, int(round(px * 1.15)))
         return max(1, int(round(px)))
 
     def _scaled_icon_px(self, px: int) -> int:
         """Scale glyphs a bit more than controls on macOS where they appear optically smaller."""
         if self._is_macos:
-            return max(1, int(round(px * 1.15)))
+            return max(1, int(round(px * 1.35)))
         return max(1, int(round(px)))
 
     def _create_icon_button(
@@ -718,11 +719,14 @@ class ModernChartAnalysisApp(QMainWindow):
         return container
 
     def _get_stylesheet(self):
+        base_font_size = "11px" if self._is_macos else "10px"
+        tab_padding = "8px 14px" if self._is_macos else "6px 10px"
+        
         return (
             "QMainWindow { background-color: #1e1e1e; color: #d4d4d4; }"
-            "QWidget { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Inter', 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif; font-size: 10px; }"
+            f"QWidget {{ background-color: #1e1e1e; color: #d4d4d4; font-family: 'Inter', 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif; font-size: {base_font_size}; }}"
             "QLabel { color: #d4d4d4; padding: 0px; }"
-            "QLabel[sectionHeader=\"true\"] { color: #9da1a6; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }"
+            f"QLabel[sectionHeader=\"true\"] {{ color: #9da1a6; font-size: {base_font_size}; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }}"
             "QPushButton { background-color: #2d2d2d; border: 1px solid #454545; border-radius: 3px; color: #d4d4d4; padding: 5px 10px; min-height: 22px; }"
             "QPushButton:hover { border-color: #5a5a5a; background-color: #343434; }"
             "QPushButton:pressed { background-color: #252526; }"
@@ -741,9 +745,9 @@ class ModernChartAnalysisApp(QMainWindow):
             "QScrollBar::handle:horizontal { background: #3c3c3c; min-width: 24px; border-radius: 4px; }"
             "QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }"
             "QTabWidget::pane { border: 1px solid #454545; background-color: #252526; top: -1px; }"
-            "QTabBar::tab { background-color: #2a2a2a; border: 1px solid #454545; padding: 6px 10px; margin-right: 2px; color: #bfbfbf; }"
+            f"QTabBar::tab {{ background-color: #2a2a2a; border: 1px solid #454545; padding: {tab_padding}; margin-right: 2px; color: #bfbfbf; }}"
             "QTabBar::tab:selected { color: #ffffff; border-color: #007acc; background-color: #1f1f1f; }"
-            "QCheckBox { color: #cfcfcf; spacing: 6px; font-size: 10px; }"
+            f"QCheckBox {{ color: #cfcfcf; spacing: 6px; font-size: {base_font_size}; }}"
             "QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #555555; border-radius: 2px; background-color: #2d2d2d; }"
             "QCheckBox::indicator:checked { background-color: #007acc; border-color: #007acc; }"
             "QSlider::groove:horizontal { border: 0px; height: 4px; background: #3c3c3c; border-radius: 2px; }"
@@ -959,6 +963,11 @@ class ModernChartAnalysisApp(QMainWindow):
         
         # Explicit clean old resources if needed
         gc.collect()
+
+        if getattr(self, '_auto_run_after_ocr', False):
+            self._auto_run_after_ocr = False
+            if self.current_image_index >= 0:
+                self.load_image_for_assisted_analysis()
 
     def _on_ocr_load_error(self, message: str):
         """Handle OCR preload errors without leaving the GUI stuck."""
@@ -1671,6 +1680,12 @@ Click to configure advanced options."""
             self.batch_thread.quit()
             self.batch_thread.wait(3000)
 
+        for thread in getattr(self, '_orphaned_threads', []):
+            if thread and thread.isRunning():
+                thread.cancel()
+                thread.quit()
+                thread.wait(100)
+
         if self.original_pil_image:
             self._close_pil_image_safely(self.original_pil_image)
             self.original_pil_image = None
@@ -2256,15 +2271,10 @@ Click to configure advanced options."""
             return
 
         if (self.advanced_settings or {}).get("ocr_engine", "Paddle") == "EasyOCR" and not self.ocr_ready:
+            self._auto_run_after_ocr = True
             if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
                 self._start_ocr_loading(self.advanced_settings)
-            self.update_status("⏳ Waiting for EasyOCR to finish loading...")
-            QMessageBox.information(
-                self,
-                "OCR Loading",
-                "EasyOCR is still loading/downloading models.\n"
-                "Please wait, or switch OCR Engine to Paddle in Settings for immediate runs.",
-            )
+            self.update_status("⏳ Waiting for EasyOCR to finish loading, analysis will start automatically...")
             return
 
         self.current_image_path = self.image_files[self.current_image_index]
@@ -2287,13 +2297,24 @@ Click to configure advanced options."""
         self.progress_bar.setFormat("Processing: %p%")
         self.update_status(f"🔄 Processing {os.path.basename(self.current_image_path)}...")
         
-        if self.analysis_thread and self.analysis_thread.isRunning():
-            self.analysis_thread.cancel()
-            self.analysis_thread.quit()
-            self.analysis_thread.wait(3000)
-            
         if self.analysis_thread:
-            self.analysis_thread.deleteLater()
+            if self.analysis_thread.isRunning():
+                self.analysis_thread.cancel()
+                self.analysis_thread.quit()
+                if not self.analysis_thread.wait(3000):
+                    try:
+                        self.analysis_thread.status_updated.disconnect()
+                        self.analysis_thread.progress_updated.disconnect()
+                        self.analysis_thread.analysis_complete.disconnect()
+                    except TypeError:
+                        pass
+                    if hasattr(self, '_orphaned_threads'):
+                        self._orphaned_threads.append(self.analysis_thread)
+                else:
+                    self.analysis_thread.deleteLater()
+            else:
+                self.analysis_thread.deleteLater()
+            self.analysis_thread = None
         
         try:
             # Resolve provenance from current asset if available
@@ -2310,7 +2331,7 @@ Click to configure advanced options."""
                 self.models_dir_edit.text(),
                 self.context,
                 provenance=_provenance,
-                parent=self
+                parent=None
             )
             self.analysis_thread.status_updated.connect(self.update_status)
             self.analysis_thread.progress_updated.connect(self.progress_bar.setValue)
@@ -2394,6 +2415,21 @@ Click to configure advanced options."""
             self.protocol_table.blockSignals(True)
             self.protocol_table.setRowCount(0)
             self.protocol_table.blockSignals(False)
+
+        if hasattr(self, 'proto_outcome_combo'):
+            self.proto_outcome_combo.blockSignals(True)
+            self.proto_outcome_combo.clear()
+            self.proto_outcome_combo.blockSignals(False)
+            
+        if hasattr(self, 'proto_group_combo'):
+            self.proto_group_combo.blockSignals(True)
+            self.proto_group_combo.clear()
+            self.proto_group_combo.blockSignals(False)
+            
+        if hasattr(self, 'proto_status_combo'):
+            self.proto_status_combo.blockSignals(True)
+            self.proto_status_combo.clear()
+            self.proto_status_combo.blockSignals(False)
 
     def _update_ui_with_results(self):
         logging.debug("_update_ui_with_results called")
@@ -3098,9 +3134,11 @@ Click to configure advanced options."""
 
     def _apply_protocol_filters(self):
         rows = (self.current_analysis_result or {}).get('protocol_rows', [])
-        outcome_filter = self.proto_outcome_combo.currentText()
-        group_filter = self.proto_group_combo.currentText()
-        status_filter = self.proto_status_combo.currentText()
+        
+        # Safely get current combobox text, default to "All" if empty
+        outcome_filter = self.proto_outcome_combo.currentText() if self.proto_outcome_combo.count() > 0 else "All"
+        group_filter = self.proto_group_combo.currentText() if self.proto_group_combo.count() > 0 else "All"
+        status_filter = self.proto_status_combo.currentText() if self.proto_status_combo.count() > 0 else "All"
 
         filtered = rows
         if outcome_filter != "All":

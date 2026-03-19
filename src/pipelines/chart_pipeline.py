@@ -98,167 +98,168 @@ class ChartAnalysisPipeline(BasePipeline):
             return None
             
         # 2. Classification
-        chart_type = self._classify_chart_type(img, advanced_settings)
-        chart_type = normalize_chart_type(chart_type)
-        self.logger.info(f"Classified as: {chart_type}")
+        chart_types = self._classify_chart_types(img, advanced_settings, top_k=2)
+        self.logger.info(f"Classified as: {chart_types}")
         
-        # 3. Detection
-        detections = self._detect_elements(img, chart_type, advanced_settings)
-        if not detections:
-            self.logger.warning("No detections found.")
-            # We continue even if empty, orchestrator handles it
+        primary_final_result = None
+        all_elements = []
+        all_bars = []
+        merged_detections = {}
 
-        # 3b. Text layout detection via DocLayout-YOLO (optional)
-        layout_regions = self._detect_text_layout(img, advanced_settings)
-        detections['layout_text_regions'] = layout_regions
+        for ct in chart_types:
+            chart_type = normalize_chart_type(ct)
+            
+            # 3. Detection
+            detections = self._detect_elements(img, chart_type, advanced_settings)
+            if not detections:
+                self.logger.warning(f"No detections found for {chart_type}.")
 
-        # 4. Orientation
-        orientation = self._detect_orientation(img, chart_type, detections)
-        self.logger.info(f"Orientation: {orientation.value}")
+            # 3b. Text layout detection via DocLayout-YOLO (optional)
+            if 'layout_text_regions' not in merged_detections:
+                layout_regions = self._detect_text_layout(img, advanced_settings)
+                merged_detections['layout_text_regions'] = layout_regions
+            detections['layout_text_regions'] = merged_detections['layout_text_regions']
 
-        # 5. OCR on Axis Labels + DocLayout text regions
-        self._process_ocr(img, detections)
-        
-        # 6. Strategy-based Orchestration
-        # Lazy-init orchestrator + strategy layer on first run.
-        if self.orchestrator is None:
-            self.orchestrator = ChartAnalysisOrchestrator(
-                calibration_service=self.calibration_engine,
-                logger=logging.getLogger("Orchestrator"),
-            )
-        if self._standard_strategy is None:
-            self._standard_strategy = StandardStrategy(orchestrator=self.orchestrator)
+            # 4. Orientation
+            orientation = self._detect_orientation(img, chart_type, detections)
+            self.logger.info(f"Orientation for {chart_type}: {orientation.value}")
 
-        # Lazy-init optional backends — failures log warnings, never crash.
-        # NOTE: VLMStrategy is NOT instantiated here because there is no
-        # VLMBackend implementation in the repo.  Constructing VLMStrategy()
-        # with backend=None would make the router think it is available, but
-        # execute() would raise NotImplementedError.  We leave _vlm_strategy
-        # as None so the router correctly reports 'vlm' as unavailable.
-        # When a VLMBackend implementation is added, instantiate here:
-        #   self._vlm_strategy = VLMStrategy(backend=my_backend)
+            # 5. OCR on Axis Labels + DocLayout text regions + Legends + Titles
+            self._process_ocr(img, detections)
+            
+            # Merge detections
+            for k, v in detections.items():
+                if k not in merged_detections:
+                    merged_detections[k] = v
+                elif isinstance(v, list) and k != 'layout_text_regions':
+                    merged_detections[k].extend(v)
+            
+            # 6. Strategy-based Orchestration
+            if self.orchestrator is None:
+                self.orchestrator = ChartAnalysisOrchestrator(
+                    calibration_service=self.calibration_engine,
+                    logger=logging.getLogger("Orchestrator"),
+                )
+            if self._standard_strategy is None:
+                self._standard_strategy = StandardStrategy(orchestrator=self.orchestrator)
+            if self._chart_to_table_strategy is None:
+                try:
+                    self._chart_to_table_strategy = ChartToTableStrategy()
+                except Exception as e:
+                    self.logger.warning(f"ChartToTable backend unavailable: {e}")
+            if self._hybrid_strategy is None and self._standard_strategy is not None:
+                self._hybrid_strategy = HybridStrategy(
+                    standard=self._standard_strategy,
+                    vlm=self._vlm_strategy,
+                )
+            if self._strategy_router is None:
+                self._strategy_router = StrategyRouter(
+                    standard=self._standard_strategy,
+                    vlm=self._vlm_strategy,
+                    chart_to_table=self._chart_to_table_strategy,
+                    hybrid=self._hybrid_strategy,
+                )
 
-        if self._chart_to_table_strategy is None:
+            element_key = get_chart_element_key(chart_type)
+            chart_elements = detections.get(element_key, [])
+            axis_labels = detections.get('axis_labels', [])
+
+            pipeline_mode = 'standard'
+            if isinstance(advanced_settings, dict):
+                pipeline_mode = str(advanced_settings.get('pipeline_mode', 'standard'))
+
+            classification_confidence = 1.0
+            if isinstance(advanced_settings, dict):
+                classification_confidence = float(
+                    advanced_settings.get('_classification_confidence', 1.0)
+                )
+            n_expected = max(len(chart_elements), 1)
+            detection_coverage = min(1.0, len(chart_elements) / n_expected)
+
             try:
-                self._chart_to_table_strategy = ChartToTableStrategy()  # lazy Pix2Struct load
-            except Exception as e:
-                self.logger.warning(f"ChartToTable backend unavailable: {e}")
+                strategy = self._strategy_router.select(
+                    chart_type=chart_type,
+                    classification_confidence=classification_confidence,
+                    detection_coverage=detection_coverage,
+                    calibration_quality=None,
+                    pipeline_mode=pipeline_mode,
+                )
+            except ValueError as e:
+                self.logger.error(f"Strategy selection failed for pipeline_mode='{pipeline_mode}': {e}")
+                continue
 
-        if self._hybrid_strategy is None and self._standard_strategy is not None:
-            self._hybrid_strategy = HybridStrategy(
-                standard=self._standard_strategy,
-                vlm=self._vlm_strategy,  # currently None → Hybrid uses Standard-only path
-            )
+            services = StrategyServices(calibration_service=self.calibration_engine)
+            try:
+                result = strategy.execute(
+                    image=img,
+                    chart_type=chart_type,
+                    detections=detections,
+                    axis_labels=axis_labels,
+                    chart_elements=chart_elements,
+                    orientation=orientation,
+                    services=services,
+                )
+            except (NotImplementedError, RuntimeError) as e:
+                self.logger.error(f"Strategy '{getattr(strategy, 'STRATEGY_ID', '?')}' failed: {e}. Falling back to StandardStrategy.")
+                result = self._standard_strategy.execute(
+                    image=img,
+                    chart_type=chart_type,
+                    detections=detections,
+                    axis_labels=axis_labels,
+                    chart_elements=chart_elements,
+                    orientation=orientation,
+                    services=services,
+                )
+                if hasattr(result, 'diagnostics') and isinstance(result.diagnostics, dict):
+                    result.diagnostics['strategy_fallback'] = True
+                    result.diagnostics['fallback_reason'] = str(e)
 
-        if self._strategy_router is None:
-            self._strategy_router = StrategyRouter(
-                standard=self._standard_strategy,
-                vlm=self._vlm_strategy,
-                chart_to_table=self._chart_to_table_strategy,
-                hybrid=self._hybrid_strategy,
-            )
+            if result.errors:
+                calibration_only_errors = all('calibration' in e.lower() for e in result.errors)
+                if calibration_only_errors and result.elements is not None:
+                    self.logger.warning(f"Calibration issues: {result.errors}")
+                else:
+                    self.logger.error(f"Orchestration failed: {result.errors}")
+                    continue
+                
+            # Finalize elements for this chart type
+            if result.elements:
+                for el in result.elements:
+                    if isinstance(el, dict):
+                        el['series_type'] = chart_type
+                all_elements.extend(result.elements)
 
-        element_key = get_chart_element_key(chart_type)
-        chart_elements = detections.get(element_key, [])
-        axis_labels = detections.get('axis_labels', [])
+            final_result = self._format_result(result, image_path, detections)
+            
+            if 'bars' in final_result:
+                all_bars.extend(final_result['bars'])
 
-        # Resolve pipeline_mode from advanced_settings (default='standard')
-        pipeline_mode = 'standard'
-        if isinstance(advanced_settings, dict):
-            pipeline_mode = str(advanced_settings.get('pipeline_mode', 'standard'))
+            if primary_final_result is None:
+                primary_final_result = final_result
 
-        # Derive routing quality signals
-        classification_confidence = 1.0
-        if isinstance(advanced_settings, dict):
-            classification_confidence = float(
-                advanced_settings.get('_classification_confidence', 1.0)
-            )
-        n_expected = max(len(chart_elements), 1)
-        detection_coverage = min(1.0, len(chart_elements) / n_expected)
-
-        # Strategy selection and execution with safeguards.
-        # - ValueError from select(): explicit mode backend unavailable → clear error.
-        # - NotImplementedError/RuntimeError from execute(): backend failed → clear error.
-        try:
-            strategy = self._strategy_router.select(
-                chart_type=chart_type,
-                classification_confidence=classification_confidence,
-                detection_coverage=detection_coverage,
-                calibration_quality=None,  # Not yet known before extraction
-                pipeline_mode=pipeline_mode,
-            )
-        except ValueError as e:
-            self.logger.error(
-                f"Strategy selection failed for pipeline_mode='{pipeline_mode}': {e}"
-            )
+        # End of chart_types loop
+        if primary_final_result is None:
             return None
 
-        services = StrategyServices(calibration_service=self.calibration_engine)
-        try:
-            result = strategy.execute(
-                image=img,
-                chart_type=chart_type,
-                detections=detections,
-                axis_labels=axis_labels,
-                chart_elements=chart_elements,
-                orientation=orientation,
-                services=services,
-            )
-        except (NotImplementedError, RuntimeError) as e:
-            self.logger.error(
-                f"Strategy '{getattr(strategy, 'STRATEGY_ID', '?')}' execution "
-                f"failed: {e}. Falling back to StandardStrategy."
-            )
-            # Fall back to Standard with metadata indicating the fallback.
-            result = self._standard_strategy.execute(
-                image=img,
-                chart_type=chart_type,
-                detections=detections,
-                axis_labels=axis_labels,
-                chart_elements=chart_elements,
-                orientation=orientation,
-                services=services,
-            )
-            if hasattr(result, 'diagnostics') and isinstance(result.diagnostics, dict):
-                result.diagnostics['strategy_fallback'] = True
-                result.diagnostics['original_strategy'] = getattr(strategy, 'STRATEGY_ID', '?')
-                result.diagnostics['fallback_reason'] = str(e)
+        primary_final_result['elements'] = all_elements
+        if all_bars:
+            primary_final_result['bars'] = all_bars
+        primary_final_result['detections'] = merged_detections
 
-        # 7. Format Result
-        # Note: result.errors now includes calibration warnings but NOT fatal R² aborts.
-        # Hard failures only occur for truly unrecoverable stages (orientation, dual-axis).
-        if result.errors:
-            # Log errors as warnings; only return None if result has no elements AND the
-            # error is not a known recoverable calibration warning.
-            calibration_only_errors = all(
-                'calibration' in e.lower() for e in result.errors
-            )
-            if calibration_only_errors and result.elements is not None:
-                self.logger.warning(
-                    f"Calibration issues (non-fatal, continuing): {result.errors}"
-                )
-            else:
-                self.logger.error(f"Orchestration failed: {result.errors}")
-                return None
-            
-        final_result = self._format_result(result, image_path, detections)
-
-        # 7b. Attach provenance metadata if provided (PDF source, page, figure ID)
         if provenance:
-            final_result['_provenance'] = provenance
+            primary_final_result['_provenance'] = provenance
 
-        # 8. Save Outputs
         if output_dir:
-            self._save_results(final_result, img, Path(output_dir), annotated)
+            self._save_results(primary_final_result, img, Path(output_dir), annotated)
             
-        return final_result
+        return primary_final_result
 
-    def _classify_chart_type(self, img: np.ndarray, advanced_settings: Optional[Dict] = None) -> str:
-        """Determines the type of the chart."""
+    def _classify_chart_types(self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2) -> List[str]:
+        """Determines the types of the chart."""
         model = self.models_manager.get_model('classification')
         if not model:
             self.logger.error("Classification model missing")
-            return 'bar' # Default
+            return ['bar'] # Default
             
         try:
             conf_threshold = self._resolve_float_setting(
@@ -268,16 +269,21 @@ class ChartAnalysisPipeline(BasePipeline):
             )
             dets = run_inference_on_image(model, img, conf_threshold, CLASS_MAP_CLASSIFICATION)
             if dets:
-                # Prefer the best *specific* chart class. The generic 'chart' class is ambiguous.
+                types = []
+                # Prefer the best *specific* chart classes. The generic 'chart' class is ambiguous.
                 for det in sorted(dets, key=lambda x: x['conf'], reverse=True):
                     candidate = CLASS_MAP_CLASSIFICATION.get(det['cls'], 'bar')
                     if candidate != 'chart':
-                        return normalize_chart_type(candidate)
+                        types.append(normalize_chart_type(candidate))
+                        if len(types) >= top_k:
+                            break
+                if types:
+                    return types
                 self.logger.warning("Classification only produced generic 'chart'; defaulting to 'bar'.")
         except Exception as e:
             self.logger.error(f"Classification error: {e}")
             
-        return 'bar'
+        return ['bar']
 
     def _detect_elements(
         self,
@@ -295,7 +301,7 @@ class ChartAnalysisPipeline(BasePipeline):
         model_output_type, expected_keypoints = self._get_detection_output_config(chart_type)
         
         # Adaptive thresholds
-        conf_thresh = 0.25 if chart_type == 'box' else (0.2 if chart_type == 'histogram' else 0.4)
+        conf_thresh = 0.25 if chart_type in ('box', 'line', 'scatter') else (0.2 if chart_type == 'histogram' else 0.4)
         nms_thresh = 0.7 if chart_type == 'box' else 0.45
 
         if isinstance(advanced_settings, dict):
@@ -345,6 +351,27 @@ class ChartAnalysisPipeline(BasePipeline):
                 organized[cls_name].append(det)
             else:
                 organized['unknown'].append(det)
+
+        def _reclassify_top_boxes(organized: dict, img_width: int) -> dict:
+            """Reclassify top-positioned boxes based on spatial heuristics."""
+            candidates = organized.get('chart_title', []) + organized.get('legend', [])
+            new_titles, new_legends = [], []
+            for det in candidates:
+                x1, y1, x2, y2 = det['xyxy']
+                box_width = x2 - x1
+                box_height = y2 - y1
+                # Heuristic: legend boxes are taller-relative and narrower than full-width titles
+                if box_width > 0.85 * img_width:
+                    new_titles.append(det)
+                elif box_height > 2.5 * (box_width / max(box_width, 1)) or (y2-y1) > 40:
+                    new_legends.append(det)
+                else:
+                    new_titles.append(det)
+            organized['chart_title'] = new_titles
+            organized['legend'] = new_legends
+            return organized
+            
+        organized = _reclassify_top_boxes(organized, img.shape[1])
                 
         return organized
 
@@ -460,6 +487,16 @@ class ChartAnalysisPipeline(BasePipeline):
 
         axis_labels = detections.get('axis_labels', [])
 
+        # NEW: also OCR chart_title boxes
+        for title_det in detections.get('chart_title', []):
+            title_det['ocr_source'] = 'chart_title'
+            axis_labels.append(title_det)
+            
+        # NEW: also OCR legend boxes
+        for legend_det in detections.get('legend', []):
+            legend_det['ocr_source'] = 'legend'
+            axis_labels.append(legend_det)
+
         # Merge DocLayout text regions that do not duplicate existing axis_labels
         layout_regions = detections.get('layout_text_regions', [])
         extra_regions = TextLayoutService.merge_with_axis_labels(layout_regions, axis_labels)
@@ -517,7 +554,7 @@ class ChartAnalysisPipeline(BasePipeline):
             else str(orchestration_result.orientation)
         )
 
-        return {
+        final = {
             'image_file': image_path.name,
             'chart_type': orchestration_result.chart_type,
             'orientation': orientation_value,
@@ -527,6 +564,12 @@ class ChartAnalysisPipeline(BasePipeline):
             'metadata': orchestration_result.diagnostics,
             'detections': detections
         }
+
+        # NEW: mirror bar/histogram elements under the 'bars' key for schema compatibility
+        if orchestration_result.chart_type in ('bar', 'histogram'):
+            final['bars'] = orchestration_result.elements
+            
+        return final
 
     @staticmethod
     def _resolve_float_setting(

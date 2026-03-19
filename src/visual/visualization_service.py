@@ -224,6 +224,20 @@ class VisualizationService:
         # Note: The scale_labels from spatial classification are already processed in the main detection loop
         # if they were not reclassified. The classified ones are now in the result['scale_labels'] list.
         if 'scale_labels' in analysis_data and isinstance(analysis_data['scale_labels'], list):
+            x_scale_uids = set()
+            y_scale_uids = set()
+            lbl_cls = analysis_data.get('diagnostics', {}).get('label_classification', {})
+            if not lbl_cls:
+                lbl_cls = analysis_data.get('metadata', {}).get('label_classification', {})
+            
+            if isinstance(lbl_cls, dict):
+                for item in lbl_cls.get('x_scale_labels', []):
+                    if 'xyxy' in item:
+                        x_scale_uids.add(tuple(item['xyxy']))
+                for item in lbl_cls.get('y_scale_labels', []):
+                    if 'xyxy' in item:
+                        y_scale_uids.add(tuple(item['xyxy']))
+
             for item in analysis_data['scale_labels']:
                 if 'xyxy' not in item: continue
                 # Scale coordinates to original image if needed
@@ -237,9 +251,18 @@ class VisualizationService:
                     x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
                     
                 color = colors.get('scale_label', (128, 128, 128))
+                label_text = "scale_label"
+                
+                tbox = tuple(item['xyxy'])
+                if tbox in x_scale_uids:
+                    label_text = "x_scale_label"
+                    color = (150, 255, 150)  # Lighter green for x
+                elif tbox in y_scale_uids:
+                    label_text = "y_scale_label"
+                    color = (50, 200, 50)  # Darker green for y
+
                 cv2.rectangle(img_annotated, (x1, y1), (x2, y2), color, thickness)
                 
-                label_text = "scale_label"
                 if 'text' in item and item['text']:
                     label_text += f": {item['text']}"
                 

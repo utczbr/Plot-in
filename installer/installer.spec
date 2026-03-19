@@ -131,6 +131,12 @@ else:
     app = BUNDLE(
         coll,
         name=f"{OUTPUT_NAME}.app",
-        icon=None,
-        bundle_identifier=None,
+        icon=None,  # TODO (P3): Add .icns icon for macOS polish
+        bundle_identifier="com.github.utczbr.plotin.chart-analysis-installer",
+        info_plist={
+            'NSHighResolutionCapable': True,
+            'LSMinimumSystemVersion': '12.0',
+            'CFBundleShortVersionString': '1.0.0',
+            'NSRequiresAquaSystemAppearance': False,  # Respect dark mode
+        },
     )

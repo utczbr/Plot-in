@@ -3,7 +3,7 @@
 # Python: >=3.8,<3.12
 
 # Core Dependencies
-numpy==1.24.3; python_version >= "3.8"
+numpy==1.26.4; python_version >= "3.8"
 opencv-python==4.8.1.78
 # macOS arm64 now uses mainline onnxruntime.
 onnxruntime==1.24.1
@@ -23,7 +23,7 @@ torchvision==0.16.1; extra == "gpu"
 
 # OCR Engines
 easyocr==1.7.1
-# PaddleOCR dependencies (install separately via paddlepaddle-gpu or paddlepaddle)
+# PaddleOCR: uses ONNX Runtime models, no paddlepaddle dependency required.
 
 # Data Processing
 pandas==2.1.4
@@ -32,6 +32,7 @@ Pillow==10.1.0
 # Document Processing
 PyMuPDF==1.23.8
 PyYAML==6.0.1
+doclayout_yolo==0.0.3
 
 # GUI
 PyQt6==6.6.1

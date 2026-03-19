@@ -102,3 +102,30 @@ Required secrets:
 - `APPLE_ID`
 - `APPLE_APP_SPECIFIC_PASSWORD`
 - `APPLE_TEAM_ID`
+
+## macOS Notes
+
+### Gatekeeper and Quarantine
+
+Downloaded `.app` bundles and `.command` scripts may be flagged by macOS Gatekeeper.
+To remove the quarantine flag:
+
+```bash
+xattr -cr /path/to/chart-analysis-installer-macos.app
+```
+
+### Prerequisites
+
+- **Xcode Command Line Tools:** Required by some dependencies (hdbscan, scipy).
+  Install with: `xcode-select --install`
+- **Python 3.8–3.11:** Recommended via python.org installer or `brew install python@3.11`.
+
+### OCR Backends
+
+- **EasyOCR:** Works on macOS (CPU only). GPU/MPS acceleration is not supported by EasyOCR upstream.
+- **Paddle:** Uses ONNX Runtime models directly — no `paddlepaddle` dependency required.
+
+### Performance
+
+- ONNX models use CoreML acceleration on Apple Silicon when `CoreMLExecutionProvider` is available.
+- EasyOCR falls back to CPU (no MPS support upstream).

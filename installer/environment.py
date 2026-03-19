@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+import subprocess
 import sys
 import venv
 from pathlib import Path
@@ -9,6 +10,25 @@ from typing import List
 
 from .install_types import InstallOptions
 from .utils import python_executable_in_venv
+
+
+def _check_interpreter_consistency(python_executable: Path) -> None:
+    """Warn if pip's Python differs from the resolved executable (pyenv mismatch)."""
+    try:
+        result = subprocess.run(
+            [str(python_executable), "-c", "import sys; print(sys.executable)"],
+            capture_output=True, text=True, timeout=10,
+        )
+        actual = result.stdout.strip()
+        if actual and Path(actual).resolve() != python_executable.resolve():
+            logging.warning(
+                "⚠️ Interpreter mismatch: resolved=%s but sys.executable=%s. "
+                "This can cause 'Symbol not found' crashes on macOS with pyenv. "
+                "Run: pyenv local <version> to lock your environment.",
+                python_executable, actual,
+            )
+    except Exception:
+        pass  # Non-fatal: best-effort check
 
 
 def resolve_python_for_install(
@@ -21,9 +41,12 @@ def resolve_python_for_install(
         if not python_path.exists():
             logging.info("Creating local virtual environment at %s", venv_dir)
             venv.EnvBuilder(with_pip=True, clear=False, upgrade=False).create(venv_dir)
+        _check_interpreter_consistency(python_path)
         return python_path
 
-    return Path(sys.executable)
+    exe = Path(sys.executable)
+    _check_interpreter_consistency(exe)
+    return exe
 
 
 def build_manual_global_commands(

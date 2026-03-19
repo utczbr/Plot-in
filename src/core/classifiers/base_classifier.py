@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, ClassVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 import logging
 
@@ -14,6 +14,10 @@ class ClassificationResult:
     axis_titles: List[Dict]
     confidence: float
     metadata: Dict
+    # Per-axis label pools populated by ScatterChartClassifier.
+    # All other classifiers leave these as empty lists (default).
+    x_scale_labels: List[Dict] = field(default_factory=list)
+    y_scale_labels: List[Dict] = field(default_factory=list)
 
 class BaseChartClassifier(ABC):
     """

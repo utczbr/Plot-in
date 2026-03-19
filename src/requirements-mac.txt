@@ -18,6 +18,9 @@ tqdm==4.66.4
 
 # OCR Engines
 easyocr==1.7.1
+# Constrain torch pulled by EasyOCR: tested range for macOS arm64/x86_64 wheels.
+# Upper bound tracks EasyOCR 1.7.x compat; bump after testing with newer versions.
+torch>=2.1,<2.6
 
 # Data Processing
 pandas==2.1.4
@@ -26,6 +29,7 @@ Pillow==10.1.0
 # Document Processing
 PyMuPDF==1.23.8
 PyYAML==6.0.1
+doclayout_yolo==0.0.3
 
 # GUI
 PyQt6==6.6.1

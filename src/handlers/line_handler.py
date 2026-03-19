@@ -99,4 +99,12 @@ class LineHandler(CartesianExtractionHandler):
                 'confidence': point.get('confidence', 1.0)
             })
             
-        return extracted
+        error_bars = detections.get('error_bar', [])
+        for point in extracted:
+            px = (point['bbox'][0] + point['bbox'][2]) / 2
+            nearest = min(error_bars, key=lambda e: abs((e['xyxy'][0]+e['xyxy'][2])/2 - px), default=None)
+            if nearest:
+                point['error_bar'] = {'bbox': nearest['xyxy'], 'margin': None}  # calibrate separately
+                
+        from extractors.legend_associator import LegendAssociator
+        return LegendAssociator.associate(extracted, detections)

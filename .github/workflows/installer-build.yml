@@ -106,7 +106,7 @@ PY
         run: |
           APP_PATH="dist/chart-analysis-installer-${{ matrix.os_tag }}.app"
           test -d "$APP_PATH"
-          codesign --deep --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
+          codesign --deep --force --options runtime --timestamp --entitlements installer/entitlements.plist --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"
 
@@ -129,6 +129,7 @@ PY
         run: |
           echo "::warning::macOS artifact is unsigned/not notarized because required Apple secrets are missing."
           echo "::warning::Artifact is suitable for internal testing only."
+          echo "::warning::Users can bypass Gatekeeper with: xattr -cr <app-path>"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -138,3 +139,22 @@ PY
             dist/chart-analysis-installer-${{ matrix.os_tag }}*
             dist/chart-analysis-installer-${{ matrix.os_tag }}.app
           if-no-files-found: error
+
+      - name: Verify macOS bundle dylib integrity
+        if: runner.os == 'macOS'
+        run: |
+          APP_PATH="dist/chart-analysis-installer-${{ matrix.os_tag }}.app"
+          BINARY="$APP_PATH/Contents/MacOS/chart-analysis-installer-${{ matrix.os_tag }}"
+          echo "Checking dynamic library dependencies..."
+          otool -L "$BINARY"
+          # Fail if any dylib references /usr/local or /opt/homebrew (non-portable paths)
+          if otool -L "$BINARY" | grep -qE '/usr/local/|/opt/homebrew/'; then
+            echo "::error::Bundle contains non-portable dylib references"
+            exit 1
+          fi
+
+      - name: Test install_macos.command wrapper
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x install_macos.command
+          bash install_macos.command --help

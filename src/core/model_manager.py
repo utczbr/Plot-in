@@ -33,6 +33,8 @@ class ModelManager:
         providers = []
         if 'CUDAExecutionProvider' in available:
             providers.append('CUDAExecutionProvider')
+        if 'CoreMLExecutionProvider' in available:
+            providers.append('CoreMLExecutionProvider')
         providers.append('CPUExecutionProvider')
         return providers
 

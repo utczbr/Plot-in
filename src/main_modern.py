@@ -3119,15 +3119,19 @@ Click to configure advanced options."""
         outcomes = sorted({r.get('outcome', '') for r in rows} - {''})
         groups = sorted({r.get('group', '') for r in rows} - {''})
 
+        from PyQt6.QtCore import QStringListModel
+
         for combo, values in [
             (self.proto_outcome_combo, outcomes),
             (self.proto_group_combo, groups),
         ]:
             combo.blockSignals(True)
             current = combo.currentText()
-            combo.clear()
-            combo.addItem("All")
-            combo.addItems(values)
+            
+            # Use QStringListModel instead of clear()+addItem() to prevent 
+            # macOS NSRangeException crash from internal QListView
+            combo.setModel(QStringListModel(["All"] + values))
+            
             idx = combo.findText(current)
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)

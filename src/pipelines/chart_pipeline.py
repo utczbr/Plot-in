@@ -481,21 +481,24 @@ class ChartAnalysisPipeline(BasePipeline):
         return result.orientation
 
     def _process_ocr(self, img: np.ndarray, detections: Dict):
-        """Runs OCR on axis labels and DocLayout text regions in-place."""
+        """Runs OCR on all textual elements and DocLayout text regions in-place."""
         if not self.ocr_engine:
             return
 
         axis_labels = detections.get('axis_labels', [])
 
-        # NEW: also OCR chart_title boxes
-        for title_det in detections.get('chart_title', []):
-            title_det['ocr_source'] = 'chart_title'
-            axis_labels.append(title_det)
-            
-        # NEW: also OCR legend boxes
-        for legend_det in detections.get('legend', []):
-            legend_det['ocr_source'] = 'legend'
-            axis_labels.append(legend_det)
+        # OCR chart textual elements (titles, legends, data labels)
+        text_classes = [
+            ('chart_title', 'chart_title'),
+            ('legend', 'legend'),
+            ('axis_title', 'axis_title'),
+            ('data_label', 'data_label')
+        ]
+        
+        for class_name, ocr_source in text_classes:
+            for det in detections.get(class_name, []):
+                det['ocr_source'] = ocr_source
+                axis_labels.append(det)
 
         # Merge DocLayout text regions that do not duplicate existing axis_labels
         layout_regions = detections.get('layout_text_regions', [])

@@ -365,6 +365,7 @@ class BoxExtractor(BaseExtractor):
 
         # Use BaseExtractor helper for calibration quality
         self._add_calibration_info(result, r_squared, baseline_coord, orientation)
+        return result
 
     def _enforce_monotone_summary(self, box_info: Dict, box_index: int) -> Dict:
         """
@@ -424,14 +425,3 @@ class BoxExtractor(BaseExtractor):
         box_info['outliers'] = valid_outliers
         box_info['outliers_rejected_count'] = rejected
         return box_info
-
-        # Legacy metadata maintenance
-        result['baseline_coord'] = baseline_coord
-        if baseline_coord is not None and scale_model is not None:
-             try:
-                 baseline_value = float(scale_func(baseline_coord))
-                 result['baseline_value_at_zero'] = baseline_value
-             except:
-                 result['baseline_value_at_zero'] = None
-
-        return result

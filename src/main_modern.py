@@ -1474,7 +1474,7 @@ Click to configure advanced options."""
         data_group_layout.setSpacing(4)
 
         self.data_table = QTableWidget()
-        self.data_table.setAlternatingRowColors(True)
+        self.data_table.setAlternatingRowColors(False)
         self.data_table.setMouseTracking(True)
         self.data_table.cellEntered.connect(self._on_data_table_cell_entered)
         self.data_table.viewport().installEventFilter(self)
@@ -1554,7 +1554,7 @@ Click to configure advanced options."""
         self.protocol_table = QTableWidget()
         self.protocol_table.setColumnCount(len(PROTOCOL_COLUMNS))
         self.protocol_table.setHorizontalHeaderLabels(PROTOCOL_COLUMNS)
-        self.protocol_table.setAlternatingRowColors(True)
+        self.protocol_table.setAlternatingRowColors(False)
         self.protocol_table.horizontalHeader().setStretchLastSection(True)
         self.protocol_table.cellChanged.connect(self._on_protocol_cell_changed)
         proto_layout.addWidget(self.protocol_table)
@@ -3150,35 +3150,61 @@ Click to configure advanced options."""
         self._render_protocol_table(filtered)
 
     def _render_protocol_table(self, filtered_rows):
+        from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY
         table = self.protocol_table
         table.blockSignals(True)
+
+        # Determine chart type from current result for dynamic columns
+        chart_type = ''
+        if self.current_analysis_result:
+            chart_type = str(self.current_analysis_result.get('chart_type', '')).lower()
+        active_cols = get_protocol_columns(chart_type)
+        col_ids     = [c[0] for c in active_cols]
+        col_labels  = [c[1] for c in active_cols]
+
+        # Rebuild column headers only when chart type changed
+        if table.columnCount() != len(active_cols) or [
+            table.horizontalHeaderItem(i).text() if table.horizontalHeaderItem(i) else ''
+            for i in range(table.columnCount())
+        ] != col_labels:
+            table.setColumnCount(len(active_cols))
+            table.setHorizontalHeaderLabels(col_labels)
+
         table.setRowCount(len(filtered_rows))
 
         status_colors = {
             'corrected': QColor('#FF9800'),
-            'reviewed': QColor('#4CAF50'),
+            'reviewed':  QColor('#4CAF50'),
         }
 
         for r_idx, row_dict in enumerate(filtered_rows):
-            for c_idx, col_name in enumerate(PROTOCOL_COLUMNS):
-                raw = row_dict.get(col_name, '')
+            for c_idx, (col_id, col_label, _) in enumerate(active_cols):
+                raw  = row_dict.get(col_id, '')
                 text = '' if raw is None else str(raw)
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, id(row_dict))
 
-                if col_name in READONLY_COLUMNS:
+                if col_id in PROTOCOL_READONLY:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     item.setBackground(QColor('#2a2a2a'))
 
-                if col_name == 'review_status' and text in status_colors:
+                if col_id == 'review_status' and text in status_colors:
                     item.setForeground(status_colors[text])
 
                 table.setItem(r_idx, c_idx, item)
+
         table.blockSignals(False)
 
     def _on_protocol_cell_changed(self, row_idx, col_idx):
-        col_name = PROTOCOL_COLUMNS[col_idx]
-        if col_name in READONLY_COLUMNS:
+        from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY
+        chart_type = ''
+        if self.current_analysis_result:
+            chart_type = str(self.current_analysis_result.get('chart_type', '')).lower()
+        active_cols = get_protocol_columns(chart_type)
+        if col_idx >= len(active_cols):
+            return
+        col_id, _, is_numeric = active_cols[col_idx]
+        if col_id in PROTOCOL_READONLY:
             return
 
         table = self.protocol_table
@@ -3200,31 +3226,30 @@ Click to configure advanced options."""
 
         # Snapshot _original on first edit
         if row_dict.get('_original') is None:
-            row_dict['_original'] = {
-                k: row_dict.get(k)
-                for k in PROTOCOL_COLUMNS
-            }
+            row_dict['_original'] = {k: row_dict.get(k) for k, _, _ in active_cols}
 
         # Coerce numeric columns
-        numeric_cols = {'value', 'error_bar_value', 'baseline_value'}
-        if col_name in numeric_cols:
+        if is_numeric:
             try:
-                row_dict[col_name] = float(new_text) if new_text.strip() else None
+                row_dict[col_id] = float(new_text) if new_text.strip() else None
             except ValueError:
                 pass
         else:
-            row_dict[col_name] = new_text
+            row_dict[col_id] = new_text
 
         # Auto-set corrected status on value edits
-        if col_name != 'review_status':
+        if col_id != 'review_status':
             row_dict['review_status'] = 'corrected'
-            status_col = PROTOCOL_COLUMNS.index('review_status')
-            table.blockSignals(True)
-            status_item = table.item(row_idx, status_col)
-            if status_item:
-                status_item.setText('corrected')
-                status_item.setForeground(QColor('#FF9800'))
-            table.blockSignals(False)
+            status_col_idx = next(
+                (i for i, (cid, _, _) in enumerate(active_cols) if cid == 'review_status'), None
+            )
+            if status_col_idx is not None:
+                table.blockSignals(True)
+                status_item = table.item(row_idx, status_col_idx)
+                if status_item:
+                    status_item.setText('corrected')
+                    status_item.setForeground(QColor('#FF9800'))
+                table.blockSignals(False)
 
     def _load_context_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load Context", "", "JSON (*.json)")

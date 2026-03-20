@@ -13,12 +13,74 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Chart-type-aware column definitions
+# ---------------------------------------------------------------------------
+
+# Each entry: (column_id, display_label, is_numeric)
+_COMMON_COLUMNS = [
+    ('source_file',    'Source',       False),
+    ('chart_type',     'Type',         False),
+    ('group',          'Group',        False),
+    ('outcome',        'Outcome',      False),
+]
+_COMMON_TAIL = [
+    ('unit',           'Unit',         False),
+    ('confidence',     'Conf.',        True),
+    ('review_status',  'Status',       False),
+    ('notes',          'Notes',        False),
+]
+
+# Readonly columns (not user-editable)
+PROTOCOL_READONLY = frozenset({'source_file', 'chart_type', 'confidence'})
+
+# Per-chart-type value columns inserted between common-head and common-tail
+_VALUE_COLUMNS: Dict[str, List] = {
+    'box': [
+        ('whisker_low',  'Min (Whisker)', True),
+        ('q1',           'Q1',            True),
+        ('median',       'Median',        True),
+        ('q3',           'Q3',            True),
+        ('whisker_high', 'Max (Whisker)', True),
+        ('outliers_str', 'Outliers',      False),
+    ],
+    'scatter': [
+        ('value_x',      'X',             True),
+        ('value',        'Y',             True),
+    ],
+    'pie': [
+        ('value',        'Proportion',    True),
+        ('percent',      '%',             True),
+    ],
+    'heatmap': [
+        ('row_label',    'Row',           False),
+        ('col_label',    'Col',           False),
+        ('value',        'Value',         True),
+    ],
+}
+_DEFAULT_VALUE_COLUMNS = [
+    ('value', 'Value', True),
+    ('error_bar_value', 'Error Bar', True),
+    ('baseline_value',  'Baseline',  True),
+]
+
+
+def get_protocol_columns(chart_type: str) -> List[tuple]:
+    """
+    Return ordered list of (column_id, label, is_numeric) for a given chart type.
+    Used by the GUI to set dynamic protocol table headers.
+    """
+    value_cols = _VALUE_COLUMNS.get(chart_type, _DEFAULT_VALUE_COLUMNS)
+    return _COMMON_COLUMNS + value_cols + _COMMON_TAIL
+
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _extract_value(element: Dict[str, Any]) -> Optional[float]:
-    """Extract numeric value with fallback: value → estimated_value → y."""
-    for key in ('value', 'estimated_value', 'y'):
+    """Extract numeric value with fallback: value → estimated_value → y → median (box) → q1/q3."""
+    for key in ('value', 'estimated_value', 'y', 'median', 'q1', 'q3'):
         v = element.get(key)
         if v is not None:
             try:
@@ -183,6 +245,38 @@ def build_protocol_rows(
                 except (TypeError, ValueError):
                     pass
 
+        # Box-specific stats
+        box_fields: Dict[str, Any] = {}
+        if chart_type == 'box':
+            for k in ('whisker_low', 'q1', 'median', 'q3', 'whisker_high'):
+                v = element.get(k)
+                try:
+                    box_fields[k] = float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    box_fields[k] = None
+            raw_outliers = element.get('outliers', [])
+            if isinstance(raw_outliers, list):
+                box_fields['outliers_str'] = ', '.join(
+                    f'{o:.4g}' for o in raw_outliers if o is not None
+                )
+            else:
+                box_fields['outliers_str'] = ''
+
+        # Scatter x-coordinate
+        scatter_x = None
+        if chart_type == 'scatter':
+            try:
+                scatter_x = float(element.get('x')) if element.get('x') is not None else None
+            except (TypeError, ValueError):
+                pass
+
+        # Pie percent
+        pie_pct = None
+        if chart_type == 'pie':
+            v = _extract_value(element)
+            if v is not None:
+                pie_pct = round(v * 100.0, 4)
+
         row: Dict[str, Any] = {
             'source_file': str(source_file),
             'page_index': page_index,
@@ -200,6 +294,15 @@ def build_protocol_rows(
             'review_status': 'auto',
             'notes': '',
             '_original': None,
+            # Scatter
+            'value_x': scatter_x,
+            # Pie
+            'percent': pie_pct,
+            # Heatmap
+            'row_label': element.get('row_label', ''),
+            'col_label': element.get('col_label', ''),
+            # Box
+            **box_fields,
         }
         rows.append(row)
 

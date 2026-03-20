@@ -127,100 +127,170 @@ def extract_charts_from_pdf_optimized(
     return extracted_charts
 
 
+def _render_page_as_image(
+    page: fitz.Page,
+    page_num: int,
+    pdf_stem: str,
+    output_dir: Path,
+    dpi: int = 200,
+) -> Optional[dict]:
+    """
+    Render an entire PDF page as a PNG image at the given DPI.
+
+    This is the primary extraction method for vector-based charts (matplotlib,
+    R, LaTeX, Word exports etc.) that contain no embedded raster images.
+
+    Args:
+        page:       fitz.Page object (0-indexed page already selected)
+        page_num:   0-indexed page number (for filename/logging)
+        pdf_stem:   PDF filename stem (no extension)
+        output_dir: Directory where the PNG will be saved
+        dpi:        Rendering resolution (200 DPI is a good balance of
+                    quality vs. file size for analysis)
+
+    Returns:
+        dict with chart_info keys, or None if rendering failed.
+    """
+    try:
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        pixmap = page.get_pixmap(matrix=matrix)
+
+        filename = f"{pdf_stem}_page{page_num + 1:02d}_fullpage.png"
+        file_path = output_dir / filename
+        pixmap.save(str(file_path))
+        w, h = pixmap.width, pixmap.height
+        del pixmap
+
+        logger.info(f"🖼️  Full-page render saved: {filename} ({w}x{h}px @ {dpi} DPI)")
+        return {
+            'page_num': page_num + 1,
+            'image_index': 1,
+            'file_path': file_path,
+            'high_res_path': file_path,   # already final quality — no re-render needed
+            'dimensions': (w, h),
+            'pdf_rect': page.rect,
+            'extraction_method': 'full_page_render',
+        }
+    except Exception as exc:
+        logger.error(f"❌ Full-page render failed for page {page_num + 1}: {exc}")
+        return None
+
+
 def _extract_images_from_page_optimized(
-    page: fitz.Page, 
-    page_num: int, 
-    pdf_stem: str, 
-    output_dir: Path, 
-    min_width: int, 
-    min_height: int
+    page: fitz.Page,
+    page_num: int,
+    pdf_stem: str,
+    output_dir: Path,
+    min_width: int,
+    min_height: int,
+    render_dpi: int = 200,
 ) -> List[dict]:
     """
-    Extrai imagens de uma página específica com critérios otimizados.
-    
-    Args:
-        page: Página do PDF (fitz.Page)
-        page_num: Número da página (0-indexed)
-        pdf_stem: Nome base do arquivo PDF
-        output_dir: Diretório de saída
-        min_width, min_height: Dimensões mínimas
-    
-    Returns:
-        List[dict]: Lista de gráficos extraídos desta página
+    Extract chart images from a single PDF page.
+
+    Strategy:
+      1. Try to extract raster images embedded directly in the PDF
+         (works for scanned figures or pre-rasterised exports).
+      2. If no embedded images are found — or all are too small / not
+         chart-like — fall back to rendering the full page at *render_dpi*.
+         This captures vector-drawn charts (matplotlib, R, LaTeX, Word…)
+         which are by far the most common format in scientific literature.
     """
-    page_charts = []
-    
+    page_charts: List[dict] = []
+
+    # ------------------------------------------------------------------
+    # Strategy 1: embedded raster images inside the PDF
+    # ------------------------------------------------------------------
     try:
-        # Obter lista de imagens na página
         image_list = page.get_images(full=True)
-        
-        if not image_list:
-            logger.debug(f"Página {page_num + 1}: Nenhuma imagem encontrada")
-            return page_charts
-        
-        logger.debug(f"Página {page_num + 1}: {len(image_list)} imagem(s) detectada(s)")
-        
-        for img_index, img in enumerate(image_list):
+        if image_list:
+            logger.debug(f"Page {page_num + 1}: {len(image_list)} embedded image(s) found")
+            for img_index, img in enumerate(image_list):
+                try:
+                    xref = img[0]
+                    base_image = page.parent.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    image_ext  = base_image["ext"]
+
+                    np_array = np.frombuffer(image_bytes, dtype=np.uint8)
+                    cv_image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+                    if cv_image is None:
+                        continue
+
+                    h, w = cv_image.shape[:2]
+                    if w < min_width or h < min_height:
+                        logger.debug(f"  Image {img_index}: too small ({w}x{h}), skipped")
+                        continue
+                    if not _is_likely_chart_image(cv_image, w, h):
+                        logger.debug(f"  Image {img_index}: not chart-like, skipped")
+                        continue
+
+                    filename  = f"{pdf_stem}_page{page_num+1:02d}_img{img_index+1:02d}.{image_ext}"
+                    file_path = output_dir / filename
+                    with open(file_path, "wb") as fh:
+                        fh.write(image_bytes)
+
+                    img_rects = page.get_image_rects(xref)
+                    rect = img_rects[0] if img_rects else fitz.Rect(0, 0, w, h)
+
+                    page_charts.append({
+                        'page_num':          page_num + 1,
+                        'image_index':       img_index + 1,
+                        'file_path':         file_path,
+                        'high_res_path':     file_path,   # kept for API compat
+                        'dimensions':        (w, h),
+                        'pdf_rect':          rect,
+                        'extraction_method': 'embedded_image',
+                    })
+                    logger.info(f"✅ Embedded image saved: {filename} ({w}x{h}px)")
+
+                except Exception as exc:
+                    logger.error(
+                        f"❌ Error extracting embedded image {img_index} "
+                        f"from page {page_num + 1}: {exc}"
+                    )
+    except Exception as exc:
+        logger.error(f"❌ Error listing images on page {page_num + 1}: {exc}")
+
+    # ------------------------------------------------------------------
+    # Strategy 2: full-page render fallback
+    # Triggered when embedded-image extraction found nothing useful.
+    # This is the normal path for vector-drawn scientific charts.
+    # ------------------------------------------------------------------
+    if not page_charts:
+        logger.debug(
+            f"Page {page_num + 1}: no usable embedded images — "
+            "falling back to full-page render"
+        )
+        chart = _render_page_as_image(
+            page, page_num, pdf_stem, output_dir, dpi=render_dpi
+        )
+        if chart:
+            # Post-render size & chart-likelihood check
             try:
-                # Extrair dados básicos da imagem
-                xref = img[0]  # Referência cruzada da imagem
-                
-                # Obter dados brutos da imagem
-                base_image = page.parent.extract_image(xref)
-                image_bytes = base_image["image"]
-                image_ext = base_image["ext"]
-                
-                # Converter para array numpy para análise
-                np_array = np.frombuffer(image_bytes, dtype=np.uint8)
-                cv_image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
-                
-                if cv_image is None:
-                    logger.warning(f"Não foi possível decodificar imagem {img_index} da página {page_num + 1}")
-                    continue
-                
-                height, width = cv_image.shape[:2]
-                
-                # Filtrar por dimensões mínimas
-                if width < min_width or height < min_height:
-                    logger.debug(f"Imagem {img_index} muito pequena ({width}x{height}), ignorando")
-                    continue
-                
-                # Verificar se é provável ser um gráfico (análise básica)
-                if not _is_likely_chart_image(cv_image, width, height):
-                    logger.debug(f"Imagem {img_index} não parece ser um gráfico, ignorando")
-                    continue
-                
-                # Salvar a imagem
-                filename = f"{pdf_stem}_page{page_num+1:02d}_img{img_index+1:02d}.{image_ext}"
-                file_path = output_dir / filename
-                
-                with open(file_path, "wb") as img_file:
-                    img_file.write(image_bytes)
-                
-                # Obter retângulo da imagem na página (para referência)
-                img_rect = page.get_image_rects(xref)
-                rect = img_rect[0] if img_rect else fitz.Rect(0, 0, width, height)
-                
-                # Adicionar aos resultados
-                chart_info = {
-                    'page_num': page_num + 1,  # 1-indexed para usuário
-                    'image_index': img_index + 1,
-                    'file_path': file_path,
-                    'dimensions': (width, height),
-                    'pdf_rect': rect,
-                    'extraction_method': 'direct_pdf_extraction'
-                }
-                
-                page_charts.append(chart_info)
-                logger.info(f"✅ Extraído: {filename} ({width}x{height}px)")
-                
-            except Exception as e:
-                logger.error(f"❌ Erro ao extrair imagem {img_index} da página {page_num + 1}: {e}")
-                continue
-                
-    except Exception as e:
-        logger.error(f"❌ Erro geral ao processar página {page_num + 1}: {e}")
-    
+                cv_img = cv2.imread(str(chart['file_path']))
+                if cv_img is not None:
+                    h, w = cv_img.shape[:2]
+                    if w < min_width or h < min_height:
+                        logger.debug(
+                            f"  Full-page render too small ({w}x{h}), discarding"
+                        )
+                        chart['file_path'].unlink(missing_ok=True)
+                        chart = None
+                    elif not _is_likely_chart_image(cv_img, w, h):
+                        logger.debug(
+                            "  Full-page render not chart-like (probably text-only page), discarding"
+                        )
+                        chart['file_path'].unlink(missing_ok=True)
+                        chart = None
+            except Exception as exc:
+                logger.warning(
+                    f"Could not validate full-page render for page {page_num + 1}: {exc}"
+                )
+            if chart:
+                page_charts.append(chart)
+
     return page_charts
 
 
@@ -366,103 +436,71 @@ def rerender_chart_at_high_res_optimized(
 
 
 def process_pdf_charts_optimized(
-    pdf_path: Path, 
-    output_dir: Path, 
-    high_res_dpi: int = 300,
+    pdf_path: Path,
+    output_dir: Path,
+    high_res_dpi: int = 200,
     min_chart_width: int = 300,
-    min_chart_height: int = 200
+    min_chart_height: int = 200,
 ) -> List[dict]:
     """
-    Pipeline completo OTIMIZADO para processar gráficos de PDF.
-    
-    Esta função combina a extração inicial com re-renderização em alta resolução.
-    VERSÃO MODIFICADA: Salva apenas os arquivos de alta resolução no diretório
-    de saída principal, sem criar subpastas.
-    """
-    pdf_path = Path(pdf_path)
-    output_dir = Path(output_dir)
-    
-    if not pdf_path.exists():
-        logger.error(f"❌ PDF não encontrado: {pdf_path}")
-        return []
-    
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    logger.info(f"🚀 Iniciando processamento OTIMIZADO de {pdf_path.name}")
-    
-    processed_charts = []
-    temporary_files = []
-    
-    try:
-        with open_pdf_document(pdf_path) as doc:
-            logger.info(f"📄 Processando PDF com {doc.page_count} páginas")
-            
-            for page_num in range(doc.page_count):
-                try:
-                    page = doc[page_num]
-                    logger.debug(f"🔍 Página {page_num + 1}/{doc.page_count}")
-                    
-                    # A extração inicial agora salva no diretório principal (como temp)
-                    page_charts = _extract_images_from_page_optimized(
-                        page, 
-                        page_num, 
-                        pdf_path.stem, 
-                        output_dir, # Salva diretamente no diretório de saída
-                        min_chart_width, 
-                        min_chart_height
-                    )
-                    
-                    for chart_info in page_charts:
-                        try:
-                            original_file_path = chart_info['file_path']
-                            temporary_files.append(original_file_path)
-                            
-                            highres_filename = f"{original_file_path.stem}_highres.png"
-                            highres_path = output_dir / highres_filename
-                            
-                            chart_rect = chart_info.get('pdf_rect')
-                            logger.debug(f"🖼️ Re-renderizando em {high_res_dpi} DPI: {original_file_path.name}")
-                            
-                            zoom_factor = high_res_dpi / 72.0
-                            matrix = fitz.Matrix(zoom_factor, zoom_factor)
-                            
-                            pixmap = page.get_pixmap(matrix=matrix, clip=chart_rect)
-                            high_res_dims = (pixmap.width, pixmap.height)
-                            pixmap.save(str(highres_path))
-                            del pixmap
+    Pipeline completo para extrair gráficos de um PDF e salvá-los como PNGs.
 
-                            chart_info.update({
-                                'high_res_path': highres_path,
-                                'high_res_dpi': high_res_dpi,
-                                'high_res_dimensions': high_res_dims,
-                            })
-                            
-                            logger.info(f"✅ Gráfico processado e salvo: {highres_path.name}")
-                            
-                        except Exception as e:
-                            logger.error(f"❌ Erro ao processar gráfico {chart_info.get('file_path', 'unknown')}: {e}")
-                            chart_info['high_res_error'] = str(e)
-                        
-                        processed_charts.append(chart_info)
-                        
-                except Exception as e:
-                    logger.error(f"❌ Erro ao processar página {page_num + 1}: {e}")
-                    continue
-        
-        logger.info(f"🎉 Processamento concluído: {len(processed_charts)} gráfico(s) processado(s)")
-        
-        _save_processing_metadata(processed_charts, output_dir, pdf_path)
-        
-        return processed_charts
-    finally:
-        # Always attempt cleanup
-        for temp_file in temporary_files:
+    Extraction strategy (applied per page):
+      1. Embedded raster images  — works for scanned / pre-rasterised figures.
+      2. Full-page render        — fallback that captures vector charts
+         (matplotlib, R, LaTeX, Word exports). Rendered at *high_res_dpi*.
+
+    Returns a list of chart-info dicts.  Each dict always carries
+    'high_res_path' pointing to the final PNG so that input_resolver.py
+    can use a single code-path regardless of extraction method.
+    """
+    pdf_path   = Path(pdf_path)
+    output_dir = Path(output_dir)
+
+    if not pdf_path.exists():
+        logger.error(f"❌ PDF not found: {pdf_path}")
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"🚀 Processing {pdf_path.name} (render DPI={high_res_dpi})")
+
+    processed_charts: List[dict] = []
+
+    with open_pdf_document(pdf_path) as doc:
+        logger.info(f"📄 {doc.page_count} page(s)")
+
+        for page_num in range(doc.page_count):
             try:
-                if temp_file.exists():
-                    os.remove(temp_file)
-                    logger.debug(f"🗑️ Cleaned up: {temp_file.name}")
-            except OSError as e:
-                logger.error(f"❌ Failed to remove {temp_file.name}: {e}")
+                page = doc[page_num]
+                page_charts = _extract_images_from_page_optimized(
+                    page,
+                    page_num,
+                    pdf_path.stem,
+                    output_dir,
+                    min_chart_width,
+                    min_chart_height,
+                    render_dpi=high_res_dpi,
+                )
+
+                if page_charts:
+                    logger.info(
+                        f"✅ Page {page_num + 1}: {len(page_charts)} chart(s) extracted"
+                    )
+                else:
+                    logger.debug(f"⏭️  Page {page_num + 1}: no charts found")
+
+                processed_charts.extend(page_charts)
+
+            except Exception as exc:
+                logger.error(f"❌ Error on page {page_num + 1}: {exc}")
+                continue
+
+    logger.info(
+        f"🎉 Done: {len(processed_charts)} chart(s) from {pdf_path.name}"
+    )
+    _save_processing_metadata(processed_charts, output_dir, pdf_path)
+    return processed_charts
+
 
 def _save_processing_metadata(processed_charts: List[dict], output_dir: Path, pdf_path: Path):
     """

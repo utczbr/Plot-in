@@ -105,8 +105,8 @@ class TestHandlerMigration(unittest.TestCase):
 
         handler = self._make_cartesian_handler(ScatterHandler)
         calibration = {
-            'primary': SimpleNamespace(func=primary_func),
-            'secondary': SimpleNamespace(func=secondary_func),
+            'y': SimpleNamespace(func=primary_func),
+            'x': SimpleNamespace(func=secondary_func),
         }
 
         result = handler.extract_values(

@@ -265,7 +265,8 @@ def main():
         or str(Path(__file__).resolve().parent / 'models')
     )
 
-    ocr_backend = args.ocr or runtime_cfg.get("ocr_backend") or 'Paddle'
+    default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+    ocr_backend = args.ocr or runtime_cfg.get("ocr_backend") or default_ocr
     if args.language:
         languages = [lang.strip() for lang in args.language.split(',') if lang.strip()]
     else:

@@ -75,7 +75,8 @@ class ChartAnalysisPipeline(BasePipeline):
             output_dir: Optional[Union[str, Path]] = None,
             annotated: bool = False,
             advanced_settings: Optional[Dict] = None,
-            provenance: Optional[Dict[str, Any]] = None) -> Optional[PipelineResult]:
+            provenance: Optional[Dict[str, Any]] = None,
+            manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[Dict[str, Any]]:
         """
         Run the analysis pipeline on a single image.
         
@@ -84,6 +85,8 @@ class ChartAnalysisPipeline(BasePipeline):
             output_dir: Directory to save results and annotations
             annotated: Whether to generate annotated images
             advanced_settings: Optional configuration overrides
+            provenance: Optional tracking info
+            manual_detections: Pre-computed detections (bypasses YOLO)
             
         Returns:
             Dictionary with analysis results or None on failure
@@ -110,7 +113,13 @@ class ChartAnalysisPipeline(BasePipeline):
             chart_type = normalize_chart_type(ct)
             
             # 3. Detection
-            detections = self._detect_elements(img, chart_type, advanced_settings)
+            if manual_detections is not None:
+                import copy
+                detections = copy.deepcopy(manual_detections)
+                self.logger.info(f"Using manual detections for {chart_type}.")
+            else:
+                detections = self._detect_elements(img, chart_type, advanced_settings)
+                
             if not detections:
                 self.logger.warning(f"No detections found for {chart_type}.")
 
@@ -248,6 +257,10 @@ class ChartAnalysisPipeline(BasePipeline):
 
         if provenance:
             primary_final_result['_provenance'] = provenance
+
+        if manual_detections is not None:
+            primary_final_result['review_status'] = 'reviewed'
+            primary_final_result['correction_source'] = 'manual_edit'
 
         if output_dir:
             self._save_results(primary_final_result, img, Path(output_dir), annotated)
@@ -481,30 +494,34 @@ class ChartAnalysisPipeline(BasePipeline):
         return result.orientation
 
     def _process_ocr(self, img: np.ndarray, detections: Dict):
-        """Runs OCR on all textual elements and DocLayout text regions in-place."""
+        """Runs OCR on all textual elements and DocLayout text regions in-place.
+
+        IMPORTANT: This method tags each detection dict with 'text' and
+        'ocr_confidence' in-place, but it does NOT mutate the per-class
+        lists inside ``detections``.  A local ``ocr_batch`` list is used
+        to collect items for batch OCR so that titles/legends are never
+        appended into ``detections['axis_labels']``.
+        """
         if not self.ocr_engine:
             return
 
         axis_labels = detections.get('axis_labels', [])
 
-        # OCR chart textual elements (titles, legends, data labels)
-        text_classes = [
-            ('chart_title', 'chart_title'),
-            ('legend', 'legend'),
-            ('axis_title', 'axis_title'),
-            ('data_label', 'data_label')
-        ]
-        
-        for class_name, ocr_source in text_classes:
+        # Build a FLAT working list for OCR — do NOT mutate detections['axis_labels'].
+        # Each dict is the same object as in its per-class list, so setting
+        # 'text' / 'ocr_confidence' on it later propagates automatically.
+        ocr_batch: list = list(axis_labels)
+
+        for class_name in ('chart_title', 'legend', 'axis_title', 'data_label'):
             for det in detections.get(class_name, []):
-                det['ocr_source'] = ocr_source
-                axis_labels.append(det)
+                det['ocr_source'] = class_name
+                ocr_batch.append(det)
 
-        # Merge DocLayout text regions that do not duplicate existing axis_labels
+        # Merge DocLayout text regions that do not duplicate existing items
         layout_regions = detections.get('layout_text_regions', [])
-        extra_regions = TextLayoutService.merge_with_axis_labels(layout_regions, axis_labels)
+        extra_regions = TextLayoutService.merge_with_axis_labels(layout_regions, ocr_batch)
 
-        all_regions = list(axis_labels) + extra_regions
+        all_regions = list(ocr_batch) + extra_regions
         if not all_regions:
             return
 
@@ -599,6 +616,12 @@ class ChartAnalysisPipeline(BasePipeline):
         json_path = output_dir / f"{Path(result['image_file']).stem}_analysis.json"
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(sanitize_for_json(result), f, indent=2, ensure_ascii=False)
+            
+        # Export edited detections to a separate file if manually corrected
+        if result.get('review_status') == 'reviewed':
+            edited_path = output_dir / f"{Path(result['image_file']).stem}_edited_detections.json"
+            with open(edited_path, 'w', encoding='utf-8') as f:
+                json.dump(sanitize_for_json(result.get('detections', {})), f, indent=2, ensure_ascii=False)
             
         # Save Annotated Image
         if annotated:

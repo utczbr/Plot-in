@@ -278,7 +278,7 @@ class ModernAnalysisThread(QThread):
     analysis_complete = pyqtSignal(object)
     progress_updated = pyqtSignal(int)
 
-    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, parent=None):
+    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, parent=None):
         super().__init__(parent)
         self.image_path = image_path
         self.conf = conf
@@ -287,6 +287,7 @@ class ModernAnalysisThread(QThread):
         self.models_dir = models_dir
         self.context = context
         self.provenance = provenance
+        self.manual_detections = manual_detections
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -320,6 +321,7 @@ class ModernAnalysisThread(QThread):
             result = analysis_manager.run_single_analysis(
                 self.image_path, self.conf, self.output_path,
                 provenance=self.provenance,
+                manual_detections=self.manual_detections,
             )
 
             self.progress_updated.emit(100)
@@ -518,10 +520,20 @@ class ModernChartAnalysisApp(QMainWindow):
         self.visibility_checks = {}
         self.zoom_level = 1.0
         self.highlighted_bbox = None
-        self.hover_widgets = {}
-        self.base_image_with_detections = None
-        self.analysis_thread = None
-        self.batch_thread = None
+
+        # ── New canvas (Phase 1) ──
+        import os
+        self._use_legacy_canvas: bool = bool(os.environ.get('PLOTIN_LEGACY_CANVAS'))
+        self._det_scene: Optional[Any] = None          # DetectionScene instance (new canvas)
+        self._det_canvas_view: Optional[Any] = None     # DetectionCanvasView instance (new canvas)
+
+        # ── Editor state (Phase 2) ──
+        self._editor_state: Optional[Any] = None       # EditorStateManager
+        self._editor_toolbar: Optional[Any] = None     # EditorToolbar widget
+        self.hover_widgets: Dict[str, Any] = {}
+        self.base_image_with_detections: Optional[Any] = None
+        self.analysis_thread: Optional[Any] = None
+        self.batch_thread: Optional[Any] = None
         self.is_processing = False
         
         self.ocr_section_widgets = {}
@@ -537,8 +549,16 @@ class ModernChartAnalysisApp(QMainWindow):
             max_memory_mb=150,
             thread_safety_manager=self.thread_safety
         )
-        self.highlight_cache = {}  # TODO: Move to state in future step
+        runtime_state = getattr(self.state_manager, "_runtime_state", None)
+        if runtime_state is None:
+            runtime_state = {}
+            self.state_manager._runtime_state = runtime_state
+        self.highlight_cache = runtime_state.setdefault("highlight_cache", {})
         self.current_pixmap = None
+        # Benchmark result cache: image_path_str → json_path_str
+        # Pre-warmed at file-list build time; updated after Save and batch complete.
+        self._benchmark_result_cache: Dict[str, str] = {}
+        self._file_list_buttons: List[QPushButton] = []
         
         self.colors = {
             "bar":         {"normal": (0, 120, 255),   "highlight": (30, 144, 255)},
@@ -871,8 +891,9 @@ class ModernChartAnalysisApp(QMainWindow):
     
     def on_settings_changed(self, new_settings):
         # Check if OCR settings that require re-initialization have changed
-        old_ocr_engine = self.advanced_settings.get('ocr_engine', 'EasyOCR') if self.advanced_settings else 'EasyOCR'
-        new_ocr_engine = new_settings.get('ocr_engine', 'EasyOCR')
+        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        old_ocr_engine = self.advanced_settings.get('ocr_engine', default_ocr) if self.advanced_settings else default_ocr
+        new_ocr_engine = new_settings.get('ocr_engine', default_ocr)
         old_ocr_settings = self.advanced_settings.get('ocr_settings', {}) if self.advanced_settings else {}
         new_ocr_settings = new_settings.get('ocr_settings', {})
         
@@ -891,7 +912,8 @@ class ModernChartAnalysisApp(QMainWindow):
 
     def _configure_ocr_startup_state(self, settings):
         """Set OCR readiness state without forcing EasyOCR model preload."""
-        ocr_engine_name = (settings or {}).get('ocr_engine', 'EasyOCR')
+        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        ocr_engine_name = (settings or {}).get('ocr_engine', default_ocr)
         if ocr_engine_name != 'EasyOCR':
             self.ocr_ready = True
             self.run_batch_btn.setEnabled(True)
@@ -925,7 +947,8 @@ class ModernChartAnalysisApp(QMainWindow):
             # If already loading, keep current worker to avoid multiple heavy downloads.
             return
 
-        ocr_engine_name = (settings or {}).get('ocr_engine', 'EasyOCR')
+        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        ocr_engine_name = (settings or {}).get('ocr_engine', default_ocr)
         needs_easyocr = ocr_engine_name == 'EasyOCR'
 
         if not needs_easyocr:
@@ -1001,7 +1024,8 @@ class ModernChartAnalysisApp(QMainWindow):
         if button is None or not self.advanced_settings:
             return
 
-        ocr_engine = self.advanced_settings.get('ocr_engine', 'EasyOCR')
+        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        ocr_engine = self.advanced_settings.get('ocr_engine', default_ocr)
         gpu_enabled = self.advanced_settings.get('ocr_settings', {}).get('easyocr_gpu', True)
         doclayout_enabled = self.advanced_settings.get('use_doclayout_text', True)
 
@@ -1170,33 +1194,49 @@ Click to configure advanced options."""
         self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         right_layout.addWidget(self.vertical_splitter)
 
-        self.display_frame = ImageScrollArea(self)
-        
-        self.image_label = QLabel("Select an input folder to begin analysis")
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.image_label.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Fixed
-        )
-        self.image_label.setScaledContents(False)  # Don't auto-scale
-        self.image_label.setMinimumSize(200, 200)   # Minimum size
-        self.image_label.setMaximumSize(16777215, 16777215)
-        
-        image_label_style = (
-            "QLabel {"
-            "    font-size: 12px;"
-            "    color: #888888;"
-            "    background-color: #3a3a3a;"
-            "    border: 2px dashed #555555;"
-            "    border-radius: 6px;"
-            "    padding: 15px;"
-            "}"
-        )
-        self.image_label.setStyleSheet(image_label_style)
-        
-        self.display_frame.setWidget(self.image_label)
-        self.vertical_splitter.addWidget(self.display_frame)
+        if self._use_legacy_canvas:
+            # ── Legacy canvas (QLabel + QPixmap inside QScrollArea) ──
+            self.display_frame = ImageScrollArea(self)
+            self.image_label = QLabel("Select an input folder to begin analysis")
+            self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.image_label.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+            )
+            self.image_label.setScaledContents(False)
+            self.image_label.setMinimumSize(200, 200)
+            self.image_label.setMaximumSize(16777215, 16777215)
+            image_label_style = (
+                "QLabel {"
+                "    font-size: 12px; color: #888888;"
+                "    background-color: #3a3a3a;"
+                "    border: 2px dashed #555555;"
+                "    border-radius: 6px; padding: 15px;"
+                "}"
+            )
+            self.image_label.setStyleSheet(image_label_style)
+            self.display_frame.setWidget(self.image_label)
+            self.vertical_splitter.addWidget(self.display_frame)
+        else:
+            # ── New canvas (QGraphicsView + DetectionScene) ──
+            from visual.detection_scene import DetectionScene, DetectionCanvasView
+            self._det_scene = DetectionScene()
+            self._det_canvas_view = DetectionCanvasView(self._det_scene, self)
+            self._det_canvas_view.setMinimumSize(200, 200)
+            # Wire click-to-highlight from scene to table sync
+            self._det_canvas_view.bbox_clicked.connect(self._on_scene_bbox_clicked)
+            # Wire editor signals
+            self._det_scene.item_edited.connect(self._on_scene_item_edited)
+            self._det_scene.item_deleted.connect(self._on_scene_item_deleted)
+            self._det_scene.item_class_changed.connect(self._on_scene_item_class_changed)
+            self._det_scene.item_created.connect(self._on_scene_item_created)
+            # Phase 5: keypoint edit signals for undo/redo
+            self._det_scene.keypoint_moved.connect(self._on_scene_keypoint_moved)
+            self._det_scene.keypoint_created.connect(self._on_scene_keypoint_created)
+            
+            # Legacy references (set to None — guarded by _use_legacy_canvas)
+            self.display_frame = self._det_canvas_view  # for layout compatibility
+            self.image_label = None
+            self.vertical_splitter.addWidget(self._det_canvas_view)
 
         self.bottom_container = QWidget()
         self.bottom_container.setMinimumHeight(200)
@@ -1354,10 +1394,11 @@ Click to configure advanced options."""
         ocr_tab = QWidget()
         ocr_layout = QVBoxLayout(ocr_tab)
         ocr_layout.setContentsMargins(4, 4, 4, 4)
-        
+
         ocr_scroll = QScrollArea()
         ocr_scroll.setWidgetResizable(True)
-        
+        self.ocr_scroll_area = ocr_scroll
+
         self.ocr_content_widget = QWidget()
         self.ocr_content_layout = QVBoxLayout(self.ocr_content_widget)
         self.ocr_content_layout.setSpacing(8)
@@ -1501,7 +1542,26 @@ Click to configure advanced options."""
         view_tab = QWidget()
         view_layout = QVBoxLayout(view_tab)
         view_layout.setContentsMargins(4, 4, 4, 4)
-        
+
+        # ── Editor toolbar (Phase 2) — only for new canvas ──
+        if not self._use_legacy_canvas:
+            from visual.editor_toolbar import EditorToolbar
+            from visual.detection_editor_state import EditorStateManager
+
+            self._editor_state = EditorStateManager(self)
+            self._editor_toolbar = EditorToolbar(self)
+            view_layout.addWidget(self._editor_toolbar)
+
+            # Connect toolbar → canvas mode
+            self._editor_toolbar.mode_changed.connect(self._on_editor_mode_changed)
+            self._editor_toolbar.undo_requested.connect(self._on_editor_undo)
+            self._editor_toolbar.redo_requested.connect(self._on_editor_redo)
+            self._editor_toolbar.apply_requested.connect(self._on_editor_apply)
+            self._editor_toolbar.reset_requested.connect(self._on_editor_reset)
+
+            # Connect editor state → toolbar status
+            self._editor_state.edit_count_changed.connect(self._on_editor_count_changed)
+
         view_scroll = QScrollArea()
         view_scroll.setWidgetResizable(True)
         
@@ -1588,10 +1648,20 @@ Click to configure advanced options."""
             
     def _apply_pixmap_to_ui(self, pixmap):
         """Must run on main thread"""
-        if self.image_label and pixmap is not None:
-            self._set_image_pixmap(pixmap)
+        if self._use_legacy_canvas:
+            if self.image_label and pixmap is not None:
+                self._set_image_pixmap(pixmap)
+        else:
+            # New canvas: load the pixmap into the scene
+            if self._det_scene and pixmap is not None:
+                self._det_scene.load_image(pixmap)
 
     def _set_image_placeholder(self, message: str):
+        if not self._use_legacy_canvas:
+            # New canvas: just clear the scene (placeholder text not needed)
+            if self._det_scene:
+                self._det_scene.clear()
+            return
         if not self.image_label:
             return
         self.image_label.clear()
@@ -1614,6 +1684,10 @@ Click to configure advanced options."""
         self.image_label.setStyleSheet(placeholder_style)
 
     def _set_image_pixmap(self, pixmap: QPixmap):
+        if not self._use_legacy_canvas:
+            if self._det_scene and pixmap is not None:
+                self._det_scene.load_image(pixmap)
+            return
         if not self.image_label:
             return
         self.image_label.setText("")
@@ -1626,6 +1700,304 @@ Click to configure advanced options."""
         self.image_label.setMinimumSize(pixmap.size())
         self.image_label.setMaximumSize(pixmap.size())
         self.image_label.adjustSize()
+
+    # ── New canvas: scene ↔ table click sync ──
+    def _on_scene_bbox_clicked(self, class_name: str, xyxy: list):
+        """Handle click-to-highlight from the DetectionScene."""
+        self.highlighted_bbox = xyxy
+        self._pending_highlight_class = class_name
+        
+        # 1. Sync with OCR text widgets
+        if hasattr(self, 'analysis_results_widgets'):
+            for widget_info in self.analysis_results_widgets.values():
+                item = widget_info.get("original_item", {})
+                if tuple(item.get("xyxy", [])) == tuple(xyxy):
+                    entry = widget_info.get("entry")
+                    if entry:
+                        entry.setFocus()
+                        entry.selectAll()
+                        # Ensure visibility by letting the scroll area know
+                        parent_widget = entry.parentWidget()
+                        if parent_widget:
+                            self.ocr_scroll_area.ensureWidgetVisible(parent_widget)
+                        break
+
+        # 2. Sync with Data table
+        if hasattr(self, 'data_row_overlay_map') and hasattr(self, 'data_table'):
+            for row, overlay in self.data_row_overlay_map.items():
+                if isinstance(overlay, dict) and tuple(overlay.get("bbox", [])) == tuple(xyxy):
+                    self.data_table.selectRow(row)
+                    item = self.data_table.item(row, 0)
+                    if item:
+                        self.data_table.scrollToItem(item)
+                    break
+
+    def _on_scene_item_edited(self, item, old_xyxy, is_resize):
+        """Handle move/resize completion from the canvas."""
+        if not self._editor_state:
+            return
+        new_xyxy = item.current_xyxy()
+        if old_xyxy != new_xyxy:
+            from visual.detection_editor_state import MoveCommand, ResizeCommand
+            cmd_cls = ResizeCommand if is_resize else MoveCommand
+            # Correct signature: (item, old_xyxy, new_xyxy)
+            self._editor_state.push(cmd_cls(item, old_xyxy, new_xyxy))
+            self._update_scene_display(new_xyxy, item.class_name)
+
+    def _on_scene_item_deleted(self, item):
+        """Handle delete action from context menu."""
+        if not self._editor_state or not self._det_scene:
+            return
+        from visual.detection_editor_state import DeleteCommand
+        # Correct signature: (scene, item)
+        self._editor_state.push(DeleteCommand(self._det_scene, item))
+        self._update_scene_display()
+
+    def _on_scene_item_class_changed(self, item, new_class):
+        """Handle class change from context menu."""
+        if not self._editor_state or not self._det_scene:
+            return
+        from visual.detection_editor_state import ChangeClassCommand
+        # Correct signature: (item, old_class, new_class, colors_map)
+        colors_map = getattr(self._det_scene, '_colors', {})
+        old_class = item.class_name
+        self._editor_state.push(ChangeClassCommand(item, old_class, new_class, colors_map))
+        self._update_scene_display(item.current_xyxy(), new_class)
+
+    def _on_scene_item_created(self, class_name, xyxy):
+        """Handle new box drawn via rubber band."""
+        if not self._editor_state or not self._det_scene:
+            return
+        from visual.detection_editor_state import CreateCommand
+        from visual.detection_scene import EditableRectItem
+        # Build the new detection dict and item, then wrap in an undoable command
+        new_det = {"xyxy": xyxy, "conf": 1.0, "text": ""}
+        new_item = EditableRectItem(
+            xyxy=xyxy,
+            class_name=class_name,
+            detection=new_det,
+        )
+        # Correct signature: (scene, item)
+        self._editor_state.push(CreateCommand(self._det_scene, new_item))
+        # Immediately highlight the newly created box
+        self._det_scene.highlight_item_by_bbox(xyxy, class_name)
+
+    def _on_scene_keypoint_moved(self, point_item, old_pos, new_pos):
+        """Handle keypoint drag completion — push a MoveKeypointCommand for undo/redo."""
+        if not self._editor_state:
+            return
+        if old_pos == new_pos:
+            return
+        from visual.detection_editor_state import MoveKeypointCommand
+        self._editor_state.push(MoveKeypointCommand(point_item, old_pos, new_pos))
+
+    def _on_scene_keypoint_created(self, group, point_item):
+        """Handle new keypoint placement — push a CreateKeypointCommand for undo/redo."""
+        if not self._editor_state:
+            return
+        from visual.detection_editor_state import CreateKeypointCommand
+        self._editor_state.push(CreateKeypointCommand(group, point_item))
+
+
+
+    def _on_editor_mode_changed(self, mode):
+        """Switch canvas interaction mode via toolbar toggle."""
+        if self._det_canvas_view:
+            self._det_canvas_view.set_mode(mode)
+
+    def _on_editor_undo(self):
+        if self._editor_state:
+            self._editor_state.undo()
+            self._update_scene_display(self.highlighted_bbox,
+                                       self.get_class_for_bbox(self.highlighted_bbox))
+
+    def _on_editor_redo(self):
+        if self._editor_state:
+            self._editor_state.redo()
+            self._update_scene_display(self.highlighted_bbox,
+                                       self.get_class_for_bbox(self.highlighted_bbox))
+
+    def _on_editor_apply(self):
+        """Apply edits and re-run extraction (Phase 4)."""
+        if not self._det_scene or not self.current_analysis_result:
+            return
+
+        # export_detections() returns Dict[class_name, List[dict]] — pass it directly
+        manual_detections = self._det_scene.export_detections()
+
+        # Pre-validate: remove any bbox that is smaller than 2×2 px
+        cleaned: dict = {}
+        discarded = 0
+        for cls_name, items in manual_detections.items():
+            valid_items = []
+            for det in items:
+                xyxy = det.get('xyxy')
+                if xyxy and len(xyxy) == 4:
+                    x1, y1, x2, y2 = xyxy
+                    if (x2 - x1) < 2 or (y2 - y1) < 2:
+                        logging.warning(f"Discarding tiny detection: {cls_name} {xyxy}")
+                        discarded += 1
+                        continue
+                valid_items.append(det)
+            if valid_items:
+                cleaned[cls_name] = valid_items
+        manual_detections = cleaned
+
+        if not manual_detections:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Invalid Detections", "No valid detections found. Please draw at least one valid bounding box.")
+            return
+
+        if discarded:
+            logging.warning(f"Discarded {discarded} tiny detection(s) before re-extract.")
+        
+        # We need the original configuration fields.
+        image_path = self.current_image_path
+        output_path = self.output_path_edit.text()
+        models_dir = self.models_dir_edit.text()
+        conf = self.conf_slider.value() / 10.0
+        
+        # Stop existing thread if running
+        if self.analysis_thread and self.analysis_thread.isRunning():
+            self.analysis_thread.cancel()
+            self.analysis_thread.quit()
+            self.analysis_thread.wait(1000)
+            
+        self.analysis_thread = ModernAnalysisThread(
+            str(image_path), conf, output_path, self.advanced_settings, models_dir,
+            context=self.context,
+            provenance={"source": "manual_edit"},
+            manual_detections=manual_detections,
+        )
+        self.analysis_thread.status_updated.connect(self.update_status)
+        self.analysis_thread.progress_updated.connect(self.progress_bar.setValue)
+        self.analysis_thread.analysis_complete.connect(self._on_analysis_complete)
+
+        if self._editor_toolbar:
+            self._editor_toolbar.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.analysis_thread.start()
+        
+        self.statusBar().showMessage("🔄 Re-extracting with manual detections...", 3000)
+
+    def _on_editor_reset(self):
+        """Reset all edits to auto-detected boxes."""
+        if self._editor_state:
+            self._editor_state.clear()
+        if hasattr(self, '_scene_first_fit_done'):
+            delattr(self, '_scene_first_fit_done')
+        self._update_scene_display()
+        self.statusBar().showMessage("🔄 Detections reset to auto-detected", 2000)
+
+    def _on_editor_count_changed(self, count: int):
+        """Update toolbar status text when edits change."""
+        if self._editor_toolbar and self._editor_state:
+            self._editor_toolbar.set_status_text(self._editor_state.get_status_text())
+            self._editor_toolbar.update_undo_state(
+                self._editor_state.can_undo,
+                self._editor_state.can_redo,
+                self._editor_state.is_dirty,
+            )
+
+    # Classes available for each chart type when drawing new boxes.
+    # Omit 'chart' (it covers the whole image) and detection-only classes
+    # like 'significance_marker', 'connector_line', etc.
+    _CHART_TYPE_CLASSES: dict = {
+        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'scale_label', 'tick_label'],
+        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'line':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'scatter':   ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'box':       ['box', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
+        'heatmap':   ['cell', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'color_bar', 'scale_label'],
+    }
+    _CHART_TYPE_CLASSES_FALLBACK = [
+        'bar', 'scatter', 'data_point', 'chart_title',
+        'axis_title', 'scale_label', 'legend', 'tick_label',
+    ]
+
+    def _show_editor_toolbar(self, visible: bool = True,
+                             chart_type: str = "") -> None:
+        """Show/hide the editor toolbar and update the class combo for the given chart type."""
+        if self._editor_toolbar:
+            self._editor_toolbar.setVisible(visible)
+            if visible and self._editor_state:
+                self._editor_state.clear()  # fresh start for new analysis
+            if visible:
+                classes = self._CHART_TYPE_CLASSES.get(
+                    chart_type.lower(),
+                    self._CHART_TYPE_CLASSES_FALLBACK,
+                )
+                self._editor_toolbar.set_available_classes(classes)
+
+    def _update_scene_display(self, highlight_bbox=None, highlight_class=None):
+        """
+        Update the new DetectionScene canvas with the current analysis result.
+
+        This replaces the entire create_image_with_highlight + PIL resize +
+        numpy conversion pipeline for the new canvas. Items are placed at
+        original-pixel coordinates — zero scaling math.
+        """
+        if not self._det_scene:
+            return
+
+        # 1. Load the base image if we have one
+        if self.original_pil_image is not None:
+            # Convert PIL Image → QPixmap via numpy → QImage
+            import numpy as np
+            from PyQt6.QtGui import QImage, QPixmap
+            np_array = np.array(self.original_pil_image)
+            h, w = np_array.shape[:2]
+            if np_array.ndim == 2:
+                q_image = QImage(np_array.copy().data, w, h, w, QImage.Format.Format_Grayscale8)
+            else:
+                bytes_per_line = 3 * w
+                q_image = QImage(np_array.copy().data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_image)
+            self._det_scene.load_image(pixmap)
+        elif hasattr(self, 'current_image_path') and self.current_image_path:
+            self._det_scene.load_image_from_path(str(self.current_image_path))
+        else:
+            return
+
+        # 2. Populate detection items
+        if self.current_analysis_result and 'detections' in self.current_analysis_result:
+            detections = self.current_analysis_result['detections']
+
+            # Pass in the color palette from self.colors if available
+            colors = None
+            if hasattr(self, 'colors') and self.colors:
+                colors = self.colors
+
+            self._det_scene.set_detections(detections, colors)
+
+            # 3. Apply current visibility state from checkboxes
+            for class_name, checkbox in self.visibility_checks.items():
+                visible = checkbox.isChecked() if hasattr(checkbox, 'isChecked') else True
+                self._det_scene.set_class_visible(class_name, visible)
+
+        # 4. Baselines
+        if self.current_analysis_result:
+            baselines_data = self.current_analysis_result.get('baselines', {})
+            if isinstance(baselines_data, dict):
+                coords = baselines_data.get('baselines', [])
+                orientation = baselines_data.get('orientation', 'horizontal')
+                for coord_val in (coords if isinstance(coords, list) else []):
+                    if isinstance(coord_val, (int, float)):
+                        self._det_scene.set_baseline(float(coord_val), orientation)
+
+        # 5. Highlight
+        if highlight_bbox:
+            self._det_scene.highlight_item_by_bbox(highlight_bbox, highlight_class)
+        else:
+            self._det_scene.clear_highlight()
+
+        # 6. Fit to view on first display
+        if self._det_canvas_view and not hasattr(self, '_scene_first_fit_done'):
+            self._det_canvas_view.fit_to_view()
+            self._scene_first_fit_done = True
 
     def _compute_fit_zoom(self, image_size: Tuple[int, int]) -> float:
         width, height = image_size
@@ -2041,21 +2413,36 @@ Click to configure advanced options."""
             self.file_list_layout.addWidget(label)
             return
 
+        # Pre-warm the benchmark cache by scanning the output dir for *_analysis.json files.
+        self._benchmark_result_cache.clear()
+        output_path = Path(self.output_path_edit.text())
+        if output_path.is_dir():
+            for file_path in self.image_files:
+                stem = Path(file_path).stem
+                json_candidate = output_path / f"{stem}_analysis.json"
+                if json_candidate.exists():
+                    self._benchmark_result_cache[file_path] = str(json_candidate)
+
+        self._file_list_buttons = []
+        image_icon_px = self._scaled_icon_px(13)
+
         for i, file_path in enumerate(self.image_files):
             base_name = os.path.basename(file_path)
             display_name = base_name if len(base_name) <= 25 else base_name[:22] + "..."
             btn = QPushButton(display_name)
-            image_icon_px = self._scaled_icon_px(13)
-            btn.setIcon(self.get_icon("image-solid-full.svg", color="#bfbfbf", size=image_icon_px))
+
+            is_cached = file_path in self._benchmark_result_cache
+            icon_name = "check-solid-full.svg" if is_cached else "image-solid-full.svg"
+            icon_color = "#4ec9b0" if is_cached else "#bfbfbf"
+            btn.setIcon(self.get_icon(icon_name, color=icon_color, size=image_icon_px))
             btn.setIconSize(QSize(image_icon_px, image_icon_px))
             btn.setFlat(True)
 
             # Enhanced tooltip for PDF-sourced entries
             asset = self._resolved_assets[i]
-            if asset.source_document:
-                btn.setToolTip(f"[PDF p.{asset.page_index}] {base_name}")
-            else:
-                btn.setToolTip(base_name)
+            base_tooltip = f"[PDF p.{asset.page_index}] {base_name}" if asset.source_document else base_name
+            btn.setToolTip(base_tooltip + (" ✓ Results cached" if is_cached else ""))
+
             btn_style = (
                 "QPushButton {"
                     "    text-align: left;"
@@ -2073,6 +2460,7 @@ Click to configure advanced options."""
             )
             btn.setStyleSheet(btn_style)
             btn.clicked.connect(lambda checked, idx=i: self.load_image_by_index(idx))
+            self._file_list_buttons.append(btn)
             self.file_list_layout.addWidget(btn)
 
     def start_batch_analysis_thread(self):
@@ -2126,7 +2514,94 @@ Click to configure advanced options."""
         self.progress_bar.setVisible(False)
         self.run_batch_btn.setEnabled(True)
         self.update_status("✅ " + message)
+        # Refresh cache so newly analysed images show check icons immediately.
+        self._refresh_cache_from_output_dir()
+        self._refresh_file_list_button_states()
         QMessageBox.information(self, "Batch Complete", message)
+
+    # ── Benchmark result cache helpers ────────────────────────────────────────
+
+    def _load_result_from_cache(self, image_path: str, json_path: str) -> None:
+        """Load and display a previously saved analysis JSON without re-running inference."""
+        self._clear_display()
+        try:
+            with Image.open(image_path) as src:
+                self.original_pil_image = src.convert("RGB") if src.mode != "RGB" else src.copy()
+            self.current_image_path = image_path
+            self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
+        except Exception as e:
+            self.update_status(f"❌ Error loading image: {e}")
+            return
+
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "Could not load cached JSON %s: %s — falling back to inference", json_path, e
+            )
+            self.update_status(f"⚠️ Cached result unreadable, re-running analysis...")
+            self.load_image_for_assisted_analysis()
+            return
+
+        image_size = self.original_pil_image.size
+        try:
+            normalized_raw = _normalize_result_payload_for_gui(raw, image_size=image_size)
+            self.current_analysis_result = self._normalize_result_for_gui(normalized_raw)
+        except Exception as norm_exc:
+            logging.getLogger(__name__).warning(
+                "Cached result normalization failed: %s — falling back to inference", norm_exc
+            )
+            self.update_status("⚠️ Cached result could not be displayed, re-running analysis...")
+            self.load_image_for_assisted_analysis()
+            return
+
+        self.update_status(f"📂 Loaded cached result: {os.path.basename(image_path)}")
+        self._update_ui_with_results()
+        self.update_displayed_image()
+        self._setup_navigation_controls()
+        if self._editor_toolbar:
+            self._editor_toolbar.setEnabled(True)
+
+    def _update_file_list_button_cached_state(self, index: int, cached: bool) -> None:
+        """Update icon and tooltip on a single file-list button to reflect cached/uncached state."""
+        if not hasattr(self, "_file_list_buttons") or not self._file_list_buttons:
+            return
+        if index < 0 or index >= len(self._file_list_buttons):
+            return
+        btn = self._file_list_buttons[index]
+        icon_px = self._scaled_icon_px(13)
+        icon_name = "check-solid-full.svg" if cached else "image-solid-full.svg"
+        icon_color = "#4ec9b0" if cached else "#bfbfbf"
+        btn.setIcon(self.get_icon(icon_name, color=icon_color, size=icon_px))
+        btn.setIconSize(QSize(icon_px, icon_px))
+        current_tip = btn.toolTip()
+        base_tip = current_tip.split(" ✓")[0]
+        btn.setToolTip(base_tip + (" ✓ Results cached" if cached else ""))
+
+    def _refresh_cache_from_output_dir(self) -> None:
+        """Scan the output directory for *_analysis.json files and update _benchmark_result_cache.
+        Called after a batch run completes. Does not clear existing entries."""
+        output_path = Path(self.output_path_edit.text())
+        if not output_path.is_dir():
+            return
+        for file_path in self.image_files:
+            if file_path in self._benchmark_result_cache:
+                continue  # already known
+            stem = Path(file_path).stem
+            json_candidate = output_path / f"{stem}_analysis.json"
+            if json_candidate.exists():
+                self._benchmark_result_cache[file_path] = str(json_candidate)
+
+    def _refresh_file_list_button_states(self) -> None:
+        """Update all file-list button icons to reflect the current cache state."""
+        if not hasattr(self, "_file_list_buttons") or not self._file_list_buttons:
+            return
+        for i, file_path in enumerate(self.image_files):
+            if i >= len(self._file_list_buttons):
+                break
+            is_cached = file_path in self._benchmark_result_cache
+            self._update_file_list_button_cached_state(i, is_cached)
 
     def load_image_by_index(self, index):
         """Load image with proper concurrency control."""
@@ -2163,7 +2638,14 @@ Click to configure advanced options."""
         self.current_image_index = index
         self.update_status(f"📷 Loading {os.path.basename(self.image_files[index])}...")
         self.highlight_selected_file(index)
-        self.load_image_for_assisted_analysis()
+
+        # Short-circuit: if a cached JSON result exists, load it directly.
+        image_path = self.image_files[index]
+        cached_json = self._benchmark_result_cache.get(image_path)
+        if cached_json and Path(cached_json).exists():
+            self._load_result_from_cache(image_path, cached_json)
+        else:
+            self.load_image_for_assisted_analysis()
 
     def cleanup_image_resources(self):
         # Close all cached PIL images
@@ -2257,12 +2739,21 @@ Click to configure advanced options."""
         self.display_frame.horizontalScrollBar().setValue(0)
         self.display_frame.verticalScrollBar().setValue(0)
 
+        # Belt-and-suspenders: clear the undo stack immediately so stale
+        # C++ item references in old undo commands can never be invoked.
+        if self._editor_state:
+            self._editor_state.clear()
+        if self._editor_toolbar:
+            self._editor_toolbar.update_undo_state(
+                can_undo=False, can_redo=False, is_dirty=False)
+
         if hasattr(self, 'results_tab_widget'):
             self.results_tab_widget.setVisible(False)
         
         if hasattr(self, 'nav_frame') and self.nav_frame:
             self.nav_frame.deleteLater()
             self.nav_frame = None
+
 
     def load_image_for_assisted_analysis(self):
         self._clear_display()
@@ -2379,6 +2870,9 @@ Click to configure advanced options."""
             self.update_displayed_image()
             self._setup_navigation_controls()
             
+        if self._editor_toolbar:
+            self._editor_toolbar.setEnabled(True)
+            
         # Show performance report
         self.show_performance_report()
 
@@ -2452,6 +2946,11 @@ Click to configure advanced options."""
         logging.debug("Data tab populated with %s rows", data_rows)
         
         self._populate_view_tab()
+        _chart_type = str(
+            self.current_analysis_result.get('chart_type', '')
+            if self.current_analysis_result else ''
+        ).lower()
+        self._show_editor_toolbar(True, chart_type=_chart_type)
         self._populate_protocol_tab()
 
         self.results_tab_widget.setVisible(True)
@@ -3088,6 +3587,12 @@ Click to configure advanced options."""
         else:
             checkbox = QCheckBox()
             checkbox.stateChanged.connect(self.schedule_image_update)
+            # New canvas: also route visibility to scene directly
+            if not self._use_legacy_canvas and self._det_scene:
+                _cn = class_name  # capture for closure
+                checkbox.stateChanged.connect(
+                    lambda state, cn=_cn: self._det_scene.set_class_visible(cn, state == Qt.CheckState.Checked.value)
+                )
             self.view_checkboxes_pool[class_name] = checkbox
             previous_state = True  # Default to checked for new checkboxes
         
@@ -3589,6 +4094,12 @@ Click to configure advanced options."""
 
     def update_displayed_image(self, highlight_bbox=None, highlight_class=None, force_refresh: bool = False):
         """Update displayed image with proper memory management and scaling."""
+        if not self._use_legacy_canvas:
+            # ── New canvas path: update scene detections + highlight ──
+            self._update_scene_display(highlight_bbox, highlight_class)
+            return
+
+        # ── Legacy canvas path (original code) ──
         if self.original_pil_image is None:
             return
         
@@ -3752,6 +4263,9 @@ Click to configure advanced options."""
         return None
 
     def reset_zoom(self):
+        if not self._use_legacy_canvas and self._det_canvas_view:
+            self._det_canvas_view.fit_to_view()
+            return
         if self.original_pil_image is not None:
             self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
         else:
@@ -3760,6 +4274,9 @@ Click to configure advanced options."""
 
     def zoom_in(self):
         """Zoom in (NEW: uses StateManager for undo/redo support)"""
+        if not self._use_legacy_canvas and self._det_canvas_view:
+            self._det_canvas_view.zoom_in()
+            return
         # Update state (creates history entry for undo)
         state = self.state_manager.get_state()
         new_canvas = state.canvas.zoom_by(1.2)
@@ -3769,6 +4286,9 @@ Click to configure advanced options."""
 
     def zoom_out(self):
         """Zoom out (NEW: uses StateManager for undo/redo support)"""
+        if not self._use_legacy_canvas and self._det_canvas_view:
+            self._det_canvas_view.zoom_out()
+            return
         # Update state (creates history entry for undo)
         state = self.state_manager.get_state()
         new_canvas = state.canvas.zoom_by(0.8)
@@ -3917,6 +4437,9 @@ Click to configure advanced options."""
                 annotated_img.save(annotated_path, "PNG", optimize=True)
             
             self.update_status(f"✅ Saved: {os.path.basename(self.current_image_path)}")
+            # Update in-memory cache and refresh the file-list button icon.
+            self._benchmark_result_cache[str(self.current_image_path)] = str(json_path)
+            self._update_file_list_button_cached_state(self.current_image_index, cached=True)
             return True
             
         except Exception as e:

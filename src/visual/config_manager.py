@@ -1,5 +1,6 @@
 # config_manager.py - CENTRALIZED CONFIGURATION
 import logging
+import sys
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Optional
 import json
@@ -7,7 +8,7 @@ from pathlib import Path
 
 @dataclass
 class OCRSettings:
-    engine: str = 'EasyOCR'
+    engine: str = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
     gpu: bool = False
     scale_factor: float = 2.0
     contrast_threshold: float = 0.3

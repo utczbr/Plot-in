@@ -49,6 +49,8 @@ def test_populate_view_tab_renders_dynamic_chart_classes(qapp):
     dummy.view_content_layout = QGridLayout(dummy.view_content_widget)
     dummy.view_checkboxes_pool = {}
     dummy.visibility_checks = {}
+    dummy._use_legacy_canvas = True
+    dummy._det_scene = None
     dummy.schedule_image_update = lambda *_args, **_kwargs: None
     dummy._add_view_checkbox = ModernChartAnalysisApp._add_view_checkbox.__get__(dummy, type(dummy))
 

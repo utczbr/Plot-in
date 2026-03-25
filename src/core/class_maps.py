@@ -14,38 +14,38 @@ CLASS_MAP_CLASSIFICATION: Dict[int, str] = {
 
 # Bar chart detection model
 CLASS_MAP_BAR: Dict[int, str] = {
-    0: 'chart', 1: 'bar', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'bar', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Box plot detection model
 CLASS_MAP_BOX: Dict[int, str] = {
-    0: 'chart', 1: 'box', 2: 'axis_title', 3: 'significance_marker', 4: 'range_indicator',
-    5: 'legend', 6: 'chart_title', 7: 'median_line', 8: 'axis_labels', 9: 'outlier'
+    0: 'chart', 1: 'box', 2: 'chart_title', 3: 'significance_marker', 4: 'range_indicator',
+    5: 'legend', 6: 'axis_title', 7: 'median_line', 8: 'axis_labels', 9: 'outlier'
 }
 
 # Line chart detection model
 CLASS_MAP_LINE: Dict[int, str] = {
-    0: 'chart', 1: 'data_point', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'data_point', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Scatter chart detection model (same structure as line)
 CLASS_MAP_SCATTER: Dict[int, str] = {
-    0: 'chart', 1: 'data_point', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'data_point', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Histogram detection model
 CLASS_MAP_HISTOGRAM: Dict[int, str] = {
-    0: 'chart', 1: 'bar', 2: 'axis_title', 3: 'legend',
-    4: 'chart_title', 5: 'data_label', 6: 'axis_labels'
+    0: 'chart', 1: 'bar', 2: 'chart_title', 3: 'legend',
+    4: 'axis_title', 5: 'data_label', 6: 'axis_labels'
 }
 
 # Heatmap detection model
 CLASS_MAP_HEATMAP: Dict[int, str] = {
-    0: 'chart', 1: 'cell', 2: 'axis_title', 3: 'color_bar',
-    4: 'legend', 5: 'chart_title', 6: 'data_label', 7: 'axis_labels',
+    0: 'chart', 1: 'cell', 2: 'chart_title', 3: 'color_bar',
+    4: 'legend', 5: 'axis_title', 6: 'data_label', 7: 'axis_labels',
     8: 'significance_marker'
 }
 
@@ -65,8 +65,8 @@ CLASS_MAP_PIE: Dict[int, str] = CLASS_MAP_PIE_POSE
 
 # Area chart detection model (shared structure with line; uses same detection model)
 CLASS_MAP_AREA: Dict[int, str] = {
-    0: 'chart', 1: 'data_point', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'data_point', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Backward compatibility alias

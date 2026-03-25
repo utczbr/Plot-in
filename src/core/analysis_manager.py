@@ -169,7 +169,8 @@ class AnalysisManager:
         )
     
     def run_single_analysis(self, image_path: str, conf: float, output_path: str,
-                            provenance: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+                            provenance: Optional[Dict[str, Any]] = None,
+                            manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[Dict[str, Any]]:
         """Run analysis on a single image."""
         pipeline = self._create_pipeline()
         if not pipeline:
@@ -181,6 +182,7 @@ class AnalysisManager:
             annotated=True, # GUI usually expects annotated
             advanced_settings=self._prepare_settings_for_pipeline(),
             provenance=provenance,
+            manual_detections=manual_detections,
         )
 
         if result:

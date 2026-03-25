@@ -715,7 +715,7 @@ class SettingsDialog(QDialog):
     def _get_default_settings(self):
         """Get default settings."""
         return {
-            'ocr_engine': 'Paddle',
+            'ocr_engine': 'Paddle' if sys.platform == 'darwin' else 'EasyOCR',
             'ocr_accuracy': 'Optimized',
             'pipeline_mode': 'hybrid',
             'spatial_method': 'LYLLA',

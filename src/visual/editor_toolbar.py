@@ -215,8 +215,16 @@ class EditorToolbar(QWidget):
     def set_available_classes(self, classes: list):
         """Update the class combo box with available detection classes."""
         current = self._class_combo.currentText()
-        self._class_combo.clear()
-        self._class_combo.addItems(classes)
+        self._class_combo.blockSignals(True)
+        try:
+            self._class_combo.clear()
+            if classes:  # Guard against empty list — prevents macOS NSRangeException
+                self._class_combo.addItems(classes)
+            else:
+                self._class_combo.addItem("(no classes)")
+                self._class_combo.setEnabled(False)
+        finally:
+            self._class_combo.blockSignals(False)
         idx = self._class_combo.findText(current)
         if idx >= 0:
             self._class_combo.setCurrentIndex(idx)

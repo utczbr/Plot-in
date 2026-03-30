@@ -79,6 +79,29 @@ from visual.profiling import PerformanceMonitor, timed
 from visual.pie_geometry import extract_slice_overlay_points
 from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 
+
+def safe_combo_populate(combo: "QComboBox", items: list[str], placeholder: str = "") -> None:
+    """
+    Populate a QComboBox safely on macOS/Cocoa.
+    Calling addItems([]) on PyQt5/PyQt6 macOS triggers NSRangeException — this guard prevents that.
+    
+    Args:
+        combo: QComboBox instance to populate
+        items: List of string items to add
+        placeholder: Optional placeholder text when items list is empty
+    """
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        if items:
+            combo.addItems(items)
+        elif placeholder:
+            combo.addItem(placeholder)
+            combo.setEnabled(False)
+    finally:
+        combo.blockSignals(False)
+
+
 CONFIG_FILE = "gui_config.json"
 
 from core.export_manager import ExportManager
@@ -3620,26 +3643,17 @@ Click to configure advanced options."""
         self._apply_protocol_filters()
 
     def _refresh_filter_combos(self):
+        """
+        Refresh protocol filter comboboxes with unique outcome/group values.
+        Uses safe_combo_populate to prevent macOS NSRangeException with empty lists.
+        """
         rows = (self.current_analysis_result or {}).get('protocol_rows', [])
         outcomes = sorted({r.get('outcome', '') for r in rows} - {''})
         groups = sorted({r.get('group', '') for r in rows} - {''})
 
-        from PyQt6.QtCore import QStringListModel
-
-        for combo, values in [
-            (self.proto_outcome_combo, outcomes),
-            (self.proto_group_combo, groups),
-        ]:
-            combo.blockSignals(True)
-            current = combo.currentText()
-            
-            # Use QStringListModel instead of clear()+addItem() to prevent 
-            # macOS NSRangeException crash from internal QListView
-            combo.setModel(QStringListModel(["All"] + values))
-            
-            idx = combo.findText(current)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
+        # Use safe_combo_populate to prevent macOS crash on empty list
+        safe_combo_populate(self.proto_outcome_combo, ["All"] + outcomes)
+        safe_combo_populate(self.proto_group_combo, ["All"] + groups)
 
     def _apply_protocol_filters(self):
         rows = (self.current_analysis_result or {}).get('protocol_rows', [])

@@ -43,11 +43,9 @@ class PieHandler(PolarChartHandler):
 
             if not pie_slices:
                 self.logger.warning("No pie slices detected")
-                return ExtractionResult(
-                    chart_type=self.get_chart_type(),
-                    coordinate_system=self.get_coordinate_system(),
-                    elements=[],
-                    orientation=orientation
+                return self._empty_result(
+                    reason="no_slices",
+                    diagnostics={"n_slices": 0, "n_legends": 0, "n_data_labels": 0, "n_keypoints": 0},
                 )
 
             h, w = image.shape[:2]
@@ -58,10 +56,36 @@ class PieHandler(PolarChartHandler):
             if self.classifier:
                 clf_result = self.classifier.classify(axis_labels, pie_slices, w, h)
                 classified_labels = clf_result.metadata
+                n_legends = len(classified_labels.get('legend_labels', []))
+                n_data_labels = len(classified_labels.get('data_labels', []))
+                
+                # Count keypoints for early-exit decision
+                n_keypoints = 0
+                for slice_det in pie_slices:
+                    kps = slice_det.get('keypoints')
+                    if kps is not None:
+                        kps = np.asarray(kps)
+                        if kps.ndim == 1 and kps.size >= 10:
+                            n_keypoints += max(0, len(kps) // 3 - 1)  # Exclude center keypoint
+                        elif kps.ndim == 2:
+                            n_keypoints += max(0, kps.shape[0] - 1)
+                
                 self.logger.info(
-                    f"Pie classification: {len(classified_labels['legend_labels'])} legends, "
-                    f"{len(classified_labels['data_labels'])} data labels"
+                    f"Pie classification: {n_legends} legends, "
+                    f"{n_data_labels} data labels, {n_keypoints} keypoints"
                 )
+                
+                # Early exit: zero detections across all categories
+                # Prevents bus error from NumPy/C-extensions on empty arrays
+                if n_keypoints == 0 and n_legends == 0 and n_data_labels == 0:
+                    self.logger.warning(
+                        "PieHandler: zero detections — returning empty ExtractionResult "
+                        "to avoid downstream bus error in RANSAC / legend matching."
+                    )
+                    return self._empty_result(
+                        reason="no_detections",
+                        diagnostics={"n_slices": len(pie_slices), "n_legends": 0, "n_data_labels": 0, "n_keypoints": 0},
+                    )
 
             # 2. Center Detection — §4.5: Try RANSAC circle fit from keypoints first
             boundary_kps = self._extract_boundary_keypoints(pie_slices)
@@ -240,6 +264,11 @@ class PieHandler(PolarChartHandler):
         """
         n = len(points)
         if n < 3:
+            # Need at least 3 points for a circle — return None for centroid fallback
+            self.logger.warning(
+                "_fit_circle_ransac: only %d keypoints — skipping RANSAC, "
+                "falling back to centroid heuristic.", n
+            )
             return None
 
         best_inlier_count = 0
@@ -574,3 +603,27 @@ class PieHandler(PolarChartHandler):
 
     def extract_values(self, img, detections, calibration, baselines, orientation) -> List[Dict]:
          return []
+
+    def _empty_result(self, reason: str = "no_detections", diagnostics: dict | None = None):
+        """
+        Returns a valid but empty ExtractionResult so the pipeline doesn't crash
+        and the UI receives a well-formed (zero-row) result it can display safely.
+        
+        Args:
+            reason: Reason code for the empty result ('no_slices', 'no_detections', etc.)
+            diagnostics: Optional diagnostic information about the empty result
+            
+        Returns:
+            ExtractionResult with empty elements list and diagnostic info
+        """
+        return ExtractionResult(
+            chart_type=self.get_chart_type(),
+            coordinate_system=self.get_coordinate_system(),
+            elements=[],
+            baselines=[],
+            calibration={},
+            diagnostics={"empty_reason": reason, **(diagnostics or {})},
+            errors=[f"PieHandler empty result: {reason}"],
+            warnings=[],
+            orientation=Orientation.VERTICAL,  # Default orientation for compatibility
+        )

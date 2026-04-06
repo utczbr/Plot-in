@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 import json
+from visual.qt_utils import safe_combo_populate
 
 class ModelOverridePanel(QGroupBox):
     """Panel for manual model override controls"""
@@ -67,7 +68,7 @@ class ModelOverridePanel(QGroupBox):
         
         # Combo box
         self.chart_type_combo = QComboBox()
-        self.chart_type_combo.addItems([
+        safe_combo_populate(self.chart_type_combo, [
             "🔍 Auto Detect",
             "📊 Bar Chart", 
             "📈 Line Chart",
@@ -96,7 +97,7 @@ class ModelOverridePanel(QGroupBox):
         
         # Mode selector
         self.processing_mode_combo = QComboBox()
-        self.processing_mode_combo.addItems([
+        safe_combo_populate(self.processing_mode_combo, [
             "⚡ Fast Mode (1.5s, ~95% accuracy)",
             "⚖️ Optimized Mode (2.5s, ~97% accuracy)", 
             "🎯 Precise Mode (3.8s, ~99% accuracy)"

@@ -15,6 +15,7 @@ import csv
 from pathlib import Path
 from typing import Dict, List, Any
 import time
+from visual.qt_utils import safe_combo_populate
 
 class DataExportThread(QThread):
     """Thread for exporting data without blocking UI"""
@@ -370,7 +371,7 @@ class AdvancedDataPanel(QTabWidget):
         
         # Export type selector
         self.export_type_combo = QComboBox()
-        self.export_type_combo.addItems(["CSV", "JSON", "TXT"])
+        safe_combo_populate(self.export_type_combo, ["CSV", "JSON", "TXT"])
         export_layout.addWidget(QLabel("Export as:"))
         export_layout.addWidget(self.export_type_combo)
         

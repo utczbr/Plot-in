@@ -29,11 +29,13 @@ class ModelManager:
     
     @staticmethod
     def _get_providers():
+        import platform
         available = set(ort.get_available_providers())
         providers = []
-        if 'CUDAExecutionProvider' in available:
+        is_mac = platform.system() == 'Darwin'
+        if not is_mac and 'CUDAExecutionProvider' in available:
             providers.append('CUDAExecutionProvider')
-        if 'CoreMLExecutionProvider' in available:
+        if is_mac and 'CoreMLExecutionProvider' in available:
             providers.append('CoreMLExecutionProvider')
         providers.append('CPUExecutionProvider')
         return providers

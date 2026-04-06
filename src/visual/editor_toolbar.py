@@ -220,14 +220,15 @@ class EditorToolbar(QWidget):
         """Update the class combo box with available detection classes.
 
         Preserves the current selection when the same class is still present
-        in the new list. Resets to index 0 otherwise (e.g. after Reset or a
-        chart-type change), so the combo always shows a valid class.
+        in the new list. Resets to index 0 otherwise.
 
-        Uses QStringListModel.setStringList() for an atomic batch update so
-        macOS/Cocoa never sees the intermediate empty-list state that triggers
-        NSRangeException via endInsertRows → QItemSelectionModel → NSArray.
+        The combo is hidden during the model update to prevent the Cocoa
+        NSArray crash: setStringList fires endResetModel → QComboBox tries
+        setCurrentIndex(0) → NSArray access on still-reset list → crash.
         """
         current = self._class_combo.currentText()
+        was_visible = self._class_combo.isVisible()
+        self._class_combo.setVisible(False)  # suspend Cocoa native-list updates
         self._class_combo.blockSignals(True)
         try:
             if classes:
@@ -238,8 +239,9 @@ class EditorToolbar(QWidget):
                 self._class_combo.setEnabled(False)
         finally:
             self._class_combo.blockSignals(False)
+            if was_visible:
+                self._class_combo.setVisible(True)
         idx = self._class_combo.findText(current)
-        # If previous selection is still in the list, restore it; otherwise reset to 0.
         self._class_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     @property

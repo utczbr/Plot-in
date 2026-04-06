@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QButtonGroup, QComboBox, QToolButton, QSizePolicy, QFrame,
@@ -125,10 +125,14 @@ class EditorToolbar(QWidget):
         self._class_combo.setToolTip("Detection class for new boxes")
         self._class_combo.setMinimumWidth(100)
         self._class_combo.setMaximumWidth(160)
-        self._class_combo.addItems([
+        # Use QStringListModel so all updates are atomic (avoids macOS
+        # NSRangeException that fires when addItems() is called after clear():
+        # endInsertRows → QItemSelectionModel → empty NSArray crash).
+        self._class_model = QStringListModel([
             "bar", "scatter", "data_point", "chart_title",
             "axis_title", "scale_label", "legend", "tick_label",
-        ])
+        ], self)
+        self._class_combo.setModel(self._class_model)
         self._class_combo.currentTextChanged.connect(self.create_class_changed)
         row2.addWidget(self._class_combo)
 
@@ -218,15 +222,19 @@ class EditorToolbar(QWidget):
         Preserves the current selection when the same class is still present
         in the new list. Resets to index 0 otherwise (e.g. after Reset or a
         chart-type change), so the combo always shows a valid class.
+
+        Uses QStringListModel.setStringList() for an atomic batch update so
+        macOS/Cocoa never sees the intermediate empty-list state that triggers
+        NSRangeException via endInsertRows → QItemSelectionModel → NSArray.
         """
         current = self._class_combo.currentText()
         self._class_combo.blockSignals(True)
         try:
-            self._class_combo.clear()
-            if classes:  # Guard against empty list — prevents macOS NSRangeException
-                self._class_combo.addItems(classes)
+            if classes:
+                self._class_model.setStringList(classes)
+                self._class_combo.setEnabled(True)
             else:
-                self._class_combo.addItem("(no classes)")
+                self._class_model.setStringList(["(no classes)"])
                 self._class_combo.setEnabled(False)
         finally:
             self._class_combo.blockSignals(False)

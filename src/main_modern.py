@@ -83,21 +83,27 @@ from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 def safe_combo_populate(combo: "QComboBox", items: list[str], placeholder: str = "") -> None:
     """
     Populate a QComboBox safely on macOS/Cocoa.
-    Calling addItems([]) on PyQt5/PyQt6 macOS triggers NSRangeException — this guard prevents that.
+    Uses QStringListModel to atomically update the list, avoiding the empty-state
+    NSRangeException that is triggered by clear() followed by addItems().
     
     Args:
         combo: QComboBox instance to populate
         items: List of string items to add
         placeholder: Optional placeholder text when items list is empty
     """
+    import PyQt6.QtCore as QtCore
+    new_list = items if items else ([placeholder] if placeholder else [])
+    
     combo.blockSignals(True)
     try:
-        combo.clear()
-        if items:
-            combo.addItems(items)
-        elif placeholder:
-            combo.addItem(placeholder)
-            combo.setEnabled(False)
+        model = combo.model()
+        if isinstance(model, QtCore.QStringListModel):
+            model.setStringList(new_list)
+        else:
+            new_model = QtCore.QStringListModel(new_list, combo)
+            combo.setModel(new_model)
+        
+        combo.setEnabled(bool(items))
     finally:
         combo.blockSignals(False)
 
@@ -3008,19 +3014,13 @@ Click to configure advanced options."""
             self.protocol_table.blockSignals(False)
 
         if hasattr(self, 'proto_outcome_combo'):
-            self.proto_outcome_combo.blockSignals(True)
-            self.proto_outcome_combo.clear()
-            self.proto_outcome_combo.blockSignals(False)
+            safe_combo_populate(self.proto_outcome_combo, [])
             
         if hasattr(self, 'proto_group_combo'):
-            self.proto_group_combo.blockSignals(True)
-            self.proto_group_combo.clear()
-            self.proto_group_combo.blockSignals(False)
+            safe_combo_populate(self.proto_group_combo, [])
             
         if hasattr(self, 'proto_status_combo'):
-            self.proto_status_combo.blockSignals(True)
-            self.proto_status_combo.clear()
-            self.proto_status_combo.blockSignals(False)
+            safe_combo_populate(self.proto_status_combo, [])
 
     def _update_ui_with_results(self):
         logging.debug("_update_ui_with_results called")

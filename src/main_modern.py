@@ -83,17 +83,24 @@ from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 def safe_combo_populate(combo: "QComboBox", items: list[str], placeholder: str = "") -> None:
     """
     Populate a QComboBox safely on macOS/Cocoa.
-    Uses QStringListModel to atomically update the list, avoiding the empty-state
-    NSRangeException that is triggered by clear() followed by addItems().
-    
-    Args:
-        combo: QComboBox instance to populate
-        items: List of string items to add
-        placeholder: Optional placeholder text when items list is empty
+
+    The macOS crash path:
+        setStringList / clear+addItems
+            → beginResetModel / endResetModel
+                → QComboBox::setCurrentIndex(0)
+                    → QItemSelectionModel::select
+                        → QListView::selectionChanged
+                            → Cocoa NSArray access on still-empty list
+                                → NSRangeException
+
+    Fix: hide the combo while the model update is in flight so that Cocoa
+    never drives a native list-view selection refresh during the reset.
     """
     import PyQt6.QtCore as QtCore
     new_list = items if items else ([placeholder] if placeholder else [])
-    
+
+    was_visible = combo.isVisible()
+    combo.setVisible(False)   # suspend Cocoa native-list updates
     combo.blockSignals(True)
     try:
         model = combo.model()
@@ -102,10 +109,11 @@ def safe_combo_populate(combo: "QComboBox", items: list[str], placeholder: str =
         else:
             new_model = QtCore.QStringListModel(new_list, combo)
             combo.setModel(new_model)
-        
         combo.setEnabled(bool(items))
     finally:
         combo.blockSignals(False)
+        if was_visible:
+            combo.setVisible(True)
 
 
 CONFIG_FILE = "gui_config.json"

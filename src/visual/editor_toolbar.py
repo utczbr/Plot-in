@@ -237,12 +237,14 @@ class EditorToolbar(QWidget):
             else:
                 self._class_model.setStringList(["(no classes)"])
                 self._class_combo.setEnabled(False)
+            # Restore selection while combo is still hidden and signals blocked
+            # to prevent macOS Cocoa NSRangeException on the native list-view.
+            idx = self._class_combo.findText(current)
+            self._class_combo.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self._class_combo.blockSignals(False)
             if was_visible:
                 self._class_combo.setVisible(True)
-        idx = self._class_combo.findText(current)
-        self._class_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     @property
     def selected_class(self) -> str:

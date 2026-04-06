@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, QSize, Qt, QThread, QMutex
 from PyQt6.QtGui import QFont, QIcon, QCloseEvent
+from visual.qt_utils import safe_combo_populate
 
 class SettingsDialog(QDialog):
     settings_changed = pyqtSignal(dict)
@@ -77,7 +78,7 @@ class SettingsDialog(QDialog):
         presets_layout.addWidget(presets_label)
 
         self.presets_combo = QComboBox()
-        self.presets_combo.addItems(self.presets.keys())
+        safe_combo_populate(self.presets_combo, list(self.presets.keys()))
         presets_layout.addWidget(self.presets_combo)
 
         load_preset_btn = QPushButton("Load Preset")
@@ -148,12 +149,12 @@ class SettingsDialog(QDialog):
         
         engine_layout.addWidget(QLabel("OCR Engine:"), 0, 0)
         self.ocr_engine_combo = QComboBox()
-        self.ocr_engine_combo.addItems(['Paddle', 'Paddle_docs', 'TesseractOCR', 'EasyOCR'])
+        safe_combo_populate(self.ocr_engine_combo, ['Paddle', 'Paddle_docs', 'TesseractOCR', 'EasyOCR'])
         engine_layout.addWidget(self.ocr_engine_combo, 0, 1)
 
         engine_layout.addWidget(QLabel("OCR Accuracy:"), 1, 0)
         self.ocr_accuracy_combo = QComboBox()
-        self.ocr_accuracy_combo.addItems(['Fast', 'Optimized', 'Precise'])
+        safe_combo_populate(self.ocr_accuracy_combo, ['Fast', 'Optimized', 'Precise'])
         engine_layout.addWidget(self.ocr_accuracy_combo, 1, 1)
 
         self.ocr_engine_combo.currentTextChanged.connect(self._update_ocr_accuracy_state)
@@ -347,7 +348,7 @@ class SettingsDialog(QDialog):
 
         grid.addWidget(QLabel("Calibration Method:"), 0, 0)
         self.calibration_method_combo = QComboBox()
-        self.calibration_method_combo.addItems(['Linear', 'Adaptive', 'PROSAC'])
+        safe_combo_populate(self.calibration_method_combo, ['Linear', 'Adaptive', 'PROSAC'])
         grid.addWidget(self.calibration_method_combo, 0, 1)
         
         grid.addWidget(QLabel("Minimum R² for Good Calibration:"), 1, 0)
@@ -395,27 +396,27 @@ class SettingsDialog(QDialog):
         # Pipeline Mode (SOTA feature)
         method_layout.addWidget(QLabel("Pipeline Mode:"), 0, 0)
         self.pipeline_mode_combo = QComboBox()
-        self.pipeline_mode_combo.addItems(['standard', 'vlm', 'chart_to_table', 'hybrid', 'auto'])
+        safe_combo_populate(self.pipeline_mode_combo, ['standard', 'vlm', 'chart_to_table', 'hybrid', 'auto'])
         self.pipeline_mode_combo.setToolTip("Select the overall pipeline routing strategy (SOTA)")
         method_layout.addWidget(self.pipeline_mode_combo, 0, 1)
 
         # Spatial Method
         method_layout.addWidget(QLabel("Spatial Method:"), 1, 0)
         self.spatial_method_combo = QComboBox()
-        self.spatial_method_combo.addItems(['Diagonal', 'LYLAA-Reduced', 'LYLLA'])
+        safe_combo_populate(self.spatial_method_combo, ['Diagonal', 'LYLAA-Reduced', 'LYLLA'])
         method_layout.addWidget(self.spatial_method_combo, 1, 1)
 
         # Scatter Subpixel Mode (SOTA feature)
         method_layout.addWidget(QLabel("Scatter Subpixel Mode:"), 2, 0)
         self.scatter_subpixel_combo = QComboBox()
-        self.scatter_subpixel_combo.addItems(['otsu', 'gaussian'])
+        safe_combo_populate(self.scatter_subpixel_combo, ['otsu', 'gaussian'])
         self.scatter_subpixel_combo.setToolTip("Algorithm used to refine scatter point centers natively")
         method_layout.addWidget(self.scatter_subpixel_combo, 2, 1)
 
         # Bar Association Mode (SOTA feature)
         method_layout.addWidget(QLabel("Bar Association Mode:"), 3, 0)
         self.bar_association_combo = QComboBox()
-        self.bar_association_combo.addItems(['heuristic', 'metric_learning'])
+        safe_combo_populate(self.bar_association_combo, ['heuristic', 'metric_learning'])
         self.bar_association_combo.setToolTip("Method used to associate text labels to bars")
         method_layout.addWidget(self.bar_association_combo, 3, 1)
 

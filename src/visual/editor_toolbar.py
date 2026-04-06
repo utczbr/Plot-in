@@ -139,7 +139,7 @@ class EditorToolbar(QWidget):
         row2.addWidget(sep2)
 
         # Apply button
-        self._btn_apply = QPushButton("✅ Apply && Re-Extract")
+        self._btn_apply = QPushButton("✅ Apply & Re-Extract")
         self._btn_apply.setToolTip("Apply edits and re-run data extraction (Ctrl+Enter)")
         self._btn_apply.setEnabled(False)
         self._btn_apply.setStyleSheet(
@@ -213,7 +213,12 @@ class EditorToolbar(QWidget):
         self._status_label.setText(text)
 
     def set_available_classes(self, classes: list):
-        """Update the class combo box with available detection classes."""
+        """Update the class combo box with available detection classes.
+
+        Preserves the current selection when the same class is still present
+        in the new list. Resets to index 0 otherwise (e.g. after Reset or a
+        chart-type change), so the combo always shows a valid class.
+        """
         current = self._class_combo.currentText()
         self._class_combo.blockSignals(True)
         try:
@@ -226,8 +231,8 @@ class EditorToolbar(QWidget):
         finally:
             self._class_combo.blockSignals(False)
         idx = self._class_combo.findText(current)
-        if idx >= 0:
-            self._class_combo.setCurrentIndex(idx)
+        # If previous selection is still in the list, restore it; otherwise reset to 0.
+        self._class_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     @property
     def selected_class(self) -> str:

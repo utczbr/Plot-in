@@ -363,9 +363,18 @@ class EditableRectItem(QGraphicsRectItem):
 
         if not delta.isNull():
             old_xyxy = self.current_xyxy()
-            self.setPos(self.pos() + delta)
+            new_pos = self.pos() + delta
+            # Clamp so the box stays within image bounds (Fix E-3)
             scene = self.scene()
-            if hasattr(scene, "item_edited"):
+            if scene:
+                img = scene.sceneRect()
+                r = self.rect()
+                new_pos.setX(max(img.left(), min(new_pos.x(), img.right() - r.width())))
+                new_pos.setY(max(img.top(), min(new_pos.y(), img.bottom() - r.height())))
+            self.setPos(new_pos)
+            # Sync detection dict so highlight_item_by_bbox can find the new coords
+            self.detection["xyxy"] = self.current_xyxy()
+            if scene and hasattr(scene, "item_edited"):
                 scene.item_edited.emit(self, old_xyxy, False)
             event.accept()
             return
@@ -429,26 +438,37 @@ class EditablePointItem(QGraphicsEllipseItem):
         super().__init__(-r, -r, r * 2, r * 2, parent)
         self.setPos(x, y)
         self.idx = idx
-        self.setBrush(QBrush(QColor(255, 255, 0))) # yellow
+        self.setBrush(QBrush(QColor(255, 255, 0)))  # yellow
         pen = QPen(Qt.GlobalColor.black)
         pen.setCosmetic(True)
         self.setPen(pen)
-        
+
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self._mode = EditorMode.VIEW
-        
+        # Pre-drag position snapshot, updated at mouse-press before Qt commits the move.
+        # This fixes the KP-2 bug where ItemPositionHasChanged fires *after* the position
+        # is committed, making old_pos == new_pos in the undo command.
+        self._drag_start_pos: QPointF = QPointF(x, y)
+
     def set_editor_mode(self, mode: EditorMode) -> None:
         self._mode = mode
         can_move = (mode == EditorMode.EDIT_KEYPOINTS)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, can_move)
-        
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        """Snapshot position before Qt moves us — ensures undo command has a valid old_pos."""
+        self._drag_start_pos = QPointF(self.pos())
+        super().mousePressEvent(event)
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             p = self.parentItem()
             if hasattr(p, "point_moved"):
-                p.point_moved(self.idx, self.pos())
+                # Pass the pre-drag snapshot as old_pos so MoveKeypointCommand
+                # stores distinct old/new positions and undo actually works.
+                p.point_moved(self.idx, self._drag_start_pos, self.pos())
         return super().itemChange(change, value)
 
 class PieSliceGroup(QGraphicsItemGroup):
@@ -534,19 +554,25 @@ class PieSliceGroup(QGraphicsItemGroup):
             line.setPen(self._pen)
             self._lines.append(line)
             
-    def point_moved(self, idx: int, pos: QPointF) -> None:
-        """Called by EditablePointItem when dragged. Emits scene.keypoint_moved with old/new pos."""
+    def point_moved(self, idx: int, old_pos: QPointF, new_pos: QPointF) -> None:
+        """Called by EditablePointItem when dragged.
+
+        Parameters
+        ----------
+        idx:     Index of the moved point in self.point_items.
+        old_pos: Position recorded at mouse-press (before Qt committed the move).
+                 Supplied by EditablePointItem._drag_start_pos to fix KP-2 where
+                 ItemPositionHasChanged fires after the position is committed, making
+                 a naive snapshot inside itemChange return new_pos == old_pos.
+        new_pos: Current (new) position after the move.
+        """
+        self._update_lines()
         if self._mode == EditorMode.EDIT_KEYPOINTS:
-            # Compute the old position from the current state before the update
             pt = self.point_items[idx] if idx < len(self.point_items) else None
             if pt is not None:
-                old_pos = QPointF(pt.pos())  # snapshot before line update
-                self._update_lines()
                 scene = self.scene()
                 if hasattr(scene, 'keypoint_moved'):
-                    scene.keypoint_moved.emit(pt, old_pos, pos)
-            else:
-                self._update_lines()
+                    scene.keypoint_moved.emit(pt, old_pos, new_pos)
         
     def set_highlighted(self, highlighted: bool) -> None:
         if highlighted:

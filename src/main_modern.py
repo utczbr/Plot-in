@@ -1761,31 +1761,41 @@ Click to configure advanced options."""
             return
         new_xyxy = item.current_xyxy()
         if old_xyxy != new_xyxy:
+            # Update detection dict in-place so highlight_item_by_bbox can locate
+            # the item by its new coords — the dict is the lookup key in DetectionScene.
+            item.detection["xyxy"] = list(new_xyxy)
+
             from visual.detection_editor_state import MoveCommand, ResizeCommand
             cmd_cls = ResizeCommand if is_resize else MoveCommand
-            # Correct signature: (item, old_xyxy, new_xyxy)
             self._editor_state.push(cmd_cls(item, old_xyxy, new_xyxy))
-            self._update_scene_display(new_xyxy, item.class_name)
+
+            # Only update the highlight — do NOT call _update_scene_display() here.
+            # That function reloads all items from current_analysis_result['detections']
+            # (still holding pre-edit bboxes), which would destroy the scene items that
+            # the undo-stack commands now reference.
+            self._refresh_scene_highlight(new_xyxy, item.class_name)
 
     def _on_scene_item_deleted(self, item):
         """Handle delete action from context menu."""
         if not self._editor_state or not self._det_scene:
             return
         from visual.detection_editor_state import DeleteCommand
-        # Correct signature: (scene, item)
         self._editor_state.push(DeleteCommand(self._det_scene, item))
-        self._update_scene_display()
+        # Do NOT call _update_scene_display() — DeleteCommand.redo() already
+        # removed the item from the scene and from _rect_items.
+        self._det_scene.clear_highlight()
 
     def _on_scene_item_class_changed(self, item, new_class):
         """Handle class change from context menu."""
         if not self._editor_state or not self._det_scene:
             return
         from visual.detection_editor_state import ChangeClassCommand
-        # Correct signature: (item, old_class, new_class, colors_map)
         colors_map = getattr(self._det_scene, '_colors', {})
         old_class = item.class_name
         self._editor_state.push(ChangeClassCommand(item, old_class, new_class, colors_map))
-        self._update_scene_display(item.current_xyxy(), new_class)
+        # ChangeClassCommand.redo() updated class_name and colors in-place.
+        # Only refresh the highlight.
+        self._refresh_scene_highlight(item.current_xyxy(), new_class)
 
     def _on_scene_item_created(self, class_name, xyxy):
         """Handle new box drawn via rubber band."""
@@ -1831,19 +1841,43 @@ Click to configure advanced options."""
     def _on_editor_undo(self):
         if self._editor_state:
             self._editor_state.undo()
-            self._update_scene_display(self.highlighted_bbox,
-                                       self.get_class_for_bbox(self.highlighted_bbox))
+            self._refresh_scene_highlight(self.highlighted_bbox,
+                                          self.get_class_for_bbox(self.highlighted_bbox))
 
     def _on_editor_redo(self):
         if self._editor_state:
             self._editor_state.redo()
-            self._update_scene_display(self.highlighted_bbox,
-                                       self.get_class_for_bbox(self.highlighted_bbox))
+            self._refresh_scene_highlight(self.highlighted_bbox,
+                                          self.get_class_for_bbox(self.highlighted_bbox))
+
+    def _refresh_scene_highlight(self, bbox=None, class_name=None):
+        """Update only the highlight in the scene without reloading detections.
+
+        Lightweight alternative to _update_scene_display() for use inside
+        edit-signal handlers where scene items are already at correct positions.
+        Calling _update_scene_display() in those handlers would reload all items
+        from current_analysis_result['detections'] (still holding pre-edit bboxes),
+        destroying the live scene items referenced by undo-stack commands.
+        """
+        if not self._det_scene:
+            return
+        if bbox:
+            self._det_scene.highlight_item_by_bbox(bbox, class_name)
+        else:
+            self._det_scene.clear_highlight()
 
     def _on_editor_apply(self):
         """Apply edits and re-run extraction (Phase 4)."""
         if not self._det_scene or not self.current_analysis_result:
             return
+
+        # Flush any text or numeric edits made in the OCR/Data tabs back into
+        # current_analysis_result before exporting, so user corrections in those
+        # tabs are not silently discarded when the pipeline re-runs OCR from scratch.
+        try:
+            self._update_results_from_gui()
+        except Exception:
+            logging.debug("_update_results_from_gui failed before apply", exc_info=True)
 
         # export_detections() returns Dict[class_name, List[dict]] — pass it directly
         manual_detections = self._det_scene.export_detections()
@@ -1900,8 +1934,9 @@ Click to configure advanced options."""
             self._editor_toolbar.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
+        self.is_processing = True          # prevent concurrent file-list clicks (Fix A-1)
         self.analysis_thread.start()
-        
+
         self.statusBar().showMessage("🔄 Re-extracting with manual detections...", 3000)
 
     def _on_editor_reset(self):
@@ -1910,6 +1945,24 @@ Click to configure advanced options."""
             self._editor_state.clear()
         if hasattr(self, '_scene_first_fit_done'):
             delattr(self, '_scene_first_fit_done')
+
+        # Restore interaction mode to VIEW (Fix R-2)
+        from visual.detection_scene import EditorMode
+        if self._det_canvas_view:
+            self._det_canvas_view.set_mode(EditorMode.VIEW)
+        if self._editor_toolbar:
+            self._editor_toolbar.set_mode(EditorMode.VIEW)
+
+        # Reset the class selector to the chart type's default list (Fix R-1)
+        if self._editor_toolbar and self.current_analysis_result:
+            chart_type = str(
+                self.current_analysis_result.get('chart_type', '')
+            ).lower()
+            classes = self._CHART_TYPE_CLASSES.get(
+                chart_type, self._CHART_TYPE_CLASSES_FALLBACK
+            )
+            self._editor_toolbar.set_available_classes(classes)
+
         self._update_scene_display()
         self.statusBar().showMessage("🔄 Detections reset to auto-detected", 2000)
 
@@ -1929,10 +1982,10 @@ Click to configure advanced options."""
     _CHART_TYPE_CLASSES: dict = {
         'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'scale_label', 'tick_label'],
         'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'line':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'scatter':   ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
         'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'box':       ['box', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'box':       ['box', 'outlier', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
         'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
         'heatmap':   ['cell', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'color_bar', 'scale_label'],
     }
@@ -2001,15 +2054,26 @@ Click to configure advanced options."""
                 visible = checkbox.isChecked() if hasattr(checkbox, 'isChecked') else True
                 self._det_scene.set_class_visible(class_name, visible)
 
-        # 4. Baselines
+        # 4. Baselines — read the scalar already resolved by normalization.
+        # current_analysis_result['baselines'] is a list from the pipeline;
+        # _normalize_result_payload_for_gui converts it to 'baseline_coord' (float).
+        # The old isinstance(…, dict) check was always False for normal pipeline output.
         if self.current_analysis_result:
-            baselines_data = self.current_analysis_result.get('baselines', {})
-            if isinstance(baselines_data, dict):
-                coords = baselines_data.get('baselines', [])
-                orientation = baselines_data.get('orientation', 'horizontal')
-                for coord_val in (coords if isinstance(coords, list) else []):
-                    if isinstance(coord_val, (int, float)):
-                        self._det_scene.set_baseline(float(coord_val), orientation)
+            baseline_coord = self.current_analysis_result.get('baseline_coord')
+            if baseline_coord is None:
+                # Legacy fallback: scale_info may carry the coordinate
+                baseline_coord = self.current_analysis_result.get(
+                    'scale_info', {}
+                ).get('baseline_y_coord')
+            if isinstance(baseline_coord, (int, float)):
+                orientation_str = str(
+                    self.current_analysis_result.get('orientation', 'vertical')
+                ).lower()
+                # A vertical chart has a horizontal baseline line (y-axis zero)
+                scene_orientation = (
+                    'horizontal' if orientation_str == 'vertical' else 'vertical'
+                )
+                self._det_scene.set_baseline(float(baseline_coord), scene_orientation)
 
         # 5. Highlight
         if highlight_bbox:
@@ -4333,23 +4397,49 @@ Click to configure advanced options."""
         key = event.key()
         modifiers = event.modifiers()
         
-        # NEW: Undo/Redo shortcuts
+        # Undo/Redo shortcuts — prioritise the detection-edit stack when active.
         if modifiers == Qt.KeyboardModifier.ControlModifier:
             if key == Qt.Key.Key_Z:
-                # Ctrl+Z: Undo
-                if self.state_manager.undo():
+                editor_active = (
+                    self._editor_toolbar is not None
+                    and self._editor_toolbar.isVisible()
+                    and self._editor_state is not None
+                    and self._editor_state.can_undo
+                )
+                if editor_active:
+                    self._on_editor_undo()
+                    self.statusBar().showMessage("⏪ Undo detection edit", 2000)
+                elif self.state_manager.undo():
                     self.statusBar().showMessage("⏪ Undo", 2000)
                 else:
                     self.statusBar().showMessage("⚠️ Nothing to undo", 2000)
                 return
             elif key == Qt.Key.Key_Y:
-                # Ctrl+Y: Redo
-                if self.state_manager.redo():
+                editor_active = (
+                    self._editor_toolbar is not None
+                    and self._editor_toolbar.isVisible()
+                    and self._editor_state is not None
+                    and self._editor_state.can_redo
+                )
+                if editor_active:
+                    self._on_editor_redo()
+                    self.statusBar().showMessage("⏩ Redo detection edit", 2000)
+                elif self.state_manager.redo():
                     self.statusBar().showMessage("⏩ Redo", 2000)
                 else:
                     self.statusBar().showMessage("⚠️ Nothing to redo", 2000)
                 return
-        
+            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                # Ctrl+Enter: Apply & Re-Extract when the editor is active and dirty
+                if (
+                    self._editor_toolbar is not None
+                    and self._editor_toolbar.isVisible()
+                    and self._editor_state is not None
+                    and self._editor_state.is_dirty
+                ):
+                    self._on_editor_apply()
+                    return
+
         # Existing keyboard shortcuts
         if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
             self.zoom_in()

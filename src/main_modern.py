@@ -110,6 +110,10 @@ def safe_combo_populate(combo: "QComboBox", items: list[str], placeholder: str =
             new_model = QtCore.QStringListModel(new_list, combo)
             combo.setModel(new_model)
         combo.setEnabled(bool(items))
+        # Explicitly set index while hidden+blocked so Cocoa never sees
+        # a deferred selection change after we restore visibility.
+        if new_list:
+            combo.setCurrentIndex(0)
     finally:
         combo.blockSignals(False)
         if was_visible:

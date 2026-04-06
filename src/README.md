@@ -1,6 +1,6 @@
 # Chart Analysis System: Runtime Reference
 
-Last verified against repository code and tests: **March 1, 2026**.
+Last verified against repository code and tests: **April 5, 2026**.
 
 ## Audience
 This README is for engineers and agent contributors working on runtime behavior, contracts, and protocol outputs.
@@ -56,7 +56,7 @@ This README is for engineers and agent contributors working on runtime behavior,
 | 3. Element detection | chart type + model + class map | runs model with per-type output parser (`bbox`/`pose`) | detections by class key | missing model -> empty detections; histogram fallback chain attempts lower confidence and bar model | `tests/pipelines_tests/test_chart_pipeline.py` |
 | 4. Text layout detection | image + optional doclayout model | optional doclayout text-region detection | `layout_text_regions` | model unavailable or disabled -> empty list | `services/text_layout_service.py` |
 | 5. Orientation | chart elements + chart type | orientation detection service (variance/aspect/spatial fallback) | `Orientation` enum | non-cartesian-like types default vertical in pipeline routing path | `services/orientation_detection_service.py` |
-| 6. OCR | axis labels + doclayout regions | batched OCR; dedupe doclayout overlap with axis labels | text/confidence annotated into detections | OCR exceptions logged; run continues | `chart_pipeline.py`, OCR engine factory |
+| 6. OCR | axis labels + doclayout regions | batched OCR (Paddle default on macOS, EasyOCR others); dedupe doclayout overlap with axis labels | text/confidence annotated into detections | OCR exceptions logged; run continues | `chart_pipeline.py`, OCR engine factory |
 | 7. Handler orchestration | `HandlerContext` | chart-type handler executes extraction contract | `ExtractionResult` | handler errors return structured error result; pipeline returns `None` on fatal | orchestrator + handler tests |
 | 8. Result formatting/persistence | extraction result + detections | serialize to `PipelineResult`, attach provenance, save JSON/annotation | `*_analysis.json`, optional `*_annotated.png` | annotation write failure logged without stopping result | `chart_pipeline.py` |
 
@@ -83,7 +83,7 @@ Heatmap and Pie handlers implement fully custom `process()` methods (not the 7-s
 |---|---|---|---|
 | bar | `handlers/bar_handler.py` | Topological association of bars/labels/error bars/significance; uncertainty fields in extractor | Label association metric-learning active (`bar_association_mode='metric_learning'` default) via bootstrapped `.npz` weights; heuristic fallback available; GMM layout detection available (`bar_layout_detection='gmm'`); error bar validator retains 6 hardcoded thresholds |
 | line | `handlers/line_handler.py` | Point extraction with label/error associations | Value interpretation depends on calibration and baseline availability |
-| scatter | `handlers/scatter_handler.py` | x/y calibrated outputs; sub-pixel centroid refinement in extractor | Baseline sign convention fixed (both axes: `value = pixel − baseline`); dual-axis aliasing removed (missing calibration → `None` + warning); 2D Gaussian sub-pixel refinement active (`scatter_subpixel_mode='gaussian'` default) |
+| scatter | `handlers/scatter_handler.py` | x/y calibrated outputs with correct target axis assignment (fixes bug grouping all labels onto y-axis); sub-pixel centroid refinement in extractor | Baseline sign convention fixed (both axes: `value = pixel − baseline`); dual-axis aliasing removed (missing calibration → `None` + warning); 2D Gaussian sub-pixel refinement active (`scatter_subpixel_mode='gaussian'` default) |
 | box | `handlers/box_handler.py` | Specialized grouping path (`intersection_alignment`) and quartile/whisker logic | Five-number monotone projection enforced (sort-based; severe warning when correction > 10% of range); outliers inside whisker range rejected; geometric-center median fallback retained |
 | histogram | `handlers/histogram_handler.py` | Histogram-specific extraction with detector fallback chain | Orientation now uses `OrientationDetectionService` (parity with bar); bin contiguity validation added (`diagnostics['bin_contiguity']`); GMM gap analysis available via shared `src/utils/gmm_1d.py`; bin-edge vs. bin-center disambiguation is future work |
 | heatmap | `handlers/heatmap_handler.py` | Grid row/col clustering and CIELAB B-spline color-to-value mapping | 2-pass DBSCAN with cell-geometry-adaptive eps replaces fixed 1.5% image-size rule; CIELAB B-spline calibration with Brent inversion (`heatmap_color_mode='lab_spline'`); per-cell confidence in `element['value_confidence']`; legacy 4-tier HSV/BGR fallback preserved |
@@ -133,14 +133,20 @@ python3 src/analysis.py \
   --filter-group "Treatment"
 ```
 
-## GUI Protocol Review Flow
-- Load analysis result in GUI
+## GUI Features & Tooling
+
+### Protocol Review Flow
+- Load analysis result in GUI (analysis triggers automatically after OCR engine loads).
 - Protocol tab displays `protocol_rows`
 - Outcome/group/status filters apply table-level filtering
 - Editable protocol columns update row data and `review_status`
 - Protocol CSV export available from GUI action
 
-Primary implementation: `src/main_modern.py`
+### Validation & View Tools
+- **View Tab Measurement Tool**: Interactive measurement mode in `DetectionScene` and `EditorToolbar` to measure x and y values point-to-point or point-to-axis, mapped to data values using extraction scale.
+- **Thread Management**: Deep long-running analyses are safely orphaned on timeout rather than forcefully destroyed with `deleteLater()`, preventing `QThread: Destroyed while thread is still running` crashes.
+
+Primary implementation: `src/main_modern.py` and View/Protocol tabs.
 
 ## Validation And Evaluation
 
@@ -175,7 +181,7 @@ python3 -m pytest tests/strategies_tests/test_router.py
 ```
 
 ## CI Workflows
-- `.github/workflows/evaluation-tests.yml`: evaluation + validation test suite scope
+- `.github/workflows/evaluation-tests.yml`: evaluation + validation test suite scope (runs across multiple OS platforms including macOS).
 - `.github/workflows/installer-build.yml`: cross-platform installer artifact build and smoke tests
 
 ## Known Open Gaps (Confirmed)
@@ -227,7 +233,14 @@ python -m pip cache purge
 python -m pip install --no-cache-dir PyQt6==6.6.1
 ```
 
+### macOS Apple Silicon and ONNX Warnings
+If ONNX Runtime throws warnings about `CUDAExecutionProvider` failing to load on Apple Silicon, this is safely managed. The pipeline checks `platform.system() == 'Darwin'` to enforce `CoreMLExecutionProvider` and `CPUExecutionProvider` prior to loading sessions, bypassing unresolvable CUDA provider queries.
+
+### macOS Cross-Platform Paths and `NSRangeException` in GUI
+- **Hardcoded paths**: File paths and asset loading have been updated to resolve dynamically across platforms, ensuring configurations and local models load properly regardless of OS.
+- **`NSRangeException`**: If the GUI crashes when populating uncalibrated/undetected items into a dropdown, the historical issue was `QComboBox.clear()` on macOS causing bounds errors. `src/main_modern.py` now fully replaces this clear/add sequence with `QStringListModel` bindings to ensure stable UI repopulation on Apple platforms.
+
 ## Documentation Integrity Rule
 Any major behavior claim in docs must reference at least one current code path and one test (where available).
 Use `src/docs/DOC_ACCURACY_CHECKLIST.md` as the verification checklist.
-Use `src/docs/README.md` as the active documentation index (runtime docs vs archived docs).
+Use `src/docs/context.md` as the active documentation index.

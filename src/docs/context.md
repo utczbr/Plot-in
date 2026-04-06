@@ -1,6 +1,6 @@
 # Context - Chart Analysis Runtime Documentation (Verified)
 
-Last verified: **March 1, 2026**.
+Last verified: **April 5, 2026**.
 
 ## Purpose
 This document is the runtime truth for the chart-analysis pipeline. It is scoped to implemented behavior and tested contracts, not proposal content.
@@ -16,7 +16,8 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
   - `src/handlers/base.py`
 - Type/model mapping:
   - `src/core/enums.py`
-  - `src/core/config.py`
+  - `src/core/config.py` (Default configs rely on repository-relative paths instead of absolute local paths to guarantee cross-platform replication)
+  - `src/core/model_manager.py` (ONNX session singleton & OS-aware execution provider resolution)
   - `src/core/class_maps.py`
   - `src/core/chart_registry.py`
 - Input/provenance:
@@ -75,7 +76,7 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
   - Chart type
   - Detection model and class map
 - Core stage:
-  - `_detect_elements` loads chart-specific model and class map.
+  - `_detect_elements` loads chart-specific model and class map. (Note: YOLO runtime class mapping has been corrected to account for swapped chart/axis title indices in model weights).
   - Pie uses pose output; others use bbox output.
   - Histogram has explicit fallback chain.
 - Outputs:
@@ -86,6 +87,7 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
     2. fallback to bar model and remap class ids
 - Failure modes:
   - Missing model returns empty detections for that stage.
+  - Zero-extraction cascades and empty UI poplulations are now caught by robust `QStringListModel` replacements, averting native macOS `NSRangeException` (`NSArray`) crashes on `QComboBox` updates.
 - Tests:
   - `tests/pipelines_tests/test_chart_pipeline.py`
   - `tests/core_tests/test_inference_pose_parsing.py`
@@ -115,6 +117,7 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
   - `axis_labels` detections
   - Optional doclayout detections (`layout_text_regions`)
 - Core stage:
+  - Platform-aware OCR engine selection dictates engine (PaddleOCR is the default strictly on macOS; EasyOCR on Linux/Windows).
   - `_process_ocr` merges axis labels with non-duplicate doclayout text regions.
   - Uses `TextLayoutService.merge_with_axis_labels` with IoU dedupe.
 - Outputs:
@@ -240,7 +243,7 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
 |---|---|---|---|---|---|---|
 | `bar` | `detect_bar.onnx`, `CLASS_MAP_BAR` | `BarHandler` -> `BarExtractor` | Cartesian flow with primary calibration + baseline axis (`y` or `x`) | Invalid orientation defaults to vertical; missing baseline/calibration yields empty list | Label association quality depends on classified axis labels | `src/handlers/bar_handler.py`, `src/extractors/bar_extractor.py`, `tests/core_tests/test_handler_contracts.py` |
 | `line` | `detect_line.onnx`, `CLASS_MAP_LINE` | `LineHandler` -> `LineExtractor` | Uses axis-specific calibration model + baseline resolution | Maps `line` detections to `data_point`; missing calibration yields empty list | Legacy type field is `line_segment`; ordering quality depends on detections | `src/handlers/line_handler.py`, `src/extractors/line_extractor.py`, `tests/core_tests/test_handler_contracts.py` |
-| `scatter` | `detect_scatter.onnx`, `CLASS_MAP_SCATTER` | `ScatterHandler` -> `ScatterExtractor` | Classification separates `x`/`y` explicitly; Dual calibration (`x`/`y`) preferred | Falls back across `primary/secondary`; can operate with pixel-only coordinates | Baseline sign fixed (both axes: `value = pixel − baseline`); dual-axis aliasing removed (missing calibration → `None`); 2D Gaussian sub-pixel (`scatter_subpixel_mode='gaussian'`) available | `src/handlers/scatter_handler.py`, `src/extractors/scatter_extractor.py`, `tests/core_tests/test_handler_contracts.py` |
+| `scatter` | `detect_scatter.onnx`, `CLASS_MAP_SCATTER` | `ScatterHandler` -> `ScatterExtractor` | Classification separates `x`/`y` explicitly (resolves prior bug grouping both to y-axis); Dual calibration (`x`/`y`) preferred | Falls back across `primary/secondary`; can operate with pixel-only coordinates | Baseline sign fixed (both axes: `value = pixel − baseline`); dual-axis aliasing removed (missing calibration → `None`); 2D Gaussian sub-pixel (`scatter_subpixel_mode='gaussian'`) available | `src/handlers/scatter_handler.py`, `src/extractors/scatter_extractor.py`, `tests/core_tests/test_handler_contracts.py` |
 | `box` | `detect_box.onnx`, `CLASS_MAP_BOX` | `BoxHandler` -> `BoxExtractor` | Cartesian with custom process override | Uses `intersection_alignment` topology path when recommended | Five-number monotone projection enforced (`_enforce_monotone_summary`); outliers inside whisker range rejected (`_validate_outliers`); severe warning when correction > 10% of range | `src/handlers/box_handler.py`, `src/extractors/box_extractor.py`, `tests/core_tests/test_handler_contracts.py` |
 | `histogram` | `detect_histogram.onnx`, `CLASS_MAP_HISTOGRAM` | `HistogramHandler` -> `HistogramExtractor` | Cartesian primary calibration + baseline | Lower-confidence histogram retry -> bar-model fallback remap | Orientation via `OrientationDetectionService` (parity with bar); bin contiguity validation (`diagnostics['bin_contiguity']`); GMM gap analysis via `src/utils/gmm_1d.py` | `src/pipelines/chart_pipeline.py`, `src/handlers/histogram_handler.py`, `tests/pipelines_tests/test_chart_pipeline.py` |
 | `heatmap` | `detect_heatmap.onnx`, `CLASS_MAP_HEATMAP` | `HeatmapHandler` (grid) | CIELAB B-spline color calibration (`heatmap_color_mode='lab_spline'`); 4-tier legacy fallback | 2-pass DBSCAN with cell-geometry-adaptive eps; color-mapper fallback to uniform range; legacy HSV intensity last resort | Per-cell `value_confidence = exp(-d²/2σ²)`; `value_source` per element; `diagnostics['low_confidence_cells']` count | `src/handlers/heatmap_handler.py`, `src/services/color_mapping_service.py`, `tests/core_tests/test_orchestrator_registry.py` |

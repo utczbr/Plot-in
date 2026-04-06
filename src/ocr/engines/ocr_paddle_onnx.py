@@ -72,7 +72,12 @@ class PaddleOCREngine(BaseOCREngine):
         
         # Set execution providers based on GPU availability
         # Priority order: CUDA (GPU) → CPUExecutionProvider
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if use_gpu else ['CPUExecutionProvider']
+        import platform
+        is_mac = platform.system() == 'Darwin'
+        if use_gpu:
+            providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if is_mac else ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        else:
+            providers = ['CPUExecutionProvider']
         
         try:
             # Initialize detection model session

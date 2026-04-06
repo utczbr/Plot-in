@@ -2148,13 +2148,20 @@ Click to configure advanced options."""
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
                     config_data = json.load(f)
-                self.input_path_edit.setText(config_data.get("input_path", ""))
-                self.output_path_edit.setText(config_data.get("output_path", str(self._state_root / "output")))
+                input_path = config_data.get("input_path", "")
+                if input_path:
+                    input_path = str(Path(input_path).expanduser())
+                self.input_path_edit.setText(input_path)
+                
+                output_path = config_data.get("output_path", str(self._state_root / "output"))
+                if output_path:
+                    output_path = str(Path(output_path).expanduser())
+                self.output_path_edit.setText(output_path)
                 
                 # Migration logic for models_dir
                 models_dir_from_config = config_data.get("models_dir")
                 if models_dir_from_config:
-                    models_dir_path = Path(models_dir_from_config)
+                    models_dir_path = Path(models_dir_from_config).expanduser()
                     # If path points to "Modulos" (old name) and doesn't exist, try "models"
                     if not models_dir_path.exists() and "Modulos" in str(models_dir_path):
                         potential_new_path = self.base_path / "models"
@@ -2162,7 +2169,10 @@ Click to configure advanced options."""
                             config_data['models_dir'] = str(potential_new_path)
                             self.update_status("⚠️ Migrated config: 'Modulos' -> 'models'")
                 
-                self.models_dir_edit.setText(config_data.get("models_dir", self._default_models_dir()))
+                models_dir = config_data.get("models_dir", self._default_models_dir())
+                if models_dir:
+                    models_dir = str(Path(models_dir).expanduser())
+                self.models_dir_edit.setText(models_dir)
                 conf = config_data.get("confidence", 0.4)
                 self.conf_slider.setValue(int(conf * 10))
                 self.update_slider_label(self.conf_slider.value())
@@ -2956,6 +2966,14 @@ Click to configure advanced options."""
         )
         
         self._clear_all_results()
+
+        # Upstream Defense (Layer 2): Check if any elements were extracted
+        if self.current_analysis_result:
+            elements = self.current_analysis_result.get('elements', [])
+            bars = self.current_analysis_result.get('bars', [])
+            if not elements and not bars and not self.current_analysis_result.get('error'):
+                self.update_status("⚠️ No data extracted - calibration or detection failed")
+                self.current_analysis_result['data_tab_model'] = {'rows': []}
 
         self._populate_ocr_tab()
         logging.debug("OCR widgets created: %s", len(self.analysis_results_widgets))

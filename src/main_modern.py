@@ -2029,6 +2029,11 @@ Click to configure advanced options."""
                 colors = self.colors
 
             self._det_scene.set_detections(detections, colors)
+            
+            # Pass calibration down to detection scene
+            if 'calibration' in self.current_analysis_result:
+                if hasattr(self._det_scene, 'set_calibration'):
+                    self._det_scene.set_calibration(self.current_analysis_result['calibration'])
 
             # 3. Apply current visibility state from checkboxes
             for class_name, checkbox in self.visibility_checks.items():

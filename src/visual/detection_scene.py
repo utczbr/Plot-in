@@ -45,6 +45,8 @@ from PyQt6.QtWidgets import (
     QRubberBand,
 )
 from PyQt6.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneHoverEvent
+from PyQt6.QtGui import QContextMenuEvent, QMouseEvent
+from PyQt6.QtWidgets import QMessageBox, QApplication
 
 
 logger = logging.getLogger(__name__)
@@ -112,7 +114,10 @@ class EditableRectItem(QGraphicsRectItem):
         parent: QGraphicsItem | None = None,
     ) -> None:
         x1, y1, x2, y2 = xyxy
-        super().__init__(QRectF(x1, y1, x2 - x1, y2 - y1), parent)
+        w = x2 - x1
+        h = y2 - y1
+        super().__init__(QRectF(0, 0, w, h), parent)
+        self.setPos(x1, y1)
 
         self.class_name = class_name
         self.detection = detection  # reference to the original dict
@@ -265,7 +270,9 @@ class EditableRectItem(QGraphicsRectItem):
             # Clamp to image bounds
             if self.scene():
                 img = self.scene().sceneRect()
-                new_rect = new_rect.intersected(img) if img.isValid() else new_rect
+                if img.isValid():
+                    local_img = self.mapRectFromScene(img)
+                    new_rect = new_rect.intersected(local_img)
             self.setRect(new_rect)
             event.accept()
             return
@@ -276,9 +283,9 @@ class EditableRectItem(QGraphicsRectItem):
             # Clamp drag so box stays within image bounds
             if self.scene():
                 img = self.scene().sceneRect()
-                r = self._drag_start_rect
-                new_pos.setX(max(img.left(), min(new_pos.x(), img.right() - r.width())))
-                new_pos.setY(max(img.top(), min(new_pos.y(), img.bottom() - r.height())))
+                r = self.rect()
+                new_pos.setX(max(img.left() - r.x(), min(new_pos.x(), img.right() - r.width() - r.x())))
+                new_pos.setY(max(img.top() - r.y(), min(new_pos.y(), img.bottom() - r.height() - r.y())))
             self.setPos(new_pos)
             event.accept()
             return
@@ -670,6 +677,62 @@ class DetectionScene(QGraphicsScene):
 
     item_highlighted = pyqtSignal(str, list)
     
+    @staticmethod
+    def _resolve_cal_func(cal_obj) -> Optional[callable]:
+        """
+        Extract a pixel→value callable from a CalibrationResult dataclass or
+        legacy dict.  Priority: .func attribute → .coeffs tuple → dict keys.
+        """
+        if cal_obj is None:
+            return None
+        # CalibrationResult dataclass (primary path)
+        if hasattr(cal_obj, 'func') and callable(cal_obj.func):
+            return cal_obj.func
+        # Fallback: coeffs tuple (m, b) on dataclass
+        if hasattr(cal_obj, 'coeffs') and cal_obj.coeffs:
+            m, b = cal_obj.coeffs
+            return lambda px, _m=m, _b=b: _m * px + _b
+        # Legacy dict shapes
+        if isinstance(cal_obj, dict):
+            func = cal_obj.get('func') or cal_obj.get('model_func')
+            if callable(func):
+                return func
+            coeffs = cal_obj.get('coeffs') or cal_obj.get('coefficients')
+            if coeffs:
+                m, b = coeffs
+                return lambda px, _m=m, _b=b: _m * px + _b
+        return None
+
+    def get_calculated_coords(self, pixel_x: float, pixel_y: float) -> Optional[Tuple[float, float]]:
+        """
+        Convert pixel coordinates to chart scale values using attached calibration.
+
+        The calibration dict uses CalibrationResult objects (frozen dataclass
+        with .func callable and .coeffs tuple) keyed by 'x' and 'y'.
+        Falls back to 'primary' if neither axis key is populated.
+
+        Returns None when no usable calibration is available.
+        """
+        if not hasattr(self, '_calibration') or not self._calibration:
+            return None
+
+        cal = self._calibration
+        x_func = self._resolve_cal_func(cal.get('x') or cal.get('primary'))
+        y_func = self._resolve_cal_func(cal.get('y') or cal.get('primary'))
+
+        calc_x = float(x_func(pixel_x)) if x_func else None
+        calc_y = float(y_func(pixel_y)) if y_func else None
+
+        if calc_x is None and calc_y is None:
+            return None
+
+        return (calc_x if calc_x is not None else 0.0,
+                calc_y if calc_y is not None else 0.0)
+
+    def set_calibration(self, calibration_data: dict) -> None:
+        """Store calibration mapping for real-time coordinate translation."""
+        self._calibration = calibration_data or {}
+    
     # Phase 3 Editor signals:
     item_edited = pyqtSignal(object, list, bool)  # item, old_xyxy, is_resize
     item_deleted = pyqtSignal(object)             # item
@@ -684,7 +747,8 @@ class DetectionScene(QGraphicsScene):
         super().__init__(parent)
         self._base_pixmap_item: Optional[QGraphicsPixmapItem] = None
         self._rect_items: List[EditableRectItem] = []
-        self._baseline_item: Optional[BaselineItem] = None
+        self._baseline_item: Optional['BaselineItem'] = None
+        self._calibration: dict = {}
         self._visible_classes: Dict[str, bool] = {}
         self._colors: Dict[str, Dict[str, Tuple[int, int, int]]] = dict(DEFAULT_COLORS)
         self._image_width = 0
@@ -914,6 +978,9 @@ class DetectionCanvasView(QGraphicsView):
 
     # Signal emitted when user clicks on an item in VIEW mode
     bbox_clicked = pyqtSignal(str, list)  # class_name, xyxy
+    
+    # Signal emitted continuously when hovering over the canvas
+    coordinates_hovered = pyqtSignal(QPointF)
 
     def __init__(self, scene: DetectionScene, parent=None):
         self._rubber_band = None
@@ -935,6 +1002,9 @@ class DetectionCanvasView(QGraphicsView):
         # Start in scroll-hand-drag for VIEW mode pan
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        
+        # Track mouse to emit hover coords
+        self.setMouseTracking(True)
 
     # ── Mode ──
 
@@ -1070,7 +1140,7 @@ class DetectionCanvasView(QGraphicsView):
 
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event) -> None:
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._mode == EditorMode.CREATE_BOX and self._rubber_band and self._rubber_band.isVisible():
             rect = QRect(self._rubber_band_origin, event.position().toPoint()).normalized()
             self._rubber_band.setGeometry(rect)
@@ -1078,6 +1148,10 @@ class DetectionCanvasView(QGraphicsView):
             return
             
         super().mouseMoveEvent(event)
+        
+        # Emit hover coordinates
+        scene_pos = self.mapToScene(event.position().toPoint())
+        self.coordinates_hovered.emit(scene_pos)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
@@ -1113,3 +1187,104 @@ class DetectionCanvasView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
         super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """
+        Right-click anywhere on the canvas → shows pixel + calculated coordinates.
+        Delegates to item specific context menus if they handle it first.
+        """
+        # 1. Let the scene (and items) handle it first.
+        super().contextMenuEvent(event)
+        if event.isAccepted():
+            return
+            
+        # 2. It wasn't handled by an item. Build the view-level context info menu.
+        event.accept()
+        
+        scene_pos = self.mapToScene(event.pos())
+        scene_rect = self.scene().sceneRect()
+
+        # Ignore clicks outside the image bounds
+        if not scene_rect.contains(scene_pos):
+            return
+
+        pixel_x = round(scene_pos.x(), 2)
+        pixel_y = round(scene_pos.y(), 2)
+
+        # Check if we are over a detection box
+        det_info = None
+        class_name = None
+        for item in self.scene().items(scene_pos):
+            if isinstance(item, EditableRectItem) and item.isVisible():
+                det_info = item.detection
+                class_name = item.class_name
+                break
+
+        menu = QMenu(self)
+
+        # ── Basic info (shown as disabled labels) ──
+        menu.addAction(f"Pixel: ({pixel_x}, {pixel_y})").setEnabled(False)
+
+        # Calculated coordinates placeholder
+        calc_coords = self._det_scene.get_calculated_coords(pixel_x, pixel_y)
+        if calc_coords:
+            calc_str = f"({calc_coords[0]:.3f}, {calc_coords[1]:.3f})"
+        else:
+            calc_str = "N/A – scaling not mapped"
+            
+        menu.addAction(f"Calculated: {calc_str}").setEnabled(False)
+
+        if det_info:
+            menu.addSeparator()
+            conf = det_info.get("conf")
+            conf_str = f"{conf:.1%}" if isinstance(conf, (int, float)) else "N/A"
+            menu.addAction(f"Class: {class_name or 'unknown'}").setEnabled(False)
+            menu.addAction(f"Confidence: {conf_str}").setEnabled(False)
+            text = det_info.get("text", "")
+            if text:
+                menu.addAction(f"OCR/Text: {text}").setEnabled(False)
+
+        # ── Actions ──
+        menu.addSeparator()
+        detailed_action = menu.addAction("Show Full Details...")
+        copy_pixel = menu.addAction("Copy Pixel Coordinates")
+        copy_calc = menu.addAction("Copy Calculated Coordinates")
+
+        chosen = menu.exec(event.globalPos())
+
+        if chosen == detailed_action:
+            self._show_detailed_coords_dialog(pixel_x, pixel_y, calc_str, det_info, class_name)
+        elif chosen == copy_pixel:
+            QApplication.clipboard().setText(f"({pixel_x}, {pixel_y})")
+        elif chosen == copy_calc:
+            QApplication.clipboard().setText(calc_str)
+
+    def _show_detailed_coords_dialog(
+        self,
+        px: float,
+        py: float,
+        calc_str: str,
+        det_info: Optional[Dict[str, Any]] = None,
+        class_name: Optional[str] = None,
+    ) -> None:
+        """Popup with full details (pixel + calculated + detection metadata)."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Detailed Coordinates at Cursor")
+        msg.setIcon(QMessageBox.Icon.Information)
+
+        text = f"<b>Pixel Coordinates</b><br>"
+        text += f"X: {px}<br>Y: {py}<br><br>"
+
+        text += f"<b>Calculated Coordinates</b><br>"
+        text += f"{calc_str}<br><br>"
+
+        if det_info:
+            text += f"<b>Detection Info</b><br>"
+            text += f"Class: {class_name or '—'}<br>"
+            conf = det_info.get("conf")
+            if conf is not None:
+                text += f"Confidence: {conf:.2%}<br>"
+            text += f"OCR Text: {det_info.get('text', '—')}<br>"
+
+        msg.setText(text)
+        msg.exec()

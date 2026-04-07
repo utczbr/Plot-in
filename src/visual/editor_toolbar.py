@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon
 
 from visual.detection_scene import EditorMode
+from visual.qt_utils import safe_combo_populate
 
 
 class EditorToolbar(QWidget):
@@ -221,30 +222,8 @@ class EditorToolbar(QWidget):
 
         Preserves the current selection when the same class is still present
         in the new list. Resets to index 0 otherwise.
-
-        The combo is hidden during the model update to prevent the Cocoa
-        NSArray crash: setStringList fires endResetModel → QComboBox tries
-        setCurrentIndex(0) → NSArray access on still-reset list → crash.
         """
-        current = self._class_combo.currentText()
-        was_visible = self._class_combo.isVisible()
-        self._class_combo.setVisible(False)  # suspend Cocoa native-list updates
-        self._class_combo.blockSignals(True)
-        try:
-            if classes:
-                self._class_model.setStringList(classes)
-                self._class_combo.setEnabled(True)
-            else:
-                self._class_model.setStringList(["(no classes)"])
-                self._class_combo.setEnabled(False)
-            # Restore selection while combo is still hidden and signals blocked
-            # to prevent macOS Cocoa NSRangeException on the native list-view.
-            idx = self._class_combo.findText(current)
-            self._class_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        finally:
-            self._class_combo.blockSignals(False)
-            if was_visible:
-                self._class_combo.setVisible(True)
+        safe_combo_populate(self._class_combo, classes, placeholder="(no classes)", retain_selection=True)
 
     @property
     def selected_class(self) -> str:

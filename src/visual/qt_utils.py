@@ -1,47 +1,29 @@
+import platform
 import PyQt6.QtCore as QtCore
 
 def safe_combo_populate(combo, items: list, placeholder: str = "", retain_selection: bool = False) -> None:
     """
-    Populate a QComboBox safely on macOS/Cocoa using a deferred update.
-
-    The macOS crash path:
-        setStringList / clear+addItems
-            → beginResetModel / endResetModel
-                → QComboBox::setCurrentIndex(0)
-                    → QItemSelectionModel::select
-                        → QListView::selectionChanged
-                            → Cocoa NSArray access on still-empty list
-                                → NSRangeException
-
-    Fix:
-    Defer the model update using QTimer.singleShot(0) to allow Cocoa to
-    finish its current event loop tick (e.g. processing the mouse-release
-    that triggered the widget signal). It then hides the combo while the
-    model update is in flight.
+    Populate a QComboBox safely, deferring on macOS to prevent Cocoa NSRangeExceptions.
     """
     from PyQt6.QtCore import QTimer
 
-    # Capture the selection state before deferring so it can be restored
     current_text = combo.currentText() if retain_selection else None
 
     def _do_update():
-        # Guard: the widget can be destroyed between the timer being posted
-        # and it firing (e.g. dialog close, tab switch, application shutdown).
         try:
             import sip
             if sip.isdeleted(combo):
                 return
         except Exception:
-            pass  # sip not available or not a sip-wrapped type — proceed cautiously
+            pass
 
         try:
             new_list = items if items else ([placeholder] if placeholder else [])
-
             was_visible = combo.isVisible()
 
             if was_visible:
                 combo.setUpdatesEnabled(False)
-                combo.setVisible(False)   # suspend Cocoa native-list updates
+                combo.setVisible(False)
 
             combo.blockSignals(True)
             try:
@@ -57,32 +39,26 @@ def safe_combo_populate(combo, items: list, placeholder: str = "", retain_select
                         new_model = QtCore.QStringListModel(new_list, combo)
                         combo.setModel(new_model)
 
-                    # Determine new index
                     idx = 0
                     if retain_selection and current_text:
                         found = combo.findText(current_text)
                         if found > 0:
                             idx = found
 
-                    # Explicitly set index while hidden+blocked so Cocoa never sees
-                    # a deferred selection change after we restore visibility.
                     combo.setCurrentIndex(idx)
-
                 combo.setEnabled(bool(items))
             finally:
                 combo.blockSignals(False)
                 if was_visible:
                     combo.setVisible(True)
                     combo.setUpdatesEnabled(True)
-
-            # Force native repaint
-            if was_visible:
-                combo.repaint()
+                    combo.repaint()
 
         except RuntimeError:
-            # C++ object was deleted between the sip check and the call — ignore.
             pass
 
-    QTimer.singleShot(0, _do_update)
-
-
+    # Only defer on macOS; execute synchronously on Windows/Linux
+    if platform.system() == "Darwin":
+        QTimer.singleShot(0, _do_update)
+    else:
+        _do_update()

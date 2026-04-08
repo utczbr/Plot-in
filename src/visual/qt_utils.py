@@ -18,34 +18,26 @@ def safe_combo_populate(combo, items: list, placeholder: str = "", retain_select
             pass
 
         try:
-            new_list = items if items else ([placeholder] if placeholder else [])
             was_visible = combo.isVisible()
-
-            if was_visible:
-                combo.setUpdatesEnabled(False)
-                combo.setVisible(False)
 
             combo.blockSignals(True)
             try:
-                if not new_list:
-                    combo.setModel(None)
-                    new_model = QtCore.QStringListModel(new_list, combo)
-                    combo.setModel(new_model)
-                else:
-                    model = combo.model()
-                    if isinstance(model, QtCore.QStringListModel):
-                        model.setStringList(new_list)
-                    else:
-                        new_model = QtCore.QStringListModel(new_list, combo)
-                        combo.setModel(new_model)
+                new_list = items if items else ([placeholder] if placeholder else [])
+                
+                # THE FIX: Never reuse the existing model using .setStringList().
+                # Always create and apply a brand-new model to force a clean Cocoa rebuild.
+                new_model = QtCore.QStringListModel(new_list, combo)
+                combo.setModel(new_model)
 
-                    idx = 0
-                    if retain_selection and current_text:
-                        found = combo.findText(current_text)
-                        if found > 0:
-                            idx = found
+                # Determine new index
+                idx = 0
+                if retain_selection and current_text:
+                    found = combo.findText(current_text)
+                    if found > 0:
+                        idx = found
 
-                    combo.setCurrentIndex(idx)
+                # Explicitly set index
+                combo.setCurrentIndex(idx)
                 combo.setEnabled(bool(items))
             finally:
                 combo.blockSignals(False)

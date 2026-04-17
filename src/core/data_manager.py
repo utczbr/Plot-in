@@ -42,12 +42,32 @@ class DataManager:
         with self._results_lock:
             self._analysis_results.clear()
             
+    _CONTEXT_FORMAT_HINT = (
+        'Expected JSON format:\n'
+        '{\n'
+        '  "outcomes": ["outcome1", "outcome2"],\n'
+        '  "groups": ["group1", "group2"],\n'
+        '  "units": {"outcome1": "kg"},\n'
+        '  "error_bar_type": "SE"\n'
+        '}'
+    )
+
     def load_context(self, path: str) -> Dict[str, Any]:
         """Load and validate a context-of-interest JSON file."""
-        with open(path, 'r', encoding='utf-8') as f:
-            ctx = json.load(f)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                ctx = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in context file: {e}\n\n"
+                f"{self._CONTEXT_FORMAT_HINT}"
+            ) from e
         if not isinstance(ctx, dict):
-            raise ValueError("Context file must contain a JSON object")
+            raise ValueError(
+                f"Context file must contain a JSON object (dict), "
+                f"got {type(ctx).__name__}.\n\n"
+                f"{self._CONTEXT_FORMAT_HINT}"
+            )
         if not isinstance(ctx.get('outcomes'), list):
             ctx['outcomes'] = []
         if not isinstance(ctx.get('groups'), list):

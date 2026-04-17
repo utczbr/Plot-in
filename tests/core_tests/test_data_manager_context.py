@@ -69,7 +69,7 @@ class TestLoadContextInvalidJson:
         ctx_file.write_text("not json!", encoding='utf-8')
 
         dm = DataManager()
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(ValueError, match="Invalid JSON"):
             dm.load_context(str(ctx_file))
 
     def test_raises_on_non_dict(self, tmp_path):

@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneHoverEvent
 from PyQt6.QtGui import QContextMenuEvent, QMouseEvent
-from PyQt6.QtWidgets import QMessageBox, QApplication
+from PyQt6.QtWidgets import QApplication
 
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ class EditableRectItem(QGraphicsRectItem):
         super().paint(painter, option, widget)
         if self._mode == EditorMode.EDIT_BOXES and self.isSelected():
             painter.save()
-            painter.setBrush(QBrush(Qt.GlobalColor.white))
+            painter.setBrush(QBrush(QColor(0, 200, 0, 153)))  # 60% opacity green
             # Keep paint cosmetic
             pen = QPen(Qt.GlobalColor.black)
             pen.setWidth(1)
@@ -193,7 +193,8 @@ class EditableRectItem(QGraphicsRectItem):
             painter.setPen(pen)
             
             rect = self.rect()
-            s = self._EDGE_TOLERANCE
+            min_dim = min(rect.width(), rect.height())
+            s = max(4.0, min(min_dim * 0.03, 12.0))  # 3% of smallest dim, clamped 4-12px
             handles = [
                 QRectF(rect.left(), rect.top(), s, s),
                 QRectF(rect.center().x() - s/2, rect.top(), s, s),
@@ -1228,12 +1229,23 @@ class DetectionCanvasView(QGraphicsView):
         # Calculated coordinates placeholder
         calc_coords = self._det_scene.get_calculated_coords(pixel_x, pixel_y)
         if calc_coords:
-            calc_str = f"({calc_coords[0]:.3f}, {calc_coords[1]:.3f})"
+            calc_x_str = f"{calc_coords[0]:.3f}"
+            calc_y_str = f"{calc_coords[1]:.3f}"
+            calc_str = f"({calc_x_str}, {calc_y_str})"
         else:
+            calc_x_str = "N/A"
+            calc_y_str = "N/A"
             calc_str = "N/A – scaling not mapped"
-            
+
         menu.addAction(f"Calculated: {calc_str}").setEnabled(False)
 
+        # ── Copy actions ──
+        menu.addSeparator()
+        copy_calc_y = menu.addAction("Copy Calculated Y")
+        copy_calc_x = menu.addAction("Copy Calculated X")
+        copy_pixel = menu.addAction("Copy Pixel Coordinates")
+
+        # ── Detection info (at the end) ──
         if det_info:
             menu.addSeparator()
             conf = det_info.get("conf")
@@ -1244,47 +1256,12 @@ class DetectionCanvasView(QGraphicsView):
             if text:
                 menu.addAction(f"OCR/Text: {text}").setEnabled(False)
 
-        # ── Actions ──
-        menu.addSeparator()
-        detailed_action = menu.addAction("Show Full Details...")
-        copy_pixel = menu.addAction("Copy Pixel Coordinates")
-        copy_calc = menu.addAction("Copy Calculated Coordinates")
-
         chosen = menu.exec(event.globalPos())
 
-        if chosen == detailed_action:
-            self._show_detailed_coords_dialog(pixel_x, pixel_y, calc_str, det_info, class_name)
+        if chosen == copy_calc_y:
+            QApplication.clipboard().setText(calc_y_str)
+        elif chosen == copy_calc_x:
+            QApplication.clipboard().setText(calc_x_str)
         elif chosen == copy_pixel:
             QApplication.clipboard().setText(f"({pixel_x}, {pixel_y})")
-        elif chosen == copy_calc:
-            QApplication.clipboard().setText(calc_str)
 
-    def _show_detailed_coords_dialog(
-        self,
-        px: float,
-        py: float,
-        calc_str: str,
-        det_info: Optional[Dict[str, Any]] = None,
-        class_name: Optional[str] = None,
-    ) -> None:
-        """Popup with full details (pixel + calculated + detection metadata)."""
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Detailed Coordinates at Cursor")
-        msg.setIcon(QMessageBox.Icon.Information)
-
-        text = f"<b>Pixel Coordinates</b><br>"
-        text += f"X: {px}<br>Y: {py}<br><br>"
-
-        text += f"<b>Calculated Coordinates</b><br>"
-        text += f"{calc_str}<br><br>"
-
-        if det_info:
-            text += f"<b>Detection Info</b><br>"
-            text += f"Class: {class_name or '—'}<br>"
-            conf = det_info.get("conf")
-            if conf is not None:
-                text += f"Confidence: {conf:.2%}<br>"
-            text += f"OCR Text: {det_info.get('text', '—')}<br>"
-
-        msg.setText(text)
-        msg.exec()

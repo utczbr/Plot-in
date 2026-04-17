@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 _COMMON_COLUMNS = [
     ('source_file',    'Source',       False),
     ('chart_type',     'Type',         False),
-    ('group',          'Group',        False),
-    ('outcome',        'Outcome',      False),
+    ('group',          'Tick label',   False),
+    ('outcome',        'Legend',       False),
 ]
 _COMMON_TAIL = [
     ('unit',           'Unit',         False),

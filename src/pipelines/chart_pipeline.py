@@ -93,6 +93,13 @@ class ChartAnalysisPipeline(BasePipeline):
         """
         image_path = Path(image_input)
         self.logger.info(f"Starting pipeline for {image_path.name}")
+
+        if manual_detections is not None:
+            self.logger.info(
+                "Using manual detections: keys=%s, total items=%d",
+                list(manual_detections.keys()),
+                sum(len(v) if isinstance(v, list) else 0 for v in manual_detections.values()),
+            )
         
         # 1. Load Image
         img = cv2.imread(str(image_path))

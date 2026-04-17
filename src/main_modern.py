@@ -32,6 +32,7 @@ try:
         QPixmap,
         QImage,
         QKeyEvent,
+        QKeySequence,
         QCloseEvent,
         QFont,
         QGuiApplication,
@@ -39,6 +40,8 @@ try:
         QIcon,
         QPainter,
         QColor,
+        QUndoStack,
+        QUndoCommand,
     )
 except ModuleNotFoundError as exc:
     if _is_pyqt_missing_error(exc) and __name__ == "__main__":
@@ -89,6 +92,188 @@ from core.export_manager import ExportManager
 
 PROTOCOL_COLUMNS = ExportManager.PROTOCOL_COLUMNS
 READONLY_COLUMNS = frozenset({'source_file', 'page_index', 'chart_type', 'confidence'})
+
+
+class TableEditCommand(QUndoCommand):
+    """Command to handle undo/redo of MultiSelectTableWidget cell edits."""
+    def __init__(self, table, changes, description):
+        super().__init__(description)
+        self.table = table
+        self.changes = changes
+        self._first_run = True
+
+    def undo(self):
+        self.table.blockSignals(True)
+        try:
+            for row, col, old_val, new_val in self.changes:
+                item = self.table.item(row, col)
+                if item:
+                    item.setText(old_val)
+                    self.table._current_data[(row, col)] = old_val
+        finally:
+            self.table.blockSignals(False)
+        self.table._is_editing_undo = True
+        if self.changes:
+            self.table.cellChanged.emit(self.changes[-1][0], self.changes[-1][1])
+        self.table._is_editing_undo = False
+
+    def redo(self):
+        if self._first_run:
+            self._first_run = False
+            return
+            
+        self.table.blockSignals(True)
+        try:
+            for row, col, old_val, new_val in self.changes:
+                item = self.table.item(row, col)
+                if item:
+                    item.setText(new_val)
+                    self.table._current_data[(row, col)] = new_val
+        finally:
+            self.table.blockSignals(False)
+        self.table._is_editing_undo = True
+        if self.changes:
+            self.table.cellChanged.emit(self.changes[-1][0], self.changes[-1][1])
+        self.table._is_editing_undo = False
+
+
+class MultiSelectTableWidget(QTableWidget):
+    """QTableWidget subclass with Ctrl+C, Ctrl+V, Delete multi-cell support and Undo/Redo."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._undo_stack = QUndoStack(self)
+        self._undo_stack.setUndoLimit(50)
+        self._current_data = {}
+        self._is_editing_undo = False
+        self.cellChanged.connect(self._on_cell_changed)
+        
+    def setItem(self, row, col, item):
+        super().setItem(row, col, item)
+        self._current_data[(row, col)] = item.text()
+        
+    def setRowCount(self, rows):
+        if rows == 0:
+            self._undo_stack.clear()
+            self._current_data.clear()
+        super().setRowCount(rows)
+
+    def _on_cell_changed(self, row, col):
+        if self._is_editing_undo:
+            return
+        
+        item = self.item(row, col)
+        if not item:
+            return
+        new_text = item.text()
+        old_text = self._current_data.get((row, col), "")
+        
+        if new_text != old_text:
+            cmd = TableEditCommand(self, [(row, col, old_text, new_text)], "Edit Cell")
+            self._is_editing_undo = True
+            self._undo_stack.push(cmd)  # automatically calls redo(), but first_run skips logic
+            self._is_editing_undo = False
+            self._current_data[(row, col)] = new_text
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self._copy_selection()
+            return
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self._paste_selection()
+            return
+        if event.key() == Qt.Key.Key_Delete:
+            self._delete_selection()
+            return
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
+            if self._undo_stack.canUndo():
+                self._undo_stack.undo()
+            return
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y:
+            if self._undo_stack.canRedo():
+                self._undo_stack.redo()
+            return
+        super().keyPressEvent(event)
+
+    def _copy_selection(self):
+        selected = self.selectedRanges()
+        if not selected:
+            return
+        rows = set()
+        cols = set()
+        for r in selected:
+            for row in range(r.topRow(), r.bottomRow() + 1):
+                rows.add(row)
+            for col in range(r.leftColumn(), r.rightColumn() + 1):
+                cols.add(col)
+        rows = sorted(rows)
+        cols = sorted(cols)
+        lines = []
+        for row in rows:
+            cells = []
+            for col in cols:
+                item = self.item(row, col)
+                cells.append(item.text() if item else "")
+            lines.append("\t".join(cells))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _paste_selection(self):
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+        rows_data = text.split("\n")
+        current = self.currentItem()
+        if not current:
+            return
+        start_row = current.row()
+        start_col = current.column()
+        
+        changes = []
+        for r_offset, row_text in enumerate(rows_data):
+            cells = row_text.split("\t")
+            for c_offset, cell_text in enumerate(cells):
+                target_row = start_row + r_offset
+                target_col = start_col + c_offset
+                if target_row < self.rowCount() and target_col < self.columnCount():
+                    item = self.item(target_row, target_col)
+                    if item and (item.flags() & Qt.ItemFlag.ItemIsEditable):
+                        old_text = item.text()
+                        if old_text != cell_text:
+                            changes.append((target_row, target_col, old_text, cell_text))
+                            
+        if changes:
+            self.blockSignals(True)
+            for r, c, old, new in changes:
+                self.item(r, c).setText(new)
+                self._current_data[(r, c)] = new
+            self.blockSignals(False)
+            
+            cmd = TableEditCommand(self, changes, "Paste")
+            self._is_editing_undo = True
+            self._undo_stack.push(cmd)
+            self._is_editing_undo = False
+            self.cellChanged.emit(changes[-1][0], changes[-1][1])
+
+    def _delete_selection(self):
+        changes = []
+        for item in self.selectedItems():
+            if item.flags() & Qt.ItemFlag.ItemIsEditable:
+                old = item.text()
+                if old != "":
+                    changes.append((item.row(), item.column(), old, ""))
+        
+        if changes:
+            self.blockSignals(True)
+            for r, c, old, new in changes:
+                self.item(r, c).setText(new)
+                self._current_data[(r, c)] = new
+            self.blockSignals(False)
+            
+            cmd = TableEditCommand(self, changes, "Delete")
+            self._is_editing_undo = True
+            self._undo_stack.push(cmd)
+            self._is_editing_undo = False
+            self.cellChanged.emit(changes[-1][0], changes[-1][1])
 
 
 def _extract_calibration_r2(calibration_entry: Any) -> Optional[float]:
@@ -309,18 +494,26 @@ class ModernAnalysisThread(QThread):
             self.progress_updated.emit(10)
 
             analysis_manager = self.context.analysis_manager
-            
+
             # Setup analysis_manager
             analysis_manager.set_models(self.context.model_manager)
-            
+
             # Ensure models are loaded
             self.context.model_manager.load_models(self.models_dir)
-            
+
             # Note: EasyOCR reader is set globally by OCRLoaderThread now.
-            # We assume it's available in the AnalysisManager since "Run" button 
+            # We assume it's available in the AnalysisManager since "Run" button
             # is only enabled when OCR is ready.
-            
+
             analysis_manager.set_advanced_settings(self.advanced_settings)
+
+            logger = logging.getLogger(__name__)
+            logger.debug(
+                "Running analysis: image=%s, manual_detections=%s, provenance=%s",
+                self.image_path,
+                bool(self.manual_detections),
+                self.provenance,
+            )
 
             result = analysis_manager.run_single_analysis(
                 self.image_path, self.conf, self.output_path,
@@ -993,7 +1186,11 @@ class ModernChartAnalysisApp(QMainWindow):
 
         if getattr(self, '_auto_run_after_ocr', False):
             self._auto_run_after_ocr = False
-            if self.current_image_index >= 0:
+            if getattr(self, '_auto_run_is_re_extract', False):
+                self._auto_run_is_re_extract = False
+                # Re-invoke apply to use manual detections from the editor.
+                self._on_editor_apply()
+            elif self.current_image_index >= 0:
                 self.load_image_for_assisted_analysis()
 
     def _on_ocr_load_error(self, message: str):
@@ -1389,7 +1586,7 @@ Click to configure advanced options."""
         self.results_tab_widget.setMinimumHeight(200)
         self.bottom_container_layout.addWidget(self.results_tab_widget)
 
-        self._create_ocr_tab()
+        # OCR sections are merged into the Data tab (no separate OCR tab)
         self._create_bars_tab()
         self._create_view_tab()
         self._create_protocol_tab()
@@ -1457,12 +1654,34 @@ Click to configure advanced options."""
 
         data_scroll = QScrollArea()
         data_scroll.setWidgetResizable(True)
+        # Alias for backward-compat with _on_scene_bbox_clicked scroll targeting
+        self.ocr_scroll_area = data_scroll
 
         self.data_content_widget = QWidget()
         self.data_content_layout = QVBoxLayout(self.data_content_widget)
         self.data_content_layout.setSpacing(8)
         self.data_content_layout.setContentsMargins(8, 8, 8, 8)
 
+        # === OCR Sections (merged from former OCR tab) ===
+        self.ocr_sections = {}
+        section_order = [
+            ("chart_title", "Chart Title"),
+            ("axis_title", "Axis Titles"),
+            ("scale_label", "Scale Labels"),
+            ("tick_label", "Tick Labels"),
+            ("legend", "Legend"),
+            ("data_label", "Data Labels"),
+            ("other", "Other Text"),
+            ("layout_text", "Layout Text (DocLayout)")
+        ]
+
+        for section_key, section_title in section_order:
+            section_group = self._create_ocr_section(section_title, section_key)
+            self.ocr_sections[section_key] = section_group
+            self.data_content_layout.addWidget(section_group)
+            section_group.setVisible(False)
+
+        # === Scale & Actions ===
         scale_group = QGroupBox("Scale & Actions")
         scale_layout = QVBoxLayout(scale_group)
 
@@ -1518,10 +1737,13 @@ Click to configure advanced options."""
         data_group_layout.setContentsMargins(4, 8, 4, 6)
         data_group_layout.setSpacing(4)
 
-        self.data_table = QTableWidget()
+        self.data_table = MultiSelectTableWidget()
         self.data_table.setAlternatingRowColors(False)
         self.data_table.setMouseTracking(True)
+        # Ensure at least ~10 rows are visible without needing to resize
+        self.data_table.setMinimumHeight(260)
         self.data_table.cellEntered.connect(self._on_data_table_cell_entered)
+        self.data_table.cellChanged.connect(self._on_data_cell_changed)
         self.data_table.viewport().installEventFilter(self)
         header = self.data_table.horizontalHeader()
         if header is not None:
@@ -1573,11 +1795,11 @@ Click to configure advanced options."""
         self.view_content_layout = QGridLayout(self.view_content_widget)
         self.view_content_layout.setSpacing(6)
         self.view_content_layout.setContentsMargins(8, 8, 8, 8)
-        
+
         view_scroll.setWidget(self.view_content_widget)
         view_layout.addWidget(view_scroll)
-        
-        self.results_tab_widget.addTab(view_tab, "View")
+
+        self.results_tab_widget.addTab(view_tab, "Edit")
 
     def _create_protocol_tab(self):
         proto_tab = QWidget()
@@ -1589,13 +1811,13 @@ Click to configure advanced options."""
         filter_layout = QHBoxLayout(filter_frame)
         filter_layout.setContentsMargins(4, 2, 4, 2)
 
-        filter_layout.addWidget(QLabel("Outcome:"))
+        filter_layout.addWidget(QLabel("Legend:"))
         self.proto_outcome_combo = QComboBox()
         safe_combo_populate(self.proto_outcome_combo, ["All"])
         self.proto_outcome_combo.currentIndexChanged.connect(self._apply_protocol_filters)
         filter_layout.addWidget(self.proto_outcome_combo)
 
-        filter_layout.addWidget(QLabel("Group:"))
+        filter_layout.addWidget(QLabel("Tick label:"))
         self.proto_group_combo = QComboBox()
         safe_combo_populate(self.proto_group_combo, ["All"])
         self.proto_group_combo.currentIndexChanged.connect(self._apply_protocol_filters)
@@ -1615,7 +1837,7 @@ Click to configure advanced options."""
         proto_layout.addWidget(filter_frame)
 
         # --- table ---
-        self.protocol_table = QTableWidget()
+        self.protocol_table = MultiSelectTableWidget()
         self.protocol_table.setColumnCount(len(PROTOCOL_COLUMNS))
         self.protocol_table.setHorizontalHeaderLabels(PROTOCOL_COLUMNS)
         self.protocol_table.setAlternatingRowColors(False)
@@ -1624,11 +1846,11 @@ Click to configure advanced options."""
         proto_layout.addWidget(self.protocol_table)
 
         # --- export button ---
-        export_btn = QPushButton("Export Protocol CSV")
+        export_btn = QPushButton("Export Results CSV")
         export_btn.clicked.connect(self._export_protocol_csv)
         proto_layout.addWidget(export_btn)
 
-        self.results_tab_widget.addTab(proto_tab, "Protocol")
+        self.results_tab_widget.addTab(proto_tab, "Results")
 
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
@@ -1850,6 +2072,17 @@ Click to configure advanced options."""
     def _on_editor_apply(self):
         """Apply edits and re-run extraction (Phase 4)."""
         if not self._det_scene or not self.current_analysis_result:
+            logging.warning("_on_editor_apply: no scene or analysis result available")
+            return
+
+        # Guard: if EasyOCR is selected but not yet loaded, start OCR loading first.
+        ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "Paddle")
+        if ocr_engine == "EasyOCR" and not self.ocr_ready:
+            self._auto_run_after_ocr = True
+            self._auto_run_is_re_extract = True
+            if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
+                self._start_ocr_loading(self.advanced_settings)
+            self.update_status("⏳ Waiting for EasyOCR to finish loading, re-extract will start automatically...")
             return
 
         # Flush any text or numeric edits made in the OCR/Data tabs back into
@@ -1862,6 +2095,13 @@ Click to configure advanced options."""
 
         # export_detections() returns Dict[class_name, List[dict]] — pass it directly
         manual_detections = self._det_scene.export_detections()
+
+        logging.debug(
+            "_on_editor_apply: exported detection keys=%s, bar_count=%d, slice_count=%d",
+            list(manual_detections.keys()),
+            len(manual_detections.get("bar", [])),
+            len(manual_detections.get("slice", [])),
+        )
 
         # Pre-validate: remove any bbox that is smaller than 2×2 px
         cleaned: dict = {}
@@ -1899,10 +2139,19 @@ Click to configure advanced options."""
         if self.analysis_thread and self.analysis_thread.isRunning():
             self.analysis_thread.cancel()
             self.analysis_thread.quit()
-            self.analysis_thread.wait(1000)
+            terminated = self.analysis_thread.wait(3000)
+            if not terminated:
+                logging.error("Previous analysis thread did not terminate within 3s — aborting re-extract")
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Re-Extract Error", "Previous analysis is still running. Please wait and try again.")
+                if self._editor_toolbar:
+                    self._editor_toolbar.setEnabled(True)
+                self.is_processing = False
+                self.progress_bar.setVisible(False)
+                return
             
         self.analysis_thread = ModernAnalysisThread(
-            str(image_path), conf, output_path, self.advanced_settings, models_dir,
+            str(image_path), conf, output_path, self.advanced_settings or {}, models_dir,
             context=self.context,
             provenance={"source": "manual_edit"},
             manual_detections=manual_detections,
@@ -1910,6 +2159,12 @@ Click to configure advanced options."""
         self.analysis_thread.status_updated.connect(self.update_status)
         self.analysis_thread.progress_updated.connect(self.progress_bar.setValue)
         self.analysis_thread.analysis_complete.connect(self._on_analysis_complete)
+
+        # Ensure EasyOCR reader is available on the analysis manager for re-extract.
+        # The reader may have been loaded before the analysis manager was configured.
+        if self.easyocr_reader and self.context.analysis_manager._easyocr_reader is None:
+            self.context.analysis_manager.set_easyocr_reader(self.easyocr_reader)
+            logging.debug("Propagated EasyOCR reader to analysis manager for re-extract.")
 
         if self._editor_toolbar:
             self._editor_toolbar.setEnabled(False)
@@ -1988,6 +2243,9 @@ Click to configure advanced options."""
                     self._CHART_TYPE_CLASSES_FALLBACK,
                 )
                 self._editor_toolbar.set_available_classes(classes)
+                # Show KP buttons only for chart types that produce keypoints
+                has_keypoints = chart_type.lower() in ("pie",)
+                self._editor_toolbar.set_keypoint_buttons_visible(has_keypoints)
 
     def _update_scene_display(self, highlight_bbox=None, highlight_class=None):
         """
@@ -3042,7 +3300,7 @@ Click to configure advanced options."""
         logging.debug("Results tab widget made visible")
 
     def _populate_ocr_tab(self):
-        self.ocr_content_widget.setUpdatesEnabled(False)
+        self.data_content_widget.setUpdatesEnabled(False)
         try:
             if not self.current_analysis_result:
                 return
@@ -3268,8 +3526,8 @@ Click to configure advanced options."""
             if widgets_created == 0:
                 self.update_status("ℹ️ No OCR text was extracted for this image.")
         finally:
-            self.ocr_content_widget.setUpdatesEnabled(True)
-            self.ocr_content_widget.update()
+            self.data_content_widget.setUpdatesEnabled(True)
+            self.data_content_widget.update()
 
     def _populate_bars_tab(self):
         # Compatibility wrapper for legacy call sites.
@@ -3343,6 +3601,21 @@ Click to configure advanced options."""
             self.on_widget_hover_enter(bbox, class_name or "other")
         else:
             self.on_widget_hover_leave()
+
+    def _on_data_cell_changed(self, row: int, col: int):
+        """Handle user edit in Data tab — flush to result and mark protocol row corrected."""
+        binding = self.data_tab_bindings.get((row, col))
+        if not binding or not isinstance(binding, dict):
+            return
+        item = self.data_table.item(row, col)
+        if item is None:
+            return
+        if not self.current_analysis_result:
+            return
+        edit = dict(binding)
+        edit["value"] = item.text()
+        apply_data_tab_edits(self.current_analysis_result, [edit])
+        self._refresh_protocol_rows_from_result()
 
     def eventFilter(self, watched, event):
         if (
@@ -3659,10 +3932,17 @@ Click to configure advanced options."""
             row += 1
 
 
+    _CLASS_DISPLAY_NAMES = {
+        "data_point": "Key Points",
+    }
+
     def _add_view_checkbox(self, class_name, items, row, col):
         """Add checkbox while preserving previous state."""
         count = len(items)
-        display_name = class_name.replace('_', ' ').title()
+        display_name = self._CLASS_DISPLAY_NAMES.get(
+            class_name,
+            class_name.replace('_', ' ').title()
+        )
         
         # Check if checkbox already exists in pool
         if class_name in self.view_checkboxes_pool:
@@ -3682,7 +3962,11 @@ Click to configure advanced options."""
             previous_state = True  # Default to checked for new checkboxes
         
         checkbox.setText(f"{display_name} ({count})")
-        checkbox.setToolTip(f"{display_name}: {count} detected")
+        checkbox.setToolTip(
+            f"{display_name}: {count} detected — reference points used to delineate the graph area."
+            if class_name in ("data_point", "slice")
+            else f"{display_name}: {count} detected"
+        )
         checkbox.setChecked(previous_state)
         checkbox.setVisible(True)
         
@@ -3837,7 +4121,18 @@ Click to configure advanced options."""
                 table.blockSignals(False)
 
     def _load_context_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load Context", "", "JSON (*.json)")
+        # Start the dialog in the input folder if available, else home dir
+        start_dir = ""
+        if hasattr(self, 'input_path_edit'):
+            from pathlib import Path as _Path
+            raw = self.input_path_edit.text().strip()
+            if raw:
+                p = _Path(raw)
+                start_dir = str(p if p.is_dir() else p.parent)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Context", start_dir,
+            "JSON Files (*.json);;Text Files (*.txt);;All Files (*)"
+        )
         if not path:
             return
         try:
@@ -3873,7 +4168,7 @@ Click to configure advanced options."""
 
         out_dir = self.output_path_edit.text().strip()
         if not out_dir:
-            out_dir, _ = QFileDialog.getSaveFileName(self, "Save Protocol CSV", "", "CSV (*.csv)")
+            out_dir, _ = QFileDialog.getSaveFileName(self, "Save Results CSV", "", "CSV (*.csv)")
             if not out_dir:
                 return
             dest = out_dir
@@ -3889,7 +4184,7 @@ Click to configure advanced options."""
             filter_group=group_f if group_f != "All" else None,
         )
         if ok:
-            self.update_status(f"Protocol CSV exported: {dest}")
+            self.update_status(f"Results CSV exported: {dest}")
         else:
             QMessageBox.warning(self, "Export Error", "Failed to export protocol CSV.")
 
@@ -4376,13 +4671,15 @@ Click to configure advanced options."""
         """Handle keyboard shortcuts (NEW: includes undo/redo)"""
         key = event.key()
         modifiers = event.modifiers()
-        
+
         # Undo/Redo shortcuts — prioritise the detection-edit stack when active.
         if modifiers == Qt.KeyboardModifier.ControlModifier:
             if key == Qt.Key.Key_Z:
+                # NOTE: Do NOT check _editor_toolbar.isVisible() — it returns
+                # False whenever the Edit tab is not the active tab, so
+                # Ctrl+Z from Data/Results tabs would always fall through.
                 editor_active = (
                     self._editor_toolbar is not None
-                    and self._editor_toolbar.isVisible()
                     and self._editor_state is not None
                     and self._editor_state.can_undo
                 )
@@ -4397,7 +4694,6 @@ Click to configure advanced options."""
             elif key == Qt.Key.Key_Y:
                 editor_active = (
                     self._editor_toolbar is not None
-                    and self._editor_toolbar.isVisible()
                     and self._editor_state is not None
                     and self._editor_state.can_redo
                 )

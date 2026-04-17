@@ -48,7 +48,7 @@ class AnalysisManager:
         reads ``detection_confidence_overrides`` keyed by chart type (``bar``,
         ``box``, …).  This method bridges the two formats.
         """
-        settings = dict(self._advanced_settings)
+        settings = dict(self._advanced_settings) if self._advanced_settings else {}
         thresholds = settings.get('detection_thresholds', {})
 
         conf_overrides: Dict[str, float] = {}
@@ -83,14 +83,15 @@ class AnalysisManager:
 
     def _create_pipeline(self) -> Optional[ChartAnalysisPipeline]:
         """Creates a configured pipeline instance."""
-        if not self._models or not self._advanced_settings:
-            self.logger.error("AnalysisManager not properly initialized")
+        if not self._models:
+            self.logger.error("AnalysisManager not properly initialized: no models")
             return None
 
-        # Get settings
-        ocr_engine_name = self._advanced_settings.get('ocr_engine', 'Paddle')
-        ocr_accuracy = self._advanced_settings.get('ocr_accuracy', 'Optimized').lower()
-        calibration_method = self._advanced_settings.get('calibration_method', 'PROSAC')
+        # Get settings (default to empty dict if not set)
+        settings = self._advanced_settings or {}
+        ocr_engine_name = settings.get('ocr_engine', 'Paddle')
+        ocr_accuracy = settings.get('ocr_accuracy', 'Optimized').lower()
+        calibration_method = settings.get('calibration_method', 'PROSAC')
 
         if ocr_engine_name == 'EasyOCR' and self._easyocr_reader is None:
             self.logger.error("EasyOCR engine selected but EasyOCR reader is not initialized")
@@ -122,7 +123,7 @@ class AnalysisManager:
         doc_ori_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_doc_ori.onnx")
         unwarp_model_path = self._pick_existing(ocr_dir, "UVDoc.onnx", "UVDoc .onnx")
         textline_ori_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_textline_ori.onnx")
-        perf_cfg = self._advanced_settings.get('performance', {})
+        perf_cfg = settings.get('performance', {})
         use_gpu = bool(perf_cfg.get('use_gpu', False)) if isinstance(perf_cfg, dict) else False
         
         # Create OCR engine

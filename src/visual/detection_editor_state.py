@@ -284,6 +284,7 @@ class EditorStateManager(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._undo_stack = QUndoStack(self)
+        self._undo_stack.setUndoLimit(50)
         self._undo_stack.indexChanged.connect(self._on_index_changed)
 
     @property

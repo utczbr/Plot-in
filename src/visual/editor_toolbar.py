@@ -69,8 +69,8 @@ class EditorToolbar(QWidget):
         self._btn_view = self._make_mode_btn("👁 View", "View mode — pan and zoom (V)")
         self._btn_edit = self._make_mode_btn("✏️ Edit", "Edit mode — select, move, resize boxes (E)")
         self._btn_create = self._make_mode_btn("➕ Create", "Create mode — draw new detection boxes (C)")
-        self._btn_edit_kps = self._make_mode_btn("🎯 Edit KPs", "Edit mode — move pie keypoints (K)")
-        self._btn_create_kp = self._make_mode_btn("📍 Add KP", "Create mode — add new pie keypoint (A)")
+        self._btn_edit_kps = self._make_mode_btn("🎯 Edit Key Point", "Edit mode — move pie keypoints (K)")
+        self._btn_create_kp = self._make_mode_btn("📍 Add Key Point", "Create mode — add new pie keypoint (A)")
 
         self._btn_group.addButton(self._btn_view, EditorMode.VIEW.value)
         self._btn_group.addButton(self._btn_edit, EditorMode.EDIT_BOXES.value)
@@ -85,6 +85,9 @@ class EditorToolbar(QWidget):
         row1.addWidget(self._btn_create)
         row1.addWidget(self._btn_edit_kps)
         row1.addWidget(self._btn_create_kp)
+        # Hidden by default; shown only for chart types that have keypoints
+        self._btn_edit_kps.setVisible(False)
+        self._btn_create_kp.setVisible(False)
 
         # Separator
         sep = QFrame()
@@ -224,6 +227,17 @@ class EditorToolbar(QWidget):
         in the new list. Resets to index 0 otherwise.
         """
         safe_combo_populate(self._class_combo, classes, placeholder="(no classes)", retain_selection=True)
+
+    def set_keypoint_buttons_visible(self, visible: bool) -> None:
+        """Show or hide the Edit Key Point / Add Key Point mode buttons."""
+        self._btn_edit_kps.setVisible(visible)
+        self._btn_create_kp.setVisible(visible)
+        # If KP buttons are hidden and a KP mode is active, fall back to VIEW
+        if not visible and self._current_mode in (
+            EditorMode.EDIT_KEYPOINTS, EditorMode.CREATE_KEYPOINT
+        ):
+            self.set_mode(EditorMode.VIEW)
+            self.mode_changed.emit(EditorMode.VIEW)
 
     @property
     def selected_class(self) -> str:

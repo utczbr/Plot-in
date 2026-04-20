@@ -29,6 +29,10 @@ def safe_combo_populate(combo, items: list, placeholder: str = "", retain_select
                 new_model = QtCore.QStringListModel(new_list, combo)
                 combo.setModel(new_model)
 
+                # Ensure dropdown is wide enough to display the longest option text
+                from PyQt6.QtWidgets import QComboBox
+                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+
                 # Determine new index
                 idx = 0
                 if retain_selection and current_text:

@@ -692,7 +692,7 @@ class ModernChartAnalysisApp(QMainWindow):
         stylesheet = self._get_stylesheet()
         self.setStyleSheet(stylesheet)
 
-        self.setWindowTitle("Chart Analysis Tool v12")
+        self.setWindowTitle("Plot-in")
         # Use sizeHint to allow proper DPI scaling
         screen = QGuiApplication.primaryScreen()
         screen_size = screen.size()
@@ -948,7 +948,7 @@ class ModernChartAnalysisApp(QMainWindow):
             "QPushButton:hover { border-color: #5a5a5a; background-color: #343434; }"
             "QPushButton:pressed { background-color: #252526; }"
             "QPushButton:disabled { color: #6b6b6b; border-color: #3a3a3a; background-color: #252526; }"
-            "QPushButton[iconOnly=\"true\"] { padding: 0px; min-height: 20px; min-width: 20px; background-color: #252526; border: 1px solid #3f3f3f; }"
+            "QPushButton[iconOnly=\"true\"] { padding: 0px; background-color: #252526; border: 1px solid #3f3f3f; }"
             "QPushButton[iconOnly=\"true\"]:hover { border-color: #007acc; background-color: #2c2c2c; }"
             "QPushButton[iconOnly=\"true\"][accent=\"true\"] { background-color: #007acc; border-color: #007acc; }"
             "QPushButton[iconOnly=\"true\"][accent=\"true\"]:hover { background-color: #1685d1; border-color: #1685d1; }"
@@ -996,7 +996,7 @@ class ModernChartAnalysisApp(QMainWindow):
         title_layout.setContentsMargins(10, 4, 10, 4)
         title_layout.setSpacing(8)
 
-        app_title = QLabel("CHART ANALYSIS WORKBENCH")
+        app_title = QLabel("PLOT-IN")
         app_title.setProperty("sectionHeader", True)
         app_title.setStyleSheet(
             "QLabel { color: #e6e6e6; font-size: 11px; font-weight: 700; letter-spacing: 1.0px; }"
@@ -1433,6 +1433,8 @@ Click to configure advanced options."""
             # Phase 5: keypoint edit signals for undo/redo
             self._det_scene.keypoint_moved.connect(self._on_scene_keypoint_moved)
             self._det_scene.keypoint_created.connect(self._on_scene_keypoint_created)
+            # Phase 7: sync class dropdown with selected box in Edit mode
+            self._det_scene.box_selected.connect(self._on_scene_box_selected)
             
             # Legacy references (set to None — guarded by _use_legacy_canvas)
             self.display_frame = self._det_canvas_view  # for layout compatibility
@@ -1775,7 +1777,7 @@ Click to configure advanced options."""
             from visual.detection_editor_state import EditorStateManager
 
             self._editor_state = EditorStateManager(self)
-            self._editor_toolbar = EditorToolbar(self)
+            self._editor_toolbar = EditorToolbar(self, scale_fn=self._scaled_ui_px)
             view_layout.addWidget(self._editor_toolbar)
 
             # Connect toolbar → canvas mode
@@ -1784,6 +1786,7 @@ Click to configure advanced options."""
             self._editor_toolbar.redo_requested.connect(self._on_editor_redo)
             self._editor_toolbar.apply_requested.connect(self._on_editor_apply)
             self._editor_toolbar.reset_requested.connect(self._on_editor_reset)
+            self._editor_toolbar.create_class_changed.connect(self._on_editor_class_dropdown_changed)
 
             # Connect editor state → toolbar status
             self._editor_state.edit_count_changed.connect(self._on_editor_count_changed)
@@ -2034,12 +2037,34 @@ Click to configure advanced options."""
         from visual.detection_editor_state import CreateKeypointCommand
         self._editor_state.push(CreateKeypointCommand(group, point_item))
 
+    def _on_scene_box_selected(self, class_name: str):
+        """Sync editor toolbar Class: dropdown with the selected box's class."""
+        if self._editor_toolbar:
+            self._editor_toolbar.sync_class_to_selection(class_name)
 
 
     def _on_editor_mode_changed(self, mode):
         """Switch canvas interaction mode via toolbar toggle."""
         if self._det_canvas_view:
             self._det_canvas_view.set_mode(mode)
+
+    def _on_editor_class_dropdown_changed(self, new_class: str):
+        if not self._editor_toolbar or not self._det_scene:
+            return
+            
+        from visual.detection_scene import EditorMode, EditableRectItem
+        
+        # 1. Edit Mode: Update selected box class
+        if self._editor_toolbar._current_mode == EditorMode.EDIT_BOXES:
+            selected = self._det_scene.selectedItems()
+            if len(selected) == 1 and isinstance(selected[0], EditableRectItem):
+                if selected[0].class_name != new_class:
+                    self._on_scene_item_class_changed(selected[0], new_class)
+                    
+        # 2. Create Mode: Update drawing class
+        elif self._editor_toolbar._current_mode == EditorMode.CREATE_BOX:
+            if hasattr(self._det_canvas_view, "set_create_class"):
+                self._det_canvas_view.set_create_class(new_class)
 
     def _on_editor_undo(self):
         if self._editor_state:
@@ -2173,7 +2198,7 @@ Click to configure advanced options."""
         self.is_processing = True          # prevent concurrent file-list clicks (Fix A-1)
         self.analysis_thread.start()
 
-        self.statusBar().showMessage("🔄 Re-extracting with manual detections...", 3000)
+        self.statusBar().showMessage("🔄 Re-extracting with manual detections — text edits will be replaced by fresh OCR...", 5000)
 
     def _on_editor_reset(self):
         """Reset all edits to auto-detected boxes."""
@@ -2216,18 +2241,20 @@ Click to configure advanced options."""
     # Omit 'chart' (it covers the whole image) and detection-only classes
     # like 'significance_marker', 'connector_line', etc.
     _CHART_TYPE_CLASSES: dict = {
-        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'scale_label', 'tick_label'],
-        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
+        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
+        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
+        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
         'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'box':       ['box', 'outlier', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
+        'box':       ['box', 'outlier', 'range_indicator', 'median_line', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
         'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
         'heatmap':   ['cell', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'color_bar', 'scale_label'],
     }
     _CHART_TYPE_CLASSES_FALLBACK = [
         'bar', 'scatter', 'data_point', 'chart_title',
         'axis_title', 'scale_label', 'legend', 'tick_label',
+        'box', 'outlier', 'range_indicator', 'median_line',
+        'significance_marker', 'connector_line',
     ]
 
     def _show_editor_toolbar(self, visible: bool = True,
@@ -3907,8 +3934,8 @@ Click to configure advanced options."""
                 self.view_checkboxes_pool['baseline'] = baseline_checkbox
                 previous_state = True  # Default to checked
             
-            baseline_checkbox.setText("⎯ Baseline (Y=0)")
-            baseline_checkbox.setToolTip("Show/hide the baseline (Y=0) reference line")
+            baseline_checkbox.setText("⎯ Baseline")
+            baseline_checkbox.setToolTip("Show/hide the baseline reference line")
             baseline_checkbox.setChecked(previous_state)
             baseline_checkbox.setVisible(True)
             
@@ -5038,9 +5065,9 @@ if __name__ == "__main__":
     
     app = QApplication(sys.argv)
     
-    app.setApplicationName("Chart Analysis Tool")
+    app.setApplicationName("Plot-in")
     app.setApplicationVersion("12.0")
-    app.setOrganizationName("Chart Analysis")
+    app.setOrganizationName("Plot-in")
     
     app.setStyle('Fusion')
     

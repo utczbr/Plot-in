@@ -1,0 +1,27 @@
+{
+  "_instruction": "This file serves as a global context dictionary for your analysis. Load this file in the 'Results' tab under 'Load Context' to automatically map OCR extracted labels (from legends and axes) to your standardized vocabulary and fill in missing metadata.",
+  
+  "_note_outcomes": "A list of the specific dependent variables or targets your charts measure.",
+  "outcomes": [
+    "body weight",
+    "blood pressure",
+    "heart rate"
+  ],
+  
+  "_note_groups": "A list of the independent variables, experimental cohorts, or categories.",
+  "groups": [
+    "Control Group",
+    "Treatment A (10mg)",
+    "Treatment B (20mg)"
+  ],
+  
+  "_note_units": "A mapping dictionary linking your exact outcomes (from above) to their expected scientific units.",
+  "units": {
+    "body weight": "kg",
+    "blood pressure": "mmHg",
+    "heart rate": "bpm"
+  },
+  
+  "_note_error_bar": "The global statistical representation of the chart error bars (e.g., 'SE' for Standard Error, 'SD' for Standard Deviation, or '95%CI').",
+  "error_bar_type": "SE"
+}

@@ -1,0 +1,10 @@
+--- src/visual/editor_toolbar.py
++++ src/visual/editor_toolbar.py
+@@ -254,6 +254,7 @@
+         """
+         self._class_combo.blockSignals(True)
+         idx = self._class_combo.findText(class_name)
++        print(f"sync_class_to_selection: class_name='{class_name}', idx={idx}, items={[self._class_combo.itemText(i) for i in range(self._class_combo.count())]}", flush=True)
+         if idx >= 0:
+             self._class_combo.setCurrentIndex(idx)
+         self._class_combo.blockSignals(False)

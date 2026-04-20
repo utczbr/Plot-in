@@ -8,7 +8,7 @@ and Apply & Re-Extract button. Designed to sit at the top of the View tab.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel
 from PyQt6.QtWidgets import (
@@ -48,9 +48,10 @@ class EditorToolbar(QWidget):
     reset_requested = pyqtSignal()
     create_class_changed = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, scale_fn: Callable[[int], int] | None = None):
         super().__init__(parent)
         self._current_mode = EditorMode.VIEW
+        self._scale = scale_fn or (lambda px: px)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -96,18 +97,20 @@ class EditorToolbar(QWidget):
         row1.addWidget(sep)
 
         # Undo/Redo buttons
+        _btn_sz = self._scale(28)
+
         self._btn_undo = QToolButton()
         self._btn_undo.setText("↩")
         self._btn_undo.setToolTip("Undo (Ctrl+Z)")
         self._btn_undo.setEnabled(False)
-        self._btn_undo.setFixedSize(28, 28)
+        self._btn_undo.setFixedSize(_btn_sz, _btn_sz)
         self._btn_undo.clicked.connect(self.undo_requested)
 
         self._btn_redo = QToolButton()
         self._btn_redo.setText("↪")
         self._btn_redo.setToolTip("Redo (Ctrl+Y)")
         self._btn_redo.setEnabled(False)
-        self._btn_redo.setFixedSize(28, 28)
+        self._btn_redo.setFixedSize(_btn_sz, _btn_sz)
         self._btn_redo.clicked.connect(self.redo_requested)
 
         row1.addWidget(self._btn_undo)
@@ -196,7 +199,7 @@ class EditorToolbar(QWidget):
         btn = QPushButton(text)
         btn.setToolTip(tooltip)
         btn.setCheckable(True)
-        btn.setFixedHeight(28)
+        btn.setFixedHeight(self._scale(28))
         btn.setStyleSheet(
             "QPushButton { border-radius: 4px; padding: 2px 8px; "
             "background-color: #444; color: #ccc; } "
@@ -242,6 +245,28 @@ class EditorToolbar(QWidget):
     @property
     def selected_class(self) -> str:
         return self._class_combo.currentText()
+
+    def sync_class_to_selection(self, class_name: str) -> None:
+        """Update class combo to match the selected box's class (Edit mode sync).
+
+        Signals are blocked so ``create_class_changed`` does not fire — this is
+        a read-only reflection of the canvas selection, not a user-initiated
+        class change.
+        """
+        self._class_combo.blockSignals(True)
+        # Use robust text search, case-insensitive mapping if needed
+        # Fallback to direct currentText setting
+        idx = self._class_combo.findText(class_name, Qt.MatchFlag.MatchFixedString | Qt.MatchFlag.MatchCaseSensitive)
+        if idx < 0:
+            # Fallback to case insensitive
+            idx = self._class_combo.findText(class_name, Qt.MatchFlag.MatchFixedString)
+        
+        print(f"sync_class_to_selection: class_name='{class_name}', resolved idx={idx}", flush=True)
+        if idx >= 0:
+            self._class_combo.setCurrentIndex(idx)
+        else:
+            self._class_combo.setCurrentText(class_name)
+        self._class_combo.blockSignals(False)
 
     # ── Private ──
 

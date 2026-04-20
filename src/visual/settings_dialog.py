@@ -97,7 +97,7 @@ class SettingsDialog(QDialog):
         self._create_calibration_tab()
         self._create_processing_tab()
         self._create_output_tab()
-        self._create_nn_classifier_tab()
+        # self._create_nn_classifier_tab()  # Hidden — preserved for future re-enablement
         
         # Buttons
         button_layout = QHBoxLayout()

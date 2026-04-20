@@ -81,6 +81,12 @@ DEFAULT_COLORS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
     "axis_labels": {"normal": (255, 0, 255),   "highlight": (255, 105, 180)},
     "scale_label": {"normal": (255, 117, 24),  "highlight": (255, 140, 0)},
     "tick_label":  {"normal": (0, 255, 255),   "highlight": (0, 206, 209)},
+    "error_bar":   {"normal": (220, 20, 60),   "highlight": (255, 99, 71)},
+    "range_indicator": {"normal": (0, 191, 255), "highlight": (135, 206, 250)},
+    "median_line": {"normal": (255, 215, 0),   "highlight": (255, 223, 0)},
+    "outlier":     {"normal": (255, 20, 147),  "highlight": (255, 105, 180)},
+    "significance_marker": {"normal": (100, 200, 100), "highlight": (144, 238, 144)},
+    "connector_line": {"normal": (205, 133, 63), "highlight": (222, 184, 135)},
     "other":       {"normal": (128, 128, 128), "highlight": (192, 192, 192)},
     "baseline":    {"normal": (240, 240, 240), "highlight": (240, 240, 240)},
 }
@@ -243,6 +249,10 @@ class EditableRectItem(QGraphicsRectItem):
             self._drag_start_pos = event.scenePos()
             self._drag_start_rect = self.rect()
             self._drag_start_item_pos = self.pos()
+            
+            scene = self.scene()
+            if scene:
+                scene.clearSelection()
             
             self.setSelected(True)
             event.accept()
@@ -744,6 +754,9 @@ class DetectionScene(QGraphicsScene):
     keypoint_moved = pyqtSignal(object, object, object)  # point_item, old_pos (QPointF), new_pos (QPointF)
     keypoint_created = pyqtSignal(object, object)        # group, point_item
 
+    # Phase 7 Selection sync:
+    box_selected = pyqtSignal(str)  # class_name of the selected box
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._base_pixmap_item: Optional[QGraphicsPixmapItem] = None
@@ -756,11 +769,26 @@ class DetectionScene(QGraphicsScene):
         self._image_height = 0
         self._highlighted_item: Optional[EditableRectItem] = None
         self._mode = EditorMode.VIEW
+
+        # Emit box_selected when the user selects a single box in Edit mode
+        self.selectionChanged.connect(self._on_selection_changed)
         
     def set_editor_mode(self, mode: EditorMode) -> None:
         self._mode = mode
         for item in self._rect_items:
             item.set_editor_mode(mode)
+
+    # ── Selection sync ──
+
+    def _on_selection_changed(self) -> None:
+        """Emit box_selected when a single EditableRectItem is selected in Edit mode."""
+        if self._mode != EditorMode.EDIT_BOXES:
+            return
+        selected = self.selectedItems()
+        print(f"_on_selection_changed: len(selected)={len(selected)}", flush=True)
+        if len(selected) == 1 and isinstance(selected[0], EditableRectItem):
+            print(f"_on_selection_changed emitting: {selected[0].class_name}", flush=True)
+            self.box_selected.emit(selected[0].class_name)
 
     # ── Image ──
 

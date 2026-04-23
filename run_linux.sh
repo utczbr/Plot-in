@@ -50,4 +50,8 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
     echo "ERROR: Could not find a Python interpreter (python3 or python)."
     exit 1
 fi
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info.major >= 3 else 1)'; then
+    echo "ERROR: Python 3 is required. Resolved interpreter '$PYTHON_BIN' is not Python 3."
+    exit 1
+fi
 exec "$PYTHON_BIN" src/main_modern.py "$@"

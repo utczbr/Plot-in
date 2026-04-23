@@ -20,13 +20,19 @@ cd "$SCRIPT_DIR"
 # Remove quarantine attribute so macOS doesn't block the script on first run
 xattr -d com.apple.quarantine "$0" 2>/dev/null || true
 
-VENV_DIR="$SCRIPT_DIR/venv"
+VENV_DIR=""
+for candidate in "$SCRIPT_DIR/.venv" "$SCRIPT_DIR/venv"; do
+    if [[ -f "$candidate/bin/activate" ]]; then
+        VENV_DIR="$candidate"
+        break
+    fi
+done
 
 # ── Activate venv if not already active ──────────────────────────────────
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
-    if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
-        echo "ERROR: Virtual environment not found at '$VENV_DIR'."
-        echo "Run the installer first:  bash install_macos.command"
+    if [[ -z "$VENV_DIR" ]]; then
+        echo "ERROR: Virtual environment not found at '$SCRIPT_DIR/.venv' or '$SCRIPT_DIR/venv'."
+        echo "Run the installer first:  ./install_macos.command"
         echo ""
         echo "Press Enter to close."
         read -r
@@ -51,4 +57,23 @@ fi
 
 # ── Launch the application ────────────────────────────────────────────────
 echo "» Starting Chart Analysis GUI…"
-exec python src/main_modern.py "$@"
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    PYTHON_BIN="$VIRTUAL_ENV/bin/python"
+else
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+    echo "ERROR: Could not find a Python interpreter (python3 or python)."
+    echo ""
+    echo "Press Enter to close."
+    read -r
+    exit 1
+fi
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info.major >= 3 else 1)'; then
+    echo "ERROR: Python 3 is required. Resolved interpreter '$PYTHON_BIN' is not Python 3."
+    echo ""
+    echo "Press Enter to close."
+    read -r
+    exit 1
+fi
+exec "$PYTHON_BIN" src/main_modern.py "$@"

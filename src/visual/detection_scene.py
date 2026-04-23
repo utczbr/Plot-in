@@ -177,9 +177,9 @@ class EditableRectItem(QGraphicsRectItem):
 
     def _handle_size(self) -> float:
         rect = self.rect()
-        smallest_dimension = max(1.0, min(rect.width(), rect.height()))
+        clamped_smallest_dimension = max(1.0, min(rect.width(), rect.height()))
         # Scale handles with box size so tiny boxes get tiny handles too.
-        return max(self._MIN_HANDLE_SIZE, min(smallest_dimension * 0.06, self._MAX_HANDLE_SIZE))
+        return max(self._MIN_HANDLE_SIZE, min(clamped_smallest_dimension * 0.06, self._MAX_HANDLE_SIZE))
 
     def _get_resize_edges(self, pos: QPointF) -> str:
         if self._mode != EditorMode.EDIT_BOXES:

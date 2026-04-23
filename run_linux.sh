@@ -46,4 +46,8 @@ if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
 else
     PYTHON_BIN="$(command -v python3 || command -v python)"
 fi
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+    echo "ERROR: Could not find a Python interpreter (python3 or python)."
+    exit 1
+fi
 exec "$PYTHON_BIN" src/main_modern.py "$@"

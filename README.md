@@ -1,7 +1,7 @@
 # Plot-in
 
 Repository README derived from the verified runtime documentation at:
-`/home/runner/work/Plot-in/Plot-in/src/docs/context.md`
+`src/docs/context.md`
 
 Last synchronized with context: **April 5, 2026**.
 

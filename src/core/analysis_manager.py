@@ -171,7 +171,8 @@ class AnalysisManager:
     
     def run_single_analysis(self, image_path: str, conf: float, output_path: str,
                             provenance: Optional[Dict[str, Any]] = None,
-                            manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[Dict[str, Any]]:
+                            manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                            output_stem: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Run analysis on a single image."""
         pipeline = self._create_pipeline()
         if not pipeline:
@@ -184,6 +185,7 @@ class AnalysisManager:
             advanced_settings=self._prepare_settings_for_pipeline(),
             provenance=provenance,
             manual_detections=manual_detections,
+            output_stem=output_stem,
         )
 
         if result:
@@ -192,7 +194,8 @@ class AnalysisManager:
         return result
     
     def run_batch_analysis(self, input_path: str, output_path: str, models_dir: str, conf: float,
-                            status_callback=None, cancel_event=None) -> Tuple[int, int]:
+                            status_callback=None, cancel_event=None,
+                            output_stems: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
         """Run analysis on multiple images."""
         if self._models and hasattr(self._models, "load_models"):
             self._models.load_models(models_dir)
@@ -221,12 +224,17 @@ class AnalysisManager:
 
             try:
                 prov = asset_provenance_dict(asset)
+                output_stem = None
+                if output_stems:
+                    output_stem = output_stems.get(str(asset.image_path))
+                
                 pipeline.run(
                     image_input=asset.image_path,
                     output_dir=output_path,
                     annotated=True,
                     advanced_settings=self._prepare_settings_for_pipeline(),
                     provenance=prov,
+                    output_stem=output_stem,
                 )
                 processed += 1
             except Exception as e:

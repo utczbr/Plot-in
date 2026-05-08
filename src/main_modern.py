@@ -467,8 +467,9 @@ class ModernAnalysisThread(QThread):
     analysis_complete = pyqtSignal(object)
     progress_updated = pyqtSignal(int)
 
-    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, parent=None):
+    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None):
         super().__init__(parent)
+        self.output_stem = output_stem
         self.image_path = image_path
         self.conf = conf
         self.output_path = output_path
@@ -519,6 +520,7 @@ class ModernAnalysisThread(QThread):
                 self.image_path, self.conf, self.output_path,
                 provenance=self.provenance,
                 manual_detections=self.manual_detections,
+                output_stem=self.output_stem,
             )
 
             self.progress_updated.emit(100)
@@ -553,8 +555,10 @@ class BatchAnalysisThread(QThread):
         conf,
         advanced_settings=None,
         context: Optional["ApplicationContext"] = None,
+        output_stems=None,
     ):
         super().__init__()
+        self.output_stems = output_stems
         self.input_path = input_path
         self.output_path = output_path
         self.models_dir = models_dir
@@ -576,12 +580,9 @@ class BatchAnalysisThread(QThread):
             self.context.model_manager.load_models(self.models_dir)
 
             processed, total = analysis_manager.run_batch_analysis(
-                self.input_path,
-                self.output_path,
-                self.models_dir,
-                self.conf,
-                status_callback=self.status_updated,
-                cancel_event=self._cancel_event
+                self.input_path, self.output_path, self.models_dir, self.conf,
+                self.status_updated, self._cancel_event,
+                output_stems=self.output_stems
             )
 
             self.progress_updated.emit(processed, total)
@@ -2770,10 +2771,24 @@ Click to configure advanced options."""
         progress.close()
         self._finish_populate_file_list(assets)
 
+    def _generate_unique_stems(self, file_paths: list) -> dict:
+        stem_counts = {}
+        unique_stems = {}
+        for p in file_paths:
+            base_stem = Path(p).stem
+            if base_stem not in stem_counts:
+                stem_counts[base_stem] = 0
+                unique_stems[p] = base_stem
+            else:
+                stem_counts[base_stem] += 1
+                unique_stems[p] = f"{base_stem}_{stem_counts[base_stem]}"
+        return unique_stems
+
     def _finish_populate_file_list(self, assets):
         """Populate the file list UI from resolved assets."""
         self._resolved_assets = assets
         self.image_files = [str(a.image_path) for a in assets]
+        self._unique_stems = self._generate_unique_stems(self.image_files)
 
         if not self.image_files:
             label = QLabel("No charts found")
@@ -2781,15 +2796,28 @@ Click to configure advanced options."""
             self.file_list_layout.addWidget(label)
             return
 
-        # Pre-warm the benchmark cache by scanning the output dir for *_analysis.json files.
+        # Pre-warm the benchmark cache by scanning ALL *_analysis.json files in the
+        # output directory and reading their embedded 'original_image_path' field.
+        # This is order-independent and immune to filename collisions.
         self._benchmark_result_cache.clear()
         output_path = Path(self.output_path_edit.text())
         if output_path.is_dir():
+            # Build a reverse map: absolute source image path -> json file path
+            abs_path_to_json: dict = {}
+            for json_file in sorted(output_path.glob("*_analysis.json")):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    orig = data.get('original_image_path')
+                    if orig:
+                        abs_path_to_json[str(Path(orig).resolve())] = str(json_file)
+                except Exception:
+                    pass  # Corrupt or old JSON without the field — skip
+
             for file_path in self.image_files:
-                stem = Path(file_path).stem
-                json_candidate = output_path / f"{stem}_analysis.json"
-                if json_candidate.exists():
-                    self._benchmark_result_cache[file_path] = str(json_candidate)
+                abs_path = str(Path(file_path).resolve())
+                if abs_path in abs_path_to_json:
+                    self._benchmark_result_cache[file_path] = abs_path_to_json[abs_path]
 
         self._file_list_buttons = []
         image_icon_px = self._scaled_icon_px(13)
@@ -2857,6 +2885,7 @@ Click to configure advanced options."""
         self.progress_bar.setVisible(True)
         self.progress_bar.setFormat("Batch: %v/%m files")
         
+        output_stems = getattr(self, "_unique_stems", None)
         self.batch_thread = BatchAnalysisThread(
             self.input_path_edit.text(),
             self.output_path_edit.text(),
@@ -2865,6 +2894,7 @@ Click to configure advanced options."""
             self.conf_slider.value() / 10.0,
             self.advanced_settings,
             context=self.context,
+            output_stems=output_stems,
         )
         
         self.batch_thread.status_updated.connect(self.update_status)
@@ -2949,17 +2979,30 @@ Click to configure advanced options."""
 
     def _refresh_cache_from_output_dir(self) -> None:
         """Scan the output directory for *_analysis.json files and update _benchmark_result_cache.
+        Uses the embedded 'original_image_path' field for an unambiguous match.
         Called after a batch run completes. Does not clear existing entries."""
         output_path = Path(self.output_path_edit.text())
         if not output_path.is_dir():
             return
+
+        # Build reverse map from all JSONs not yet in cache
+        abs_path_to_json: dict = {}
+        for json_file in sorted(output_path.glob("*_analysis.json")):
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                orig = data.get('original_image_path')
+                if orig:
+                    abs_path_to_json[str(Path(orig).resolve())] = str(json_file)
+            except Exception:
+                pass
+
         for file_path in self.image_files:
             if file_path in self._benchmark_result_cache:
                 continue  # already known
-            stem = Path(file_path).stem
-            json_candidate = output_path / f"{stem}_analysis.json"
-            if json_candidate.exists():
-                self._benchmark_result_cache[file_path] = str(json_candidate)
+            abs_path = str(Path(file_path).resolve())
+            if abs_path in abs_path_to_json:
+                self._benchmark_result_cache[file_path] = abs_path_to_json[abs_path]
 
     def _refresh_file_list_button_states(self) -> None:
         """Update all file-list button icons to reflect the current cache state."""
@@ -3182,6 +3225,7 @@ Click to configure advanced options."""
                 from core.input_resolver import asset_provenance_dict
                 _provenance = asset_provenance_dict(self._resolved_assets[self.current_image_index])
 
+            output_stem = getattr(self, "_unique_stems", {}).get(self.current_image_path)
             self.analysis_thread = ModernAnalysisThread(
                 self.current_image_path,
                 self.conf_slider.value() / 10.0,
@@ -3190,6 +3234,7 @@ Click to configure advanced options."""
                 self.models_dir_edit.text(),
                 self.context,
                 provenance=_provenance,
+                output_stem=output_stem,
                 parent=None
             )
             self.analysis_thread.status_updated.connect(self.update_status)
@@ -3237,6 +3282,20 @@ Click to configure advanced options."""
             self._update_ui_with_results()
             self.update_displayed_image()
             self._setup_navigation_controls()
+
+            # Register the freshly-written JSON in the cache so clicking the
+            # same image a second time skips re-analysis.
+            if self.current_image_path:
+                stem = getattr(self, "_unique_stems", {}).get(
+                    self.current_image_path, Path(self.current_image_path).stem
+                )
+                output_dir = Path(self.output_path_edit.text())
+                json_candidate = output_dir / f"{stem}_analysis.json"
+                if json_candidate.exists():
+                    self._benchmark_result_cache[self.current_image_path] = str(json_candidate)
+                    self._update_file_list_button_cached_state(
+                        self.current_image_index, cached=True
+                    )
             
         if self._editor_toolbar:
             self._editor_toolbar.setEnabled(True)
@@ -4850,7 +4909,11 @@ Click to configure advanced options."""
             output_path = Path(self.output_path_edit.text())
             output_path.mkdir(parents=True, exist_ok=True)
             
-            base_name = Path(self.current_image_path).stem
+            # Use the unique stem so identically named files in different
+            # directories never overwrite each other's output.
+            base_name = getattr(self, "_unique_stems", {}).get(
+                self.current_image_path, Path(self.current_image_path).stem
+            )
             
             json_path = output_path / f"{base_name}_analysis.json"
             with open(json_path, 'w', encoding='utf-8') as f:
@@ -4930,6 +4993,7 @@ Click to configure advanced options."""
             if not output_dir:
                 output_dir = str(self.project_root / "output")
 
+            output_stem = getattr(self, "_unique_stems", {}).get(self.current_image_path)
             refreshed = analysis_manager.run_single_analysis(
                 self.current_image_path,
                 self.conf_slider.value() / 10.0,

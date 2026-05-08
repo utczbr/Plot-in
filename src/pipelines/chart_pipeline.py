@@ -76,7 +76,8 @@ class ChartAnalysisPipeline(BasePipeline):
             annotated: bool = False,
             advanced_settings: Optional[Dict] = None,
             provenance: Optional[Dict[str, Any]] = None,
-            manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[Dict[str, Any]]:
+            manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+            output_stem: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Run the analysis pipeline on a single image.
         
@@ -270,7 +271,7 @@ class ChartAnalysisPipeline(BasePipeline):
             primary_final_result['correction_source'] = 'manual_edit'
 
         if output_dir:
-            self._save_results(primary_final_result, img, Path(output_dir), annotated)
+            self._save_results(primary_final_result, img, Path(output_dir), annotated, output_stem)
             
         return primary_final_result
 
@@ -583,6 +584,7 @@ class ChartAnalysisPipeline(BasePipeline):
 
         final = {
             'image_file': image_path.name,
+            'original_image_path': str(image_path.resolve()),
             'chart_type': orchestration_result.chart_type,
             'orientation': orientation_value,
             'elements': orchestration_result.elements,
@@ -615,18 +617,20 @@ class ChartAnalysisPipeline(BasePipeline):
                     continue
         return default
 
-    def _save_results(self, result: Dict, img: np.ndarray, output_dir: Path, annotated: bool):
+    def _save_results(self, result: Dict, img: np.ndarray, output_dir: Path, annotated: bool, output_stem: Optional[str] = None):
         """Saves JSON and optional annotated image."""
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        stem = output_stem or Path(result['image_file']).stem
+        
         # Save JSON
-        json_path = output_dir / f"{Path(result['image_file']).stem}_analysis.json"
+        json_path = output_dir / f"{stem}_analysis.json"
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(sanitize_for_json(result), f, indent=2, ensure_ascii=False)
             
         # Export edited detections to a separate file if manually corrected
         if result.get('review_status') == 'reviewed':
-            edited_path = output_dir / f"{Path(result['image_file']).stem}_edited_detections.json"
+            edited_path = output_dir / f"{stem}_edited_detections.json"
             with open(edited_path, 'w', encoding='utf-8') as f:
                 json.dump(sanitize_for_json(result.get('detections', {})), f, indent=2, ensure_ascii=False)
             
@@ -643,6 +647,6 @@ class ChartAnalysisPipeline(BasePipeline):
                 else:
                      vis = VisualizationService.draw_results_on_image(img, result)
                      
-                cv2.imwrite(str(output_dir / f"{Path(result['image_file']).stem}_annotated.png"), vis)
+                cv2.imwrite(str(output_dir / f"{stem}_annotated.png"), vis)
             except Exception as e:
                 self.logger.error(f"Annotation failed: {e}")

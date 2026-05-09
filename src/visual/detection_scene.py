@@ -70,7 +70,7 @@ class EditorMode(Enum):
 
 DEFAULT_COLORS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
     "bar":         {"normal": (0, 120, 255),   "highlight": (30, 144, 255)},
-    "slice":       {"normal": (255, 90, 90),   "highlight": (255, 140, 140)},
+    "slice":       {"normal": (255, 90, 90),   "highlight": (46, 204, 113)},
     "line":        {"normal": (255, 0, 0),     "highlight": (255, 99, 71)},
     "scatter":     {"normal": (0, 128, 0),     "highlight": (50, 205, 50)},
     "box":         {"normal": (128, 0, 128),   "highlight": (147, 112, 219)},
@@ -582,6 +582,12 @@ class PieSliceGroup(QGraphicsRectItem):
         self._pen.setWidth(_NORMAL_PEN_WIDTH)
         self._pen.setCosmetic(True)
 
+        self._is_hovered = False
+        self._is_selected = False
+        self._keypoint_color_normal = QColor(255, 255, 0)
+        self._keypoint_color_hover = QColor(255, 255, 255)
+        self._keypoint_color_selected = QColor(59, 130, 246)
+
         self.point_items: List[EditablePointItem] = []
         self._lines: List[QGraphicsLineItem] = []
         self._mode = EditorMode.VIEW
@@ -592,12 +598,44 @@ class PieSliceGroup(QGraphicsRectItem):
         
         # Initialize
         self._init_keypoints()
+        self._apply_visual_state()
         
     def set_editor_mode(self, mode: EditorMode) -> None:
         self._mode = mode
         for p in self.point_items:
             p.set_editor_mode(mode)
         logger.debug("PieSliceGroup mode=%s points=%d", mode, len(self.point_items))
+
+    def _apply_visual_state(self) -> None:
+        highlighted = self._is_hovered or self._is_selected
+        pen_color = self._highlight_color if highlighted else self._normal_color
+        pen_width = _HIGHLIGHT_PEN_WIDTH if highlighted else _NORMAL_PEN_WIDTH
+        self._pen.setColor(pen_color)
+        self._pen.setWidth(pen_width)
+        if highlighted:
+            self.setZValue(self._base_z + _HIGHLIGHT_Z_BOOST)
+        else:
+            self.setZValue(self._base_z)
+
+        for line in self._lines:
+            line.setPen(self._pen)
+
+        if self._is_selected:
+            keypoint_color = self._keypoint_color_selected
+        elif self._is_hovered:
+            keypoint_color = self._keypoint_color_hover
+        else:
+            keypoint_color = self._keypoint_color_normal
+
+        for pt in self.point_items:
+            pt.setBrush(QBrush(keypoint_color))
+
+    def apply_visual_state(self) -> None:
+        self._apply_visual_state()
+
+    def set_selected_state(self, selected: bool) -> None:
+        self._is_selected = selected
+        self._apply_visual_state()
             
     def _init_keypoints(self) -> None:
         kps = self.detection.get("keypoints", [])
@@ -814,17 +852,8 @@ class PieSliceGroup(QGraphicsRectItem):
         self._emit_keypoint_moved(point_item, old_scene_pos, new_scene_pos, source)
         
     def set_highlighted(self, highlighted: bool) -> None:
-        if highlighted:
-            self._pen.setColor(self._highlight_color)
-            self._pen.setWidth(_HIGHLIGHT_PEN_WIDTH)
-            self.setZValue(self._base_z + _HIGHLIGHT_Z_BOOST)
-        else:
-            self._pen.setColor(self._normal_color)
-            self._pen.setWidth(_NORMAL_PEN_WIDTH)
-            self.setZValue(self._base_z)
-            
-        for line in self._lines:
-            line.setPen(self._pen)
+        self._is_hovered = highlighted
+        self._apply_visual_state()
             
     def current_xyxy(self) -> List[float]:
         # Compute bounding box of all points
@@ -1007,6 +1036,7 @@ class DetectionScene(QGraphicsScene):
         self._image_width = 0
         self._image_height = 0
         self._highlighted_item: Optional[EditableRectItem] = None
+        self._selected_slice_group: Optional[PieSliceGroup] = None
         self._mode = EditorMode.VIEW
 
         # Emit box_selected when the user selects a single box in Edit mode
@@ -1039,9 +1069,13 @@ class DetectionScene(QGraphicsScene):
         return incomplete
         
     def set_editor_mode(self, mode: EditorMode) -> None:
+        prev_mode = self._mode
         self._mode = mode
         for item in self._rect_items:
             item.set_editor_mode(mode)
+        keypoint_modes = {EditorMode.EDIT_KEYPOINTS, EditorMode.CREATE_KEYPOINT, EditorMode.CREATE_SLICE}
+        if prev_mode in keypoint_modes and mode not in keypoint_modes:
+            self.clear_selected_slice_group()
         pie_groups = sum(1 for item in self._rect_items if isinstance(item, PieSliceGroup))
         logger.debug(
             "DetectionScene mode=%s items=%d pie_groups=%d",
@@ -1052,15 +1086,34 @@ class DetectionScene(QGraphicsScene):
 
     # ── Selection sync ──
 
-    def _on_selection_changed(self) -> None:
-        """Emit box_selected when a single EditableRectItem is selected in Edit mode."""
-        if self._mode != EditorMode.EDIT_BOXES:
+    def set_selected_slice_group(self, group: Optional[PieSliceGroup]) -> None:
+        if group is self._selected_slice_group:
             return
+        if self._selected_slice_group is not None:
+            self._selected_slice_group.set_selected_state(False)
+        self._selected_slice_group = group
+        if self._selected_slice_group is not None:
+            self._selected_slice_group.set_selected_state(True)
+
+    def clear_selected_slice_group(self) -> None:
+        self.set_selected_slice_group(None)
+
+    def _on_selection_changed(self) -> None:
+        """Sync selection state for boxes and pie keypoints."""
         selected = self.selectedItems()
-        print(f"_on_selection_changed: len(selected)={len(selected)}", flush=True)
-        if len(selected) == 1 and isinstance(selected[0], EditableRectItem):
-            print(f"_on_selection_changed emitting: {selected[0].class_name}", flush=True)
-            self.box_selected.emit(selected[0].class_name)
+        if self._mode == EditorMode.EDIT_BOXES:
+            if len(selected) == 1 and isinstance(selected[0], EditableRectItem):
+                self.box_selected.emit(selected[0].class_name)
+            return
+
+        if self._mode in (EditorMode.EDIT_KEYPOINTS, EditorMode.CREATE_KEYPOINT, EditorMode.CREATE_SLICE):
+            points = [item for item in selected if isinstance(item, EditablePointItem)]
+            if len(points) == 1:
+                group = points[0].parentItem()
+                if isinstance(group, PieSliceGroup):
+                    self.set_selected_slice_group(group)
+                    return
+            self.clear_selected_slice_group()
 
     # ── Image ──
 
@@ -1112,6 +1165,9 @@ class DetectionScene(QGraphicsScene):
             self.removeItem(item)
         self._rect_items.clear()
         self._highlighted_item = None
+        if self._selected_slice_group is not None:
+            self._selected_slice_group.set_selected_state(False)
+        self._selected_slice_group = None
         self._raw_detections = dict(detections) if detections else {}
 
         if colors:
@@ -1458,6 +1514,18 @@ class DetectionCanvasView(QGraphicsView):
                 self._rubber_band.show()
                 event.accept()
                 return
+            elif self._mode == EditorMode.EDIT_KEYPOINTS:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                hit_keypoint = any(
+                    isinstance(item, EditablePointItem)
+                    for item in self.scene().items(scene_pos)
+                )
+                if not hit_keypoint:
+                    self._det_scene.clearSelection()
+                    if hasattr(self._det_scene, "clear_selected_slice_group"):
+                        self._det_scene.clear_selected_slice_group()
+                    event.accept()
+                    return
             elif self._mode == EditorMode.CREATE_KEYPOINT:
                 scene_pos = self.mapToScene(event.position().toPoint())
                 logger.debug("CREATE_KEYPOINT click at=%s", scene_pos)
@@ -1495,6 +1563,7 @@ class DetectionCanvasView(QGraphicsView):
                         pt.set_editor_mode(EditorMode.EDIT_KEYPOINTS)
                         target_group.point_items.append(pt)
                         target_group.refresh_keypoint_geometry()
+                        target_group.apply_visual_state()
 
                         scene = self.scene()
                         if hasattr(scene, 'keypoint_created'):
@@ -1525,6 +1594,7 @@ class DetectionCanvasView(QGraphicsView):
                     pt.set_editor_mode(EditorMode.CREATE_SLICE)
                     target_group.point_items.append(pt)
                     target_group.refresh_keypoint_geometry()
+                    target_group.apply_visual_state()
 
                     if hasattr(self._det_scene, "keypoint_created"):
                         self._det_scene.keypoint_created.emit(target_group, pt)

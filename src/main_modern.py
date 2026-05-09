@@ -760,7 +760,7 @@ class ModernChartAnalysisApp(QMainWindow):
         
         self.colors = {
             "bar":         {"normal": (0, 120, 255),   "highlight": (30, 144, 255)},
-            "slice":       {"normal": (255, 90, 90),   "highlight": (255, 140, 140)},
+            "slice":       {"normal": (255, 90, 90),   "highlight": (46, 204, 113)},
             "line":        {"normal": (255, 0, 0),     "highlight": (255, 99, 71)},
             "scatter":     {"normal": (0, 128, 0),     "highlight": (50, 205, 50)},
             "box":         {"normal": (128, 0, 128),   "highlight": (147, 112, 219)},

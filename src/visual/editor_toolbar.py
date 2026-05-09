@@ -72,12 +72,17 @@ class EditorToolbar(QWidget):
         self._btn_create = self._make_mode_btn("➕ Create", "Create mode — draw new detection boxes (C)")
         self._btn_edit_kps = self._make_mode_btn("🎯 Edit Key Point", "Edit mode — move pie keypoints (K)")
         self._btn_create_kp = self._make_mode_btn("📍 Add Key Point", "Create mode — add new pie keypoint (A)")
+        self._btn_create_slice = self._make_mode_btn(
+            "🥧 Create Slice",
+            "Create mode — add 5 pie keypoints sequentially (S)",
+        )
 
         self._btn_group.addButton(self._btn_view, EditorMode.VIEW.value)
         self._btn_group.addButton(self._btn_edit, EditorMode.EDIT_BOXES.value)
         self._btn_group.addButton(self._btn_create, EditorMode.CREATE_BOX.value)
         self._btn_group.addButton(self._btn_edit_kps, EditorMode.EDIT_KEYPOINTS.value)
         self._btn_group.addButton(self._btn_create_kp, EditorMode.CREATE_KEYPOINT.value)
+        self._btn_group.addButton(self._btn_create_slice, EditorMode.CREATE_SLICE.value)
 
         self._btn_view.setChecked(True)
 
@@ -86,9 +91,11 @@ class EditorToolbar(QWidget):
         row1.addWidget(self._btn_create)
         row1.addWidget(self._btn_edit_kps)
         row1.addWidget(self._btn_create_kp)
+        row1.addWidget(self._btn_create_slice)
         # Hidden by default; shown only for chart types that have keypoints
         self._btn_edit_kps.setVisible(False)
         self._btn_create_kp.setVisible(False)
+        self._btn_create_slice.setVisible(False)
 
         # Separator
         sep = QFrame()
@@ -235,9 +242,10 @@ class EditorToolbar(QWidget):
         """Show or hide the Edit Key Point / Add Key Point mode buttons."""
         self._btn_edit_kps.setVisible(visible)
         self._btn_create_kp.setVisible(visible)
+        self._btn_create_slice.setVisible(visible)
         # If KP buttons are hidden and a KP mode is active, fall back to VIEW
         if not visible and self._current_mode in (
-            EditorMode.EDIT_KEYPOINTS, EditorMode.CREATE_KEYPOINT
+            EditorMode.EDIT_KEYPOINTS, EditorMode.CREATE_KEYPOINT, EditorMode.CREATE_SLICE
         ):
             self.set_mode(EditorMode.VIEW)
             self.mode_changed.emit(EditorMode.VIEW)
@@ -271,6 +279,11 @@ class EditorToolbar(QWidget):
     # ── Private ──
 
     def _on_mode_button(self, mode_id: int):
-        mode = EditorMode(mode_id)
+        if isinstance(mode_id, EditorMode):
+            mode = mode_id
+        else:
+            mode = EditorMode._value2member_map_.get(mode_id)
+            if mode is None:
+                return
         self._current_mode = mode
         self.mode_changed.emit(mode)

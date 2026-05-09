@@ -1434,8 +1434,13 @@ Click to configure advanced options."""
             # Phase 5: keypoint edit signals for undo/redo
             self._det_scene.keypoint_moved.connect(self._on_scene_keypoint_moved)
             self._det_scene.keypoint_created.connect(self._on_scene_keypoint_created)
+            self._det_scene.keypoint_deleted.connect(self._on_scene_keypoint_deleted)
+            self._det_scene.slice_created.connect(self._on_scene_slice_created)
             # Phase 7: sync class dropdown with selected box in Edit mode
             self._det_scene.box_selected.connect(self._on_scene_box_selected)
+            # Status messages from canvas
+            self._det_canvas_view.status_message.connect(self._on_canvas_status_message)
+            self._det_canvas_view.mode_exit_requested.connect(self._on_canvas_mode_exit)
             
             # Legacy references (set to None — guarded by _use_legacy_canvas)
             self.display_frame = self._det_canvas_view  # for layout compatibility
@@ -2022,9 +2027,11 @@ Click to configure advanced options."""
         # Immediately highlight the newly created box
         self._det_scene.highlight_item_by_bbox(xyxy, class_name)
 
-    def _on_scene_keypoint_moved(self, point_item, old_pos, new_pos):
-        """Handle keypoint drag completion — push a MoveKeypointCommand for undo/redo."""
+    def _on_scene_keypoint_moved(self, point_item, old_pos, new_pos, source: str = "user"):
+        """Handle keypoint move completion — push undo only for user drags."""
         if not self._editor_state:
+            return
+        if source != "user":
             return
         if old_pos == new_pos:
             return
@@ -2037,6 +2044,27 @@ Click to configure advanced options."""
             return
         from visual.detection_editor_state import CreateKeypointCommand
         self._editor_state.push(CreateKeypointCommand(group, point_item))
+
+    def _on_scene_keypoint_deleted(self, group, point_item):
+        """Handle keypoint deletion — push a DeleteKeypointCommand for undo/redo."""
+        if not self._editor_state:
+            return
+        from visual.detection_editor_state import DeleteKeypointCommand
+        self._editor_state.push(DeleteKeypointCommand(group, point_item))
+
+    def _on_scene_slice_created(self, group):
+        """Handle creation of a new slice group."""
+        if not self._editor_state or not self._det_scene:
+            return
+        from visual.detection_editor_state import CreateCommand
+        self._editor_state.push(CreateCommand(self._det_scene, group))
+
+    def _on_canvas_status_message(self, message: str, duration_ms: int = 3000):
+        self.statusBar().showMessage(message, duration_ms)
+
+    def _on_canvas_mode_exit(self, mode):
+        if self._editor_toolbar:
+            self._editor_toolbar.set_mode(mode)
 
     def _on_scene_box_selected(self, class_name: str):
         """Sync editor toolbar Class: dropdown with the selected box's class."""
@@ -2110,6 +2138,17 @@ Click to configure advanced options."""
                 self._start_ocr_loading(self.advanced_settings)
             self.update_status("⏳ Waiting for EasyOCR to finish loading, re-extract will start automatically...")
             return
+
+        # Block re-extract if any pie slices are incomplete
+        if hasattr(self._det_scene, "get_incomplete_slices"):
+            incomplete = self._det_scene.get_incomplete_slices()
+            if incomplete:
+                count = len(incomplete)
+                self.statusBar().showMessage(
+                    f"⚠️ {count} pie slice(s) incomplete. Complete 5 keypoints per slice before re-extract.",
+                    6000,
+                )
+                return
 
         # Flush any text or numeric edits made in the OCR/Data tabs back into
         # current_analysis_result before exporting, so user corrections in those

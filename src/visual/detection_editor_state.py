@@ -221,19 +221,39 @@ class MoveKeypointCommand(QUndoCommand):
         if not _item_is_alive(self._point_item):
             logger.debug("MoveKeypointCommand.redo: item deleted — skipping")
             return
-        self._point_item.setPos(self._new_pos)
         parent = self._point_item.parentItem()
-        if parent is not None and hasattr(parent, '_update_lines'):
+        if parent is not None and hasattr(parent, "apply_keypoint_move"):
+            parent.apply_keypoint_move(self._point_item, self._old_pos, self._new_pos, source="command")
+            return
+            
+        if parent is not None:
+            self._point_item.setPos(parent.mapFromScene(self._new_pos))
+        else:
+            self._point_item.setPos(self._new_pos)
+            
+        if parent is not None and hasattr(parent, "_update_lines"):
             parent._update_lines()
+        if parent is not None and hasattr(parent, "sync_bbox_to_points"):
+            parent.sync_bbox_to_points()
 
     def undo(self):
         if not _item_is_alive(self._point_item):
             logger.debug("MoveKeypointCommand.undo: item deleted — skipping")
             return
-        self._point_item.setPos(self._old_pos)
         parent = self._point_item.parentItem()
-        if parent is not None and hasattr(parent, '_update_lines'):
+        if parent is not None and hasattr(parent, "apply_keypoint_move"):
+            parent.apply_keypoint_move(self._point_item, self._new_pos, self._old_pos, source="command")
+            return
+            
+        if parent is not None:
+            self._point_item.setPos(parent.mapFromScene(self._old_pos))
+        else:
+            self._point_item.setPos(self._old_pos)
+            
+        if parent is not None and hasattr(parent, "_update_lines"):
             parent._update_lines()
+        if parent is not None and hasattr(parent, "sync_bbox_to_points"):
+            parent.sync_bbox_to_points()
 
 
 class CreateKeypointCommand(QUndoCommand):
@@ -250,7 +270,12 @@ class CreateKeypointCommand(QUndoCommand):
             return
         if self._point_item not in self._group.point_items:
             self._group.point_items.append(self._point_item)
-        self._group._update_lines()
+        if hasattr(self._group, "refresh_keypoint_geometry"):
+            self._group.refresh_keypoint_geometry()
+        else:
+            self._group._update_lines()
+            if hasattr(self._group, "sync_bbox_to_points"):
+                self._group.sync_bbox_to_points()
 
     def undo(self):
         if not _item_is_alive(self._point_item):
@@ -260,7 +285,55 @@ class CreateKeypointCommand(QUndoCommand):
             self._group.point_items.remove(self._point_item)
         if self._point_item.scene():
             self._point_item.scene().removeItem(self._point_item)
-        self._group._update_lines()
+        if hasattr(self._group, "refresh_keypoint_geometry"):
+            self._group.refresh_keypoint_geometry()
+        else:
+            self._group._update_lines()
+            if hasattr(self._group, "sync_bbox_to_points"):
+                self._group.sync_bbox_to_points()
+
+
+class DeleteKeypointCommand(QUndoCommand):
+    """Undo-able deletion of a pie slice keypoint."""
+
+    def __init__(self, group, point_item, description: str = "Delete Keypoint"):
+        super().__init__(description)
+        self._group = group
+        self._point_item = point_item
+
+    def redo(self):
+        if not _item_is_alive(self._point_item):
+            logger.debug("DeleteKeypointCommand.redo: item deleted — skipping")
+            return
+        if self._point_item in self._group.point_items:
+            self._group.point_items.remove(self._point_item)
+        if self._point_item.scene():
+            self._point_item.scene().removeItem(self._point_item)
+        if hasattr(self._group, "refresh_keypoint_geometry"):
+            self._group.refresh_keypoint_geometry()
+        else:
+            if hasattr(self._group, "_update_lines"):
+                self._group._update_lines()
+            if hasattr(self._group, "sync_bbox_to_points"):
+                self._group.sync_bbox_to_points()
+
+    def undo(self):
+        if not _item_is_alive(self._point_item):
+            logger.debug("DeleteKeypointCommand.undo: item deleted — skipping")
+            return
+        if self._point_item not in self._group.point_items:
+            self._group.point_items.append(self._point_item)
+        if self._point_item.parentItem() is None:
+            self._point_item.setParentItem(self._group)
+        if self._group.scene() is not None and self._point_item.scene() is None:
+            self._group.scene().addItem(self._point_item)
+        if hasattr(self._group, "refresh_keypoint_geometry"):
+            self._group.refresh_keypoint_geometry()
+        else:
+            if hasattr(self._group, "_update_lines"):
+                self._group._update_lines()
+            if hasattr(self._group, "sync_bbox_to_points"):
+                self._group.sync_bbox_to_points()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -338,6 +411,7 @@ class EditorStateManager(QObject):
         parts = []
         # Count command types
         moves = resizes = deletes = creates = class_changes = 0
+        kp_moves = kp_adds = kp_deletes = 0
         for i in range(idx):
             cmd = self._undo_stack.command(i)
             if isinstance(cmd, MoveCommand):
@@ -350,6 +424,12 @@ class EditorStateManager(QObject):
                 creates += 1
             elif isinstance(cmd, ChangeClassCommand):
                 class_changes += 1
+            elif isinstance(cmd, MoveKeypointCommand):
+                kp_moves += 1
+            elif isinstance(cmd, CreateKeypointCommand):
+                kp_adds += 1
+            elif isinstance(cmd, DeleteKeypointCommand):
+                kp_deletes += 1
 
         if moves:
             parts.append(f"{moves} moved")
@@ -361,5 +441,11 @@ class EditorStateManager(QObject):
             parts.append(f"{creates} new")
         if class_changes:
             parts.append(f"{class_changes} reclassed")
+        if kp_moves:
+            parts.append(f"{kp_moves} kp moved")
+        if kp_adds:
+            parts.append(f"{kp_adds} kp added")
+        if kp_deletes:
+            parts.append(f"{kp_deletes} kp deleted")
 
         return " • ".join(parts) if parts else f"{idx} edits"

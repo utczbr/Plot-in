@@ -41,7 +41,6 @@ from PyQt6.QtWidgets import (
     QGraphicsView,
     QMenu,
     QGraphicsEllipseItem,
-    QGraphicsItemGroup,
     QRubberBand,
 )
 from PyQt6.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneHoverEvent
@@ -62,6 +61,7 @@ class EditorMode(Enum):
     CREATE_BOX = auto()     # Click-drag to draw a new bbox
     EDIT_KEYPOINTS = auto() # Move keypoints (Phase 5)
     CREATE_KEYPOINT = auto()# Place new keypoint (Phase 5)
+    CREATE_SLICE = auto()   # Create a new pie slice (Phase 6)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -460,40 +460,73 @@ class EditablePointItem(QGraphicsEllipseItem):
         pen = QPen(Qt.GlobalColor.black)
         pen.setCosmetic(True)
         self.setPen(pen)
+        self.setZValue(2000)  # stay above slice lines for hit-testing
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self._mode = EditorMode.VIEW
-        # Pre-drag position snapshot, updated at mouse-press before Qt commits the move.
-        # This fixes the KP-2 bug where ItemPositionHasChanged fires *after* the position
-        # is committed, making old_pos == new_pos in the undo command.
-        self._drag_start_pos: QPointF = QPointF(x, y)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setAcceptHoverEvents(True)
+        # Pre-drag position snapshot, updated at mouse-press.
+        # Uses scene coordinates to decouple from parent rebase shifts.
+        self._drag_start_scene_pos: QPointF = QPointF()
 
     def set_editor_mode(self, mode: EditorMode) -> None:
         self._mode = mode
         can_move = (mode == EditorMode.EDIT_KEYPOINTS)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, can_move)
+        logger.debug("EditablePointItem mode=%s idx=%s movable=%s", mode, self.idx, can_move)
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         """Snapshot position before Qt moves us — ensures undo command has a valid old_pos."""
-        self._drag_start_pos = QPointF(self.pos())
+        logger.debug("EditablePointItem press idx=%s mode=%s pos=%s", self.idx, self._mode, self.pos())
+        
+        # Bug 2 Fix: Clear selection to avoid unintended simultaneous multi-drag
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            scene = self.scene()
+            if scene:
+                scene.clearSelection()
+                
+        self.setSelected(True)
+        self._drag_start_scene_pos = QPointF(self.scenePos())
+        parent = self.parentItem()
+        if parent is not None and hasattr(parent, "begin_keypoint_drag"):
+            parent.begin_keypoint_drag(self)
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        scene_pos = self.scenePos()
+        if scene_pos != self._drag_start_scene_pos:
+            p = self.parentItem()
+            if hasattr(p, "point_moved_commit"):
+                p.point_moved_commit(self, self._drag_start_scene_pos, scene_pos, source="user")
+                
+        parent = self.parentItem()
+        if parent is not None and hasattr(parent, "end_keypoint_drag"):
+            parent.end_keypoint_drag(self)
+        super().mouseReleaseEvent(event)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             p = self.parentItem()
-            if hasattr(p, "point_moved"):
-                # Pass the pre-drag snapshot as old_pos so MoveKeypointCommand
-                # stores distinct old/new positions and undo actually works.
-                p.point_moved(self.idx, self._drag_start_pos, self.pos())
+            if hasattr(p, "_in_keypoint_update") and getattr(p, "_in_keypoint_update"):
+                return super().itemChange(change, value)
+            if hasattr(p, "_syncing_bbox") and getattr(p, "_syncing_bbox"):
+                return super().itemChange(change, value)
+            if hasattr(p, "_updating_lines") and getattr(p, "_updating_lines"):
+                return super().itemChange(change, value)
+            if hasattr(p, "point_moving"):
+                # Update visual lines only; do not push undo commands during drag
+                p.point_moving(self)
         return super().itemChange(change, value)
 
-class PieSliceGroup(QGraphicsItemGroup):
+class PieSliceGroup(QGraphicsRectItem):
     """
     A group containing EditablePointItems and visual lines for a pie slice.
     Automatically updates its bounding box (`xyxy`) when keypoints move.
     """
+    KEYPOINT_COUNT = 5
     def __init__(
         self,
         class_name: str,
@@ -501,10 +534,23 @@ class PieSliceGroup(QGraphicsItemGroup):
         colors: Dict[str, Tuple[int, int, int]] | None = None,
         parent: QGraphicsItem | None = None,
     ) -> None:
-        super().__init__(parent)
+        x1, y1, x2, y2 = detection.get("xyxy", [0, 0, 0, 0])
+        w = max(1.0, float(x2) - float(x1))
+        h = max(1.0, float(y2) - float(y1))
+        super().__init__(QRectF(0.0, 0.0, w, h), parent)
+        self.setPos(float(x1), float(y1))
         self.class_name = class_name
         self.detection = detection
         self._base_z = 0.0
+        
+        self.setFiltersChildEvents(False)
+        # Let child keypoints handle mouse events without the container intercepting.
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.setAcceptHoverEvents(False)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         
         # Colors
         palette = colors or DEFAULT_COLORS.get(class_name, DEFAULT_COLORS["slice"])
@@ -520,6 +566,10 @@ class PieSliceGroup(QGraphicsItemGroup):
         self.point_items: List[EditablePointItem] = []
         self._lines: List[QGraphicsLineItem] = []
         self._mode = EditorMode.VIEW
+        self._syncing_bbox = False
+        self._updating_lines = False
+        self._in_keypoint_update = False
+        self._active_drag_point: Optional[EditablePointItem] = None
         
         # Initialize
         self._init_keypoints()
@@ -528,6 +578,7 @@ class PieSliceGroup(QGraphicsItemGroup):
         self._mode = mode
         for p in self.point_items:
             p.set_editor_mode(mode)
+        logger.debug("PieSliceGroup mode=%s points=%d", mode, len(self.point_items))
             
     def _init_keypoints(self) -> None:
         kps = self.detection.get("keypoints", [])
@@ -545,52 +596,203 @@ class PieSliceGroup(QGraphicsItemGroup):
                 return
                 
         # create points
-        for i in range(min(5, len(kps_arr))):
+        for i in range(min(self.KEYPOINT_COUNT, len(kps_arr))):
             x, y = float(kps_arr[i, 0]), float(kps_arr[i, 1])
             if x <= 0 and y <= 0 and i > 0:
                 continue
-            pt = EditablePointItem(x, y, i, self)
+            local = self.mapFromScene(QPointF(x, y))
+            pt = EditablePointItem(local.x(), local.y(), i, self)
             self.point_items.append(pt)
             
         # Draw lines from center to boundary points
         self._update_lines()
-        
-    def _update_lines(self) -> None:
-        # Clear old lines
-        for line in self._lines:
-            if line.scene():
-                line.scene().removeItem(line)
-        self._lines.clear()
-        
+
+    def _center_point(self) -> Optional[EditablePointItem]:
+        for pt in self.point_items:
+            if getattr(pt, "idx", None) == 0:
+                return pt
+        return self.point_items[0] if self.point_items else None
+
+    def next_keypoint_index(self) -> Optional[int]:
+        used = {pt.idx for pt in self.point_items if hasattr(pt, "idx")}
+        for idx in range(self.KEYPOINT_COUNT):
+            if idx not in used:
+                return idx
+        return None
+
+    def missing_keypoint_indices(self) -> List[int]:
+        used = {pt.idx for pt in self.point_items if hasattr(pt, "idx")}
+        return [idx for idx in range(self.KEYPOINT_COUNT) if idx not in used]
+
+    def is_complete(self) -> bool:
+        return len(self.missing_keypoint_indices()) == 0
+
+    def begin_keypoint_drag(self, point_item: EditablePointItem) -> None:
+        self._active_drag_point = point_item
+
+    def end_keypoint_drag(self, point_item: EditablePointItem) -> None:
+        if self._active_drag_point is point_item:
+            self._active_drag_point = None
+            # Rebase after the drag ends to keep local coords stable.
+            self.refresh_keypoint_geometry(rebase=True)
+
+    def _begin_keypoint_update(self) -> bool:
+        if self._in_keypoint_update:
+            return False
+        self._in_keypoint_update = True
+        return True
+
+    def _end_keypoint_update(self) -> None:
+        self._in_keypoint_update = False
+
+    def _refresh_keypoint_geometry(self, rebase: bool = True) -> None:
+        self._update_lines()
+        self.sync_bbox_to_points(rebase=rebase)
+
+    def refresh_keypoint_geometry(self, rebase: bool = True) -> None:
+        if not self._begin_keypoint_update():
+            return
+        try:
+            self._refresh_keypoint_geometry(rebase=rebase)
+        finally:
+            self._end_keypoint_update()
+
+    def _emit_keypoint_moved(
+        self,
+        point_item: EditablePointItem,
+        old_pos: QPointF,
+        new_pos: QPointF,
+        source: str,
+    ) -> None:
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "keypoint_moved"):
+            scene.keypoint_moved.emit(point_item, old_pos, new_pos, source)
+
+    def apply_keypoint_move(
+        self,
+        point_item: EditablePointItem,
+        old_scene_pos: QPointF,
+        new_scene_pos: QPointF,
+        source: str = "command",
+    ) -> None:
+        if point_item is None:
+            return
+        if not self._begin_keypoint_update():
+            return
+        try:
+            new_local = self.mapFromScene(new_scene_pos)
+            point_item.setPos(new_local)
+            self._refresh_keypoint_geometry(rebase=True)
+        finally:
+            self._end_keypoint_update()
+        self._emit_keypoint_moved(point_item, QPointF(old_scene_pos), QPointF(new_scene_pos), source)
+
+    def sync_bbox_to_points(self, rebase: bool = True) -> None:
+        if self._syncing_bbox:
+            return
         if not self.point_items:
             return
+        self._syncing_bbox = True
+        try:
+            x1, y1, x2, y2 = self.current_xyxy()
+            if rebase:
+                new_pos = QPointF(x1, y1)
+                if new_pos != self.pos():
+                    for pt in self.point_items:
+                        scene_pos = pt.scenePos()
+                        new_local = scene_pos - new_pos
+                        if new_local != pt.pos():
+                            pt.setPos(new_local)
+                    self.setPos(new_pos)
+                w = max(1.0, x2 - x1)
+                h = max(1.0, y2 - y1)
+                self.setRect(QRectF(0.0, 0.0, w, h))
+            else:
+                local_pts = [pt.pos() for pt in self.point_items]
+                min_x = min(p.x() for p in local_pts)
+                min_y = min(p.y() for p in local_pts)
+                max_x = max(p.x() for p in local_pts)
+                max_y = max(p.y() for p in local_pts)
+                w = max(1.0, max_x - min_x)
+                h = max(1.0, max_y - min_y)
+                self.setRect(QRectF(min_x, min_y, w, h))
+            self.detection["xyxy"] = [x1, y1, x2, y2]
+        finally:
+            self._syncing_bbox = False
+        
+    def _update_lines(self) -> None:
+        if self._updating_lines:
+            return
+        self._updating_lines = True
+        try:
+            # Clear old lines
+            for line in self._lines:
+                if line.scene():
+                    line.scene().removeItem(line)
+            self._lines.clear()
             
-        center = self.point_items[0].pos()
-        for i in range(1, len(self.point_items)):
-            p = self.point_items[i].pos()
-            line = QGraphicsLineItem(center.x(), center.y(), p.x(), p.y(), self)
-            line.setPen(self._pen)
-            self._lines.append(line)
-            
-    def point_moved(self, idx: int, old_pos: QPointF, new_pos: QPointF) -> None:
-        """Called by EditablePointItem when dragged.
+            center_item = self._center_point()
+            if center_item is None:
+                return
 
-        Parameters
-        ----------
-        idx:     Index of the moved point in self.point_items.
-        old_pos: Position recorded at mouse-press (before Qt committed the move).
-                 Supplied by EditablePointItem._drag_start_pos to fix KP-2 where
-                 ItemPositionHasChanged fires after the position is committed, making
-                 a naive snapshot inside itemChange return new_pos == old_pos.
-        new_pos: Current (new) position after the move.
-        """
-        self._update_lines()
-        if self._mode == EditorMode.EDIT_KEYPOINTS:
-            pt = self.point_items[idx] if idx < len(self.point_items) else None
-            if pt is not None:
-                scene = self.scene()
-                if hasattr(scene, 'keypoint_moved'):
-                    scene.keypoint_moved.emit(pt, old_pos, new_pos)
+            # Order points by keypoint index so the path follows
+            # center -> edge1 -> edge2 -> edge3 -> edge4 -> center.
+            by_idx = {getattr(pt, "idx", None): pt for pt in self.point_items}
+            center = by_idx.get(0, center_item)
+            boundary_pts = [by_idx.get(i) for i in range(1, self.KEYPOINT_COUNT) if by_idx.get(i)]
+            if not boundary_pts:
+                return
+
+            sequence = [center] + boundary_pts
+            for a, b in zip(sequence, sequence[1:]):
+                p1 = a.pos()
+                p2 = b.pos()
+                line = QGraphicsLineItem(p1.x(), p1.y(), p2.x(), p2.y(), self)
+                line.setPen(self._pen)
+                line.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                line.setAcceptHoverEvents(False)
+                self._lines.append(line)
+
+            # Close the path back to center
+            last = boundary_pts[-1]
+            p_last = last.pos()
+            p_center = center.pos()
+            line = QGraphicsLineItem(p_last.x(), p_last.y(), p_center.x(), p_center.y(), self)
+            line.setPen(self._pen)
+            line.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            line.setAcceptHoverEvents(False)
+            self._lines.append(line)
+        finally:
+            self._updating_lines = False
+            
+    def point_moving(self, point_item: EditablePointItem) -> None:
+        """Called continuously during drag to update visual lines."""
+        if self._in_keypoint_update:
+            return
+        if not self._begin_keypoint_update():
+            return
+        try:
+            self._refresh_keypoint_geometry(rebase=False)
+        finally:
+            self._end_keypoint_update()
+
+    def point_moved_commit(
+        self,
+        point_item: EditablePointItem,
+        old_scene_pos: QPointF,
+        new_scene_pos: QPointF,
+        source: str = "user",
+    ) -> None:
+        """Called on mouse release to commit the final position to undo stack."""
+        if self._in_keypoint_update:
+            return
+        if not self._begin_keypoint_update():
+            return
+        try:
+            self._refresh_keypoint_geometry(rebase=True)
+        finally:
+            self._end_keypoint_update()
+        self._emit_keypoint_moved(point_item, old_scene_pos, new_scene_pos, source)
         
     def set_highlighted(self, highlighted: bool) -> None:
         if highlighted:
@@ -610,34 +812,48 @@ class PieSliceGroup(QGraphicsItemGroup):
         if not self.point_items:
             return self.detection.get("xyxy", [0, 0, 0, 0])
         import numpy as np
-        pts = np.array([[p.pos().x(), p.pos().y()] for p in self.point_items])
+        pts = np.array([[p.scenePos().x(), p.scenePos().y()] for p in self.point_items])
         return [float(pts[:, 0].min()), float(pts[:, 1].min()), 
                 float(pts[:, 0].max()), float(pts[:, 1].max())]
                 
     def export_keypoints(self) -> List[List[float]]:
         # Restore into original shape [x, y, conf(if original had it)]
-        orig_kps = self.detection.get("keypoints", [])
-        if not orig_kps:
-            return []
+        orig_kps = self.detection.get("keypoints")
+        if orig_kps is None:
+            orig_kps = []
             
         import numpy as np
-        orig_arr = np.asarray(orig_kps)
-        is_flat = (orig_arr.ndim == 1)
+        orig_arr = np.asarray(orig_kps) if len(orig_kps) else np.empty((0, 0))
+        is_flat = (orig_arr.ndim == 1 and orig_arr.size > 0)
         if is_flat:
-            if orig_arr.size >= 15:
+            if orig_arr.size % 3 == 0 and orig_arr.size >= 3:
                 orig_arr = orig_arr.reshape(-1, 3)
-            elif orig_arr.size >= 10:
+            elif orig_arr.size % 2 == 0 and orig_arr.size >= 2:
                 orig_arr = orig_arr.reshape(-1, 2)
-                
-        new_arr = np.copy(orig_arr)
-        for i, pt in enumerate(self.point_items):
-            if i < len(new_arr):
-                new_arr[i, 0] = pt.pos().x()
-                new_arr[i, 1] = pt.pos().y()
-                
+            else:
+                orig_arr = np.empty((0, 0))
+
+        cols = orig_arr.shape[1] if orig_arr.ndim == 2 else 0
+        if cols not in (2, 3):
+            cols = 2
+
+        new_list = orig_arr.tolist() if orig_arr.size else []
+        for pt in self.point_items:
+            idx = getattr(pt, "idx", None)
+            if idx is None or idx < 0:
+                continue
+            while len(new_list) <= idx:
+                if cols == 3:
+                    new_list.append([0.0, 0.0, 1.0])
+                else:
+                    new_list.append([0.0, 0.0])
+            scene_pos = pt.scenePos()
+            new_list[idx][0] = float(scene_pos.x())
+            new_list[idx][1] = float(scene_pos.y())
+
         if is_flat:
-            return new_arr.flatten().tolist()
-        return new_arr.tolist()
+            return [value for row in new_list for value in row]
+        return new_list
 
 # ──────────────────────────────────────────────────────────────────────
 # BaselineItem
@@ -751,8 +967,12 @@ class DetectionScene(QGraphicsScene):
     item_created = pyqtSignal(str, list)          # class_name, xyxy
     
     # Phase 5 Keypoint signals:
-    keypoint_moved = pyqtSignal(object, object, object)  # point_item, old_pos (QPointF), new_pos (QPointF)
+    keypoint_moved = pyqtSignal(object, object, object, str)  # point_item, old_pos, new_pos, source
     keypoint_created = pyqtSignal(object, object)        # group, point_item
+    keypoint_deleted = pyqtSignal(object, object)        # group, point_item
+
+    # Phase 6 Slice creation:
+    slice_created = pyqtSignal(object)                   # group
 
     # Phase 7 Selection sync:
     box_selected = pyqtSignal(str)  # class_name of the selected box
@@ -772,11 +992,44 @@ class DetectionScene(QGraphicsScene):
 
         # Emit box_selected when the user selects a single box in Edit mode
         self.selectionChanged.connect(self._on_selection_changed)
+
+    def _next_z_value(self) -> float:
+        if not self._rect_items:
+            return 1.0
+        return max(getattr(item, "_base_z", 1.0) for item in self._rect_items) + 0.01
+
+    def create_slice_group(self, xyxy: Optional[List[float]] = None) -> PieSliceGroup:
+        if not xyxy:
+            xyxy = [0.0, 0.0, 1.0, 1.0]
+        det = {"xyxy": list(xyxy), "conf": 1.0, "text": "", "keypoints": []}
+        palette = self._colors.get("slice", self._colors.get("other"))
+        group = PieSliceGroup(class_name="slice", detection=det, colors=palette)
+        group._base_z = self._next_z_value()
+        group.setZValue(group._base_z)
+        visible = self._visible_classes.get("slice", True)
+        group.setVisible(visible)
+        self.addItem(group)
+        self._rect_items.append(group)
+        return group
+
+    def get_incomplete_slices(self) -> List[PieSliceGroup]:
+        incomplete: List[PieSliceGroup] = []
+        for item in self._rect_items:
+            if isinstance(item, PieSliceGroup) and not item.is_complete():
+                incomplete.append(item)
+        return incomplete
         
     def set_editor_mode(self, mode: EditorMode) -> None:
         self._mode = mode
         for item in self._rect_items:
             item.set_editor_mode(mode)
+        pie_groups = sum(1 for item in self._rect_items if isinstance(item, PieSliceGroup))
+        logger.debug(
+            "DetectionScene mode=%s items=%d pie_groups=%d",
+            mode,
+            len(self._rect_items),
+            pie_groups,
+        )
 
     # ── Selection sync ──
 
@@ -1011,10 +1264,17 @@ class DetectionCanvasView(QGraphicsView):
     # Signal emitted continuously when hovering over the canvas
     coordinates_hovered = pyqtSignal(QPointF)
 
+    # Status messages for the host window
+    status_message = pyqtSignal(str, int)
+
+    # Request to sync toolbar mode when canvas exits a mode (e.g., Esc)
+    mode_exit_requested = pyqtSignal(object)
+
     def __init__(self, scene: DetectionScene, parent=None):
         self._rubber_band = None
         self._rubber_band_origin = QPoint()
         self._create_class_name = "box"  # Default
+        self._create_slice_group: Optional[PieSliceGroup] = None
         super().__init__(scene, parent)
         self._det_scene = scene
         self._mode = EditorMode.VIEW
@@ -1047,6 +1307,9 @@ class DetectionCanvasView(QGraphicsView):
     def set_mode(self, mode: EditorMode) -> None:
         self._mode = mode
         self._det_scene.set_editor_mode(mode)
+        logger.debug("DetectionCanvasView mode=%s", mode)
+        if mode != EditorMode.CREATE_SLICE:
+            self._reset_create_slice_state()
         if mode == EditorMode.VIEW:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         elif mode == EditorMode.EDIT_BOXES:
@@ -1055,6 +1318,15 @@ class DetectionCanvasView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
+
+        if mode == EditorMode.CREATE_SLICE:
+            self.status_message.emit(
+                "Create Slice: click 5 points in order (center, arc start, arc mid 1, arc mid 2, arc end).",
+                6000,
+            )
+
+    def _reset_create_slice_state(self) -> None:
+        self._create_slice_group = None
 
     # ── Zoom ──
 
@@ -1103,11 +1375,34 @@ class DetectionCanvasView(QGraphicsView):
            Ctrl+Z / Ctrl+Y trigger undo/redo via the scene signal.
         """
         from PyQt6.QtCore import Qt
+        if self._mode == EditorMode.CREATE_SLICE and event.key() == Qt.Key.Key_Escape:
+            self._reset_create_slice_state()
+            self.set_mode(EditorMode.VIEW)
+            self.mode_exit_requested.emit(EditorMode.VIEW)
+            self.status_message.emit("Exited Create Slice mode.", 3000)
+            event.accept()
+            return
         if self._mode == EditorMode.EDIT_BOXES:
             if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 for item in list(self._det_scene._rect_items):
                     if item.isSelected() and item.isVisible():
                         self._det_scene.item_deleted.emit(item)
+                event.accept()
+                return
+        if self._mode == EditorMode.EDIT_KEYPOINTS:
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                removed = 0
+                for item in list(self._det_scene.selectedItems()):
+                    if isinstance(item, EditablePointItem):
+                        group = item.parentItem()
+                        if isinstance(group, PieSliceGroup):
+                            self._det_scene.keypoint_deleted.emit(group, item)
+                            removed += 1
+                if removed:
+                    self.status_message.emit(
+                        "Keypoint deleted. Complete the slice before re-extract.",
+                        5000,
+                    )
                 event.accept()
                 return
         super().keyPressEvent(event)
@@ -1146,19 +1441,83 @@ class DetectionCanvasView(QGraphicsView):
                 return
             elif self._mode == EditorMode.CREATE_KEYPOINT:
                 scene_pos = self.mapToScene(event.position().toPoint())
-                clicked_groups = [item for item in self.scene().items(scene_pos) if isinstance(item, PieSliceGroup) and item.isVisible()]
-                
-                target_group = clicked_groups[0] if clicked_groups else None
+                logger.debug("CREATE_KEYPOINT click at=%s", scene_pos)
+
+                # Hit-test against the detection's xyxy bbox (the full slice area),
+                # rather than the group's boundingRect() (the tiny union of 8px dots).
+                # This allows clicking anywhere on the pie slice to create a keypoint.
+                target_group = None
+                for item in self._det_scene._rect_items:
+                    if not isinstance(item, PieSliceGroup) or not item.isVisible():
+                        continue
+                    # Primary: use the detection xyxy bbox
+                    xyxy = item.detection.get("xyxy")
+                    if xyxy and len(xyxy) == 4:
+                        x1, y1, x2, y2 = xyxy
+                        hit_rect = QRectF(x1, y1, x2 - x1, y2 - y1)
+                    else:
+                        # Fallback: use the scene bounding rect (union of children)
+                        hit_rect = item.sceneBoundingRect()
+                    if hit_rect.contains(scene_pos):
+                        target_group = item
+                        break
+
                 if target_group is not None:
-                    if len(target_group.point_items) < 5:
-                        pt = EditablePointItem(scene_pos.x(), scene_pos.y(), len(target_group.point_items), target_group)
-                        pt.set_editor_mode(self._mode)
+                    if target_group.is_complete():
+                        self.status_message.emit("Slice already has 5 keypoints.", 4000)
+                        event.accept()
+                        return
+                    next_idx = target_group.next_keypoint_index()
+                    if next_idx is not None:
+                        local_pos = target_group.mapFromScene(scene_pos)
+                        pt = EditablePointItem(local_pos.x(), local_pos.y(), next_idx, target_group)
+                        # New points should be in EDIT_KEYPOINTS mode so they are
+                        # immediately movable after being placed.
+                        pt.set_editor_mode(EditorMode.EDIT_KEYPOINTS)
                         target_group.point_items.append(pt)
-                        target_group._update_lines()
-                        
+                        target_group.refresh_keypoint_geometry()
+
                         scene = self.scene()
                         if hasattr(scene, 'keypoint_created'):
                             scene.keypoint_created.emit(target_group, pt)
+                    else:
+                        logger.debug("CREATE_KEYPOINT: no available keypoint slots")
+                        self.status_message.emit("Slice already has 5 keypoints.", 4000)
+                else:
+                    logger.debug("CREATE_KEYPOINT: no target_group hit")
+                    self.status_message.emit("Click inside a slice to add a keypoint.", 4000)
+                event.accept()
+                return
+            elif self._mode == EditorMode.CREATE_SLICE:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                logger.debug("CREATE_SLICE click at=%s", scene_pos)
+
+                if self._create_slice_group is None or self._create_slice_group.is_complete():
+                    seed = [scene_pos.x(), scene_pos.y(), scene_pos.x() + 1.0, scene_pos.y() + 1.0]
+                    self._create_slice_group = self._det_scene.create_slice_group(seed)
+                    if hasattr(self._det_scene, "slice_created"):
+                        self._det_scene.slice_created.emit(self._create_slice_group)
+
+                target_group = self._create_slice_group
+                next_idx = target_group.next_keypoint_index() if target_group else None
+                if target_group is not None and next_idx is not None:
+                    local_pos = target_group.mapFromScene(scene_pos)
+                    pt = EditablePointItem(local_pos.x(), local_pos.y(), next_idx, target_group)
+                    pt.set_editor_mode(EditorMode.CREATE_SLICE)
+                    target_group.point_items.append(pt)
+                    target_group.refresh_keypoint_geometry()
+
+                    if hasattr(self._det_scene, "keypoint_created"):
+                        self._det_scene.keypoint_created.emit(target_group, pt)
+
+                    if target_group.is_complete():
+                        self.status_message.emit(
+                            "Slice complete. Click to start another slice or press Esc to exit.",
+                            6000,
+                        )
+                        self._create_slice_group = None
+                else:
+                    self.status_message.emit("Slice already has 5 keypoints.", 4000)
                 event.accept()
                 return
             elif self._mode == EditorMode.EDIT_BOXES:

@@ -170,20 +170,40 @@ class EditableRectItem(QGraphicsRectItem):
         if mode != EditorMode.EDIT_BOXES:
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
-    _EDGE_TOLERANCE = 6.0
+    _MIN_HANDLE_SIZE = 2.0
+    _MAX_HANDLE_SIZE = 12.0
+    _HANDLE_SIZE_SCALE_FACTOR = 0.06
+    _EDGE_TOLERANCE_HANDLE_MULTIPLIER = 1.25
+    _MAX_EDGE_TOLERANCE = 10.0
+
+    def _handle_size(self) -> float:
+        rect = self.rect()
+        clamped_smallest_dimension = max(1.0, min(rect.width(), rect.height()))
+        # Scale handles with box size so tiny boxes get tiny handles too.
+        return max(
+            self._MIN_HANDLE_SIZE,
+            min(clamped_smallest_dimension * self._HANDLE_SIZE_SCALE_FACTOR, self._MAX_HANDLE_SIZE),
+        )
 
     def _get_resize_edges(self, pos: QPointF) -> str:
         if self._mode != EditorMode.EDIT_BOXES:
             return ""
+        edge_tolerance = max(
+            self._MIN_HANDLE_SIZE,
+            min(
+                self._handle_size() * self._EDGE_TOLERANCE_HANDLE_MULTIPLIER,
+                self._MAX_EDGE_TOLERANCE,
+            ),
+        )
         rect = self.rect()
         edges = ""
-        if abs(pos.y() - rect.top()) <= self._EDGE_TOLERANCE:
+        if abs(pos.y() - rect.top()) <= edge_tolerance:
             edges += "top"
-        elif abs(pos.y() - rect.bottom()) <= self._EDGE_TOLERANCE:
+        elif abs(pos.y() - rect.bottom()) <= edge_tolerance:
             edges += "bottom"
-        if abs(pos.x() - rect.left()) <= self._EDGE_TOLERANCE:
+        if abs(pos.x() - rect.left()) <= edge_tolerance:
             edges += "left"
-        elif abs(pos.x() - rect.right()) <= self._EDGE_TOLERANCE:
+        elif abs(pos.x() - rect.right()) <= edge_tolerance:
             edges += "right"
         return edges
 
@@ -199,8 +219,7 @@ class EditableRectItem(QGraphicsRectItem):
             painter.setPen(pen)
             
             rect = self.rect()
-            min_dim = min(rect.width(), rect.height())
-            s = max(4.0, min(min_dim * 0.03, 12.0))  # 3% of smallest dim, clamped 4-12px
+            s = self._handle_size()
             handles = [
                 QRectF(rect.left(), rect.top(), s, s),
                 QRectF(rect.center().x() - s/2, rect.top(), s, s),
@@ -1651,4 +1670,3 @@ class DetectionCanvasView(QGraphicsView):
             QApplication.clipboard().setText(calc_x_str)
         elif chosen == copy_pixel:
             QApplication.clipboard().setText(f"({pixel_x}, {pixel_y})")
-

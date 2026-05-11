@@ -184,9 +184,8 @@ def _check_and_download_models(models_dir: Path) -> None:
 
     print("Downloading models from utcz/Plot-in_requirements...")
     cmd = [
-        _sys.executable, "-m", "huggingface_hub.cli", "download",
-        "utcz/Plot-in_requirements",
-        "--local-dir", str(models_dir)
+        _sys.executable, "-c",
+        f"from huggingface_hub import snapshot_download; snapshot_download(repo_id='utcz/Plot-in_requirements', local_dir='{models_dir}')"
     ]
     try:
         subprocess.check_call(cmd)

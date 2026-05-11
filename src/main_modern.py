@@ -4291,27 +4291,45 @@ Click to configure advanced options."""
             QMessageBox.information(self, "Export", "No protocol rows to export.")
             return
 
-        out_dir = self.output_path_edit.text().strip()
-        if not out_dir:
-            out_dir, _ = QFileDialog.getSaveFileName(self, "Save Results CSV", "", "CSV (*.csv)")
-            if not out_dir:
-                return
-            dest = out_dir
-        else:
-            dest = str(Path(out_dir) / "_protocol_export.csv")
-
-        from core.export_manager import ExportManager
-        outcome_f = self.proto_outcome_combo.currentText()
-        group_f = self.proto_group_combo.currentText()
-        ok = ExportManager.export_protocol_csv(
-            rows, dest,
-            filter_outcome=outcome_f if outcome_f != "All" else None,
-            filter_group=group_f if group_f != "All" else None,
+        # --- Always ask the user where to save ---
+        # Build a sensible default filename/directory.
+        default_dir = self.output_path_edit.text().strip()
+        default_path = str(Path(default_dir) / "_protocol_export.csv") if default_dir else ""
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Save Results CSV", default_path, "CSV Files (*.csv)"
         )
-        if ok:
+        if not dest:
+            return  # user cancelled
+
+        # --- Collect exactly the filters that are active in the table ---
+        outcome_f = self.proto_outcome_combo.currentText() if self.proto_outcome_combo.count() > 0 else "All"
+        group_f   = self.proto_group_combo.currentText()   if self.proto_group_combo.count()   > 0 else "All"
+        status_f  = self.proto_status_combo.currentText()  if self.proto_status_combo.count()  > 0 else "All"
+
+        filtered = rows
+        if outcome_f != "All":
+            filtered = [r for r in filtered if r.get('outcome') == outcome_f]
+        if group_f != "All":
+            filtered = [r for r in filtered if r.get('group') == group_f]
+        if status_f != "All":
+            filtered = [r for r in filtered if r.get('review_status') == status_f]
+
+        # --- Use the same dynamic column list shown in the table ---
+        from core.protocol_row_builder import get_protocol_columns
+        chart_type = str(self.current_analysis_result.get('chart_type', '')).lower()
+        active_cols = get_protocol_columns(chart_type)
+        col_ids = [c[0] for c in active_cols]
+
+        import csv as _csv
+        try:
+            with open(dest, 'w', newline='', encoding='utf-8') as f:
+                writer = _csv.DictWriter(f, fieldnames=col_ids, extrasaction='ignore')
+                writer.writeheader()
+                for row in filtered:
+                    writer.writerow({k: ('' if row.get(k) is None else row.get(k, '')) for k in col_ids})
             self.update_status(f"Results CSV exported: {dest}")
-        else:
-            QMessageBox.warning(self, "Export Error", "Failed to export protocol CSV.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Error", f"Failed to export CSV:\n{exc}")
 
     def schedule_image_update(self):
         """

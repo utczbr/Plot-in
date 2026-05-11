@@ -13,6 +13,7 @@ for _i, _arg in enumerate(_sys.argv[:-1]):
 import argparse
 import logging
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -131,6 +132,64 @@ def _collect_options(args: argparse.Namespace) -> InstallOptions:
     return options
 
 
+def _check_and_download_models(models_dir: Path) -> None:
+    required_models = [
+        "classification.onnx",
+        "detect_bar.onnx",
+        "detect_box.onnx",
+        "detect_heatmap.onnx",
+        "detect_histogram.onnx",
+        "detect_line.onnx",
+        "detect_scatter.onnx",
+        "doclayout_yolo.onnx",
+        "Pie_pose.onnx",
+        "OCR/PP-LCNet_x1_0_doc_ori.onnx",
+        "OCR/PP-LCNet_x1_0_doc_ori.yml",
+        "OCR/PP-LCNet_x1_0_textline_ori.onnx",
+        "OCR/PP-LCNet_x1_0_textline_ori.yml",
+        "OCR/PP-OCRv5_server_det.onnx",
+        "OCR/PP-OCRv5_server_det.yml",
+        "OCR/PP-OCRv5_server_rec.onnx",
+        "OCR/PP-OCRv5_server_rec.yml",
+        "OCR/sym_shape_infer_temp.onnx",
+        "OCR/UVDoc .onnx",
+        "OCR/UVDoc .yml",
+    ]
+
+    missing = [m for m in required_models if not (models_dir / m).exists()]
+    if not missing:
+        logging.info("All required models are present in %s", models_dir)
+        return
+
+    print(f"\nMissing {len(missing)} models in {models_dir}. Downloading from Hugging Face...")
+    logging.info("Missing models: %s", missing)
+
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import huggingface_hub
+    except ImportError:
+        print("Installing huggingface_hub CLI...")
+        subprocess.check_call(
+            [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]"],
+            stdout=subprocess.DEVNULL
+        )
+
+    print("Downloading models from utcz/Plot-in_requirements...")
+    cmd = [
+        _sys.executable, "-m", "huggingface_hub.cli", "download",
+        "utcz/Plot-in_requirements",
+        "--local-dir", str(models_dir)
+    ]
+    try:
+        subprocess.check_call(cmd)
+        print("Models downloaded successfully.\n")
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: Failed to download models from Hugging Face: {e}")
+        logging.error("Hugging Face download failed: %s", e)
+        _sys.exit(1)
+
+
 def main() -> int:
     args = _parse_args()
     configure_logging(args.verbose)
@@ -154,6 +213,12 @@ def main() -> int:
             suggestion = attempt_auto_python_install(platform_info)
             logging.error("Suggested Python install command: %s", suggestion)
         return 2
+
+    models_dir = Path(args.models_dir).expanduser()
+    if not models_dir.is_absolute():
+        models_dir = (STATE_ROOT / models_dir).resolve()
+        
+    _check_and_download_models(models_dir)
 
     try:
         options = _collect_options(args)

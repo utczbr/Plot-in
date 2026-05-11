@@ -39,7 +39,7 @@ ENV/
 # Project specific
 #docs/
 models/
-!src/models/
+src/models/
 runs/
 *.log
 Backup/

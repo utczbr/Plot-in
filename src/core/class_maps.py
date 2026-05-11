@@ -38,8 +38,8 @@ CLASS_MAP_SCATTER: Dict[int, str] = {
 
 # Histogram detection model
 CLASS_MAP_HISTOGRAM: Dict[int, str] = {
-    0: 'chart', 1: 'bar', 2: 'chart_title', 3: 'legend',
-    4: 'axis_title', 5: 'data_label', 6: 'axis_labels'
+    0: 'chart', 1: 'bar', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Heatmap detection model

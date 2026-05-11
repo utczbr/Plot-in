@@ -16,4 +16,14 @@ for %%F in (
 )
 
 py -3 install.py %*
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [WARNING] 'py' launcher failed or returned an error. Trying 'python' directly...
+    python install.py %*
+    if %ERRORLEVEL% NEQ 0 (
+        echo.
+        echo [ERROR] Installation failed. Please ensure Python 3 is installed and in your PATH.
+        pause
+    )
+)
 exit /b %ERRORLEVEL%

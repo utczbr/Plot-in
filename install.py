@@ -170,10 +170,17 @@ def _check_and_download_models(models_dir: Path) -> None:
         import huggingface_hub
     except ImportError:
         print("Installing huggingface_hub CLI...")
-        subprocess.check_call(
-            [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]"],
-            stdout=subprocess.DEVNULL
-        )
+        try:
+            subprocess.check_call(
+                [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]"],
+                stdout=subprocess.DEVNULL
+            )
+        except subprocess.CalledProcessError:
+            # Fallback for Debian 12+ externally managed environments
+            subprocess.check_call(
+                [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]", "--break-system-packages"],
+                stdout=subprocess.DEVNULL
+            )
 
     print("Downloading models from utcz/Plot-in_requirements...")
     cmd = [

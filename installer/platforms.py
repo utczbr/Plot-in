@@ -41,10 +41,11 @@ def detect_platform() -> PlatformInfo:
 
 def validate_python_version() -> Optional[str]:
     major, minor = sys.version_info[:2]
-    if major != 3 or minor < 8 or minor >= 14:
+    if major != 3 or minor < 10 or minor >= 14:
         return (
             f"Python {major}.{minor} is not supported. "
-            "Please use Python >=3.8 and <3.14."
+            "Please use Python >=3.10 and <3.14 "
+            "(Python 3.8 and 3.9 are end-of-life and not supported by onnxruntime 1.21+)."
         )
     return None
 

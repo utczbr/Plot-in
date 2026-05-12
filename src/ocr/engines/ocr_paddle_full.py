@@ -19,7 +19,10 @@ Performance: ~2-3 seconds per image on GPU (PP-OCRv5_server models)
 
 import cv2
 import numpy as np
-import onnxruntime as ort
+try:
+    import onnxruntime as ort
+except (ImportError, OSError):
+    ort = None  # type: ignore[assignment]
 from typing import List, Tuple, Optional, Dict, Union, Any
 import logging
 from pathlib import Path

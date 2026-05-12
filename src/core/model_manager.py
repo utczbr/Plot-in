@@ -3,35 +3,97 @@ Thread-safe singleton for model management to avoid reloading models for each im
 """
 import threading
 from pathlib import Path
-# Guard onnxruntime import: on Windows, onnxruntime 1.21+ requires the
-# Microsoft Visual C++ 2022 Redistributable. Without it, the DLL fails to load
-# and Python raises ImportError (DLL load failed). We catch this early so the
-# user gets a clear, actionable message instead of a raw traceback.
-try:
-    import onnxruntime as ort
-except (ImportError, OSError) as _ort_import_err:
-    import sys as _sys
-    _msg = (
-        f"onnxruntime could not be loaded: {_ort_import_err}\n\n"
-        "On Windows this usually means the Microsoft Visual C++ 2022 Redistributable\n"
-        "is not installed. Download and install it from:\n"
-        "  https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-        "After installing, restart the application."
-    )
-    raise ImportError(_msg) from _ort_import_err
 import logging
 import re
+import sys
+import platform
 from typing import Dict, Optional
 
 
 from .config import MODELS_CONFIG
+
+# ---------------------------------------------------------------------------
+# Lazy import for onnxruntime.
+#
+# We do NOT import onnxruntime at module level because on Windows the import
+# can crash with:
+#   ImportError: DLL load failed while importing onnxruntime_pybind11_state
+#
+# Causes include:
+#   - Missing Microsoft Visual C++ 2022 Redistributable
+#   - Incompatible Python architecture (32-bit Python + 64-bit wheel)
+#   - Corrupted venv (partial or failed pip install)
+#
+# By deferring the import to load_models(), the GUI can start and show a
+# meaningful error dialog instead of crashing to a terminal traceback.
+# ---------------------------------------------------------------------------
+_ort = None  # Will hold the onnxruntime module once loaded
+_ort_import_error: Optional[str] = None  # Error message if import failed
+
+
+def _ensure_ort():
+    """Lazy-import onnxruntime.  Raises RuntimeError with a helpful message."""
+    global _ort, _ort_import_error
+
+    if _ort is not None:
+        return _ort
+
+    if _ort_import_error is not None:
+        # Already tried and failed — don't retry every time.
+        raise RuntimeError(_ort_import_error)
+
+    try:
+        import onnxruntime as ort_mod
+        _ort = ort_mod
+        return _ort
+    except (ImportError, OSError) as exc:
+        # Build a diagnostic message
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        arch = platform.machine()  # e.g. 'AMD64', 'x86', 'x86_64'
+        bits = "64-bit" if sys.maxsize > 2**32 else "32-bit"
+
+        lines = [
+            f"onnxruntime failed to load: {exc}",
+            "",
+            f"  Python version:  {py_ver} ({bits})",
+            f"  Architecture:    {arch}",
+            f"  Platform:        {sys.platform}",
+            "",
+        ]
+
+        if sys.platform == "win32":
+            lines.extend([
+                "This usually means one of the following:",
+                "",
+                "  1. Microsoft Visual C++ 2022 Redistributable is not installed.",
+                "     Download the CORRECT version for your system:",
+                f"       {'https://aka.ms/vs/17/release/vc_redist.x64.exe' if '64' in arch or bits == '64-bit' else 'https://aka.ms/vs/17/release/vc_redist.x86.exe'}",
+                "",
+                "  2. Python architecture mismatch: you have {}-bit Python but".format(bits),
+                "     may need the other VC++ Redistributable (x86 vs x64).",
+                "",
+                "  3. The onnxruntime package is corrupted. Try:",
+                '     .venv\\Scripts\\pip install --force-reinstall onnxruntime==1.21.1',
+                "",
+                "  After fixing, restart the application.",
+            ])
+        else:
+            lines.extend([
+                "Try reinstalling onnxruntime:",
+                "  .venv/bin/pip install --force-reinstall onnxruntime==1.21.1",
+            ])
+
+        _ort_import_error = "\n".join(lines)
+        logging.error(_ort_import_error)
+        raise RuntimeError(_ort_import_error) from exc
+
 
 class ModelManager:
     """Thread-safe singleton for model management"""
     _instance = None
     _models = None
     _lock = threading.Lock()
-    
+
     def __new__(cls):
         if cls._instance is None:
             with cls._lock:
@@ -41,10 +103,10 @@ class ModelManager:
                     cls._instance._loaded_models_dir = None
                     cls._instance._last_load_errors = {}
         return cls._instance
-    
+
     @staticmethod
     def _get_providers():
-        import platform
+        ort = _ensure_ort()
         available = set(ort.get_available_providers())
         providers = []
         is_mac = platform.system() == 'Darwin'
@@ -59,11 +121,13 @@ class ModelManager:
     def _format_load_error(model_path: Path, exc: Exception) -> str:
         message = str(exc)
         if "Unsupported model IR version" in message:
+            ort = _ort  # may be None if import failed, but we wouldn't be here
+            ort_ver = getattr(ort, '__version__', 'unknown') if ort else 'unknown'
             max_ir_match = re.search(r"max supported IR version:\s*(\d+)", message)
             max_ir = max_ir_match.group(1) if max_ir_match else "unknown"
             return (
                 f"ONNX IR compatibility error for '{model_path.name}'. "
-                f"Installed onnxruntime={ort.__version__} supports up to IR {max_ir}. "
+                f"Installed onnxruntime={ort_ver} supports up to IR {max_ir}. "
                 "Upgrade onnxruntime to a newer version that supports this model."
             )
         return f"{type(exc).__name__}: {message}"
@@ -87,6 +151,8 @@ class ModelManager:
 
     def load_models(self, models_dir: str, force_reload: bool = False):
         """Load all required models atomically and reuse across all images."""
+        ort = _ensure_ort()  # Raises RuntimeError with diagnostics if unavailable
+
         models_dir_path = Path(models_dir)
         if (
             self._models is not None
@@ -154,7 +220,7 @@ class ModelManager:
             self._loaded_models_dir = models_dir_path
             self._last_load_errors = {}
             return self._models
-    
+
     def get_model(self, model_name: str):
         if self._models is None:
             raise RuntimeError("Models not loaded. Call load_models() first.")

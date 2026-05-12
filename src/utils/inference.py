@@ -1,12 +1,16 @@
 """
 ONNX inference utilities for chart analysis.
 """
+from __future__ import annotations
+
 import cv2
 import numpy as np
-import onnxruntime as ort
 from pathlib import Path
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 
 def preprocess_with_letterbox(img, new_shape=(640, 640), color=(114, 114, 114)):

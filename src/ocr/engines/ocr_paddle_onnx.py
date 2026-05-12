@@ -12,7 +12,10 @@ Performance characteristics:
 
 import cv2
 import numpy as np
-import onnxruntime as ort
+try:
+    import onnxruntime as ort
+except (ImportError, OSError):
+    ort = None  # type: ignore[assignment]
 from typing import List, Tuple, Optional, Dict, Any
 import logging
 from pathlib import Path

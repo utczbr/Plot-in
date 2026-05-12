@@ -80,7 +80,46 @@ pause
 exit /b 1
 
 :run_installer
-:: ── Step 3: Run the installer ─────────────────────────────────────────────
+:: ── Step 3: Check for Visual C++ 2022 Redistributable ──────────────────
+:: onnxruntime 1.21+ requires it. Without it the app crashes with
+:: "ImportError: DLL load failed" on startup.
+set "VCRT_OK=0"
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    :: Registry key exists — check that the version is >= 14.30 (VS 2022)
+    for /f "tokens=3" %%V in ('reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version 2^>nul ^| findstr /i "Version"') do (
+        set "VCRT_VER=%%V"
+    )
+    :: Version string looks like "v14.38.33130.0" — strip the leading 'v' and grab major.minor
+    set "VCRT_VER=!VCRT_VER:v=!"
+    for /f "tokens=1,2 delims=." %%A in ("!VCRT_VER!") do (
+        if %%A GEQ 14 if %%B GEQ 30 set "VCRT_OK=1"
+    )
+)
+
+if "!VCRT_OK!" == "0" (
+    echo.
+    echo  [NOTICE] Microsoft Visual C++ 2022 Redistributable not detected.
+    echo  onnxruntime 1.21+ requires it to run on Windows.
+    echo.
+    echo  Would you like to open the download page now?
+    echo    Y = open https://aka.ms/vs/17/release/vc_redist.x64.exe in browser
+    echo    N = continue without it ^(app may crash on first run^)
+    echo.
+    set /p VCRT_CHOICE="Your choice [Y/N]: "
+    if /i "!VCRT_CHOICE!" == "Y" (
+        start "" "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        echo.
+        echo  Download started. Install the Redistributable, then run install_windows.bat again.
+        echo.
+        pause
+        exit /b 0
+    )
+    echo  Continuing without VC++ 2022 Redistributable...
+    echo.
+)
+
+:: ── Step 4: Run the installer ─────────────────────────────────────────────
 echo Using Python: %PYTHON_EXE%
 %PYTHON_EXE% install.py %*
 if %ERRORLEVEL% NEQ 0 (

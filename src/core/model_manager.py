@@ -3,7 +3,22 @@ Thread-safe singleton for model management to avoid reloading models for each im
 """
 import threading
 from pathlib import Path
-import onnxruntime as ort
+# Guard onnxruntime import: on Windows, onnxruntime 1.21+ requires the
+# Microsoft Visual C++ 2022 Redistributable. Without it, the DLL fails to load
+# and Python raises ImportError (DLL load failed). We catch this early so the
+# user gets a clear, actionable message instead of a raw traceback.
+try:
+    import onnxruntime as ort
+except (ImportError, OSError) as _ort_import_err:
+    import sys as _sys
+    _msg = (
+        f"onnxruntime could not be loaded: {_ort_import_err}\n\n"
+        "On Windows this usually means the Microsoft Visual C++ 2022 Redistributable\n"
+        "is not installed. Download and install it from:\n"
+        "  https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+        "After installing, restart the application."
+    )
+    raise ImportError(_msg) from _ort_import_err
 import logging
 import re
 from typing import Dict, Optional

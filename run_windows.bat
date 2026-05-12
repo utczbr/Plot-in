@@ -68,6 +68,32 @@ if not defined VIRTUAL_ENV (
     echo ^» Virtual environment already active: %VIRTUAL_ENV%
 )
 
+:: ── Check for Visual C++ 2022 Redistributable ───────────────────────────
+:: onnxruntime 1.21+ requires it; without it Python raises:
+::   ImportError: DLL load failed while importing onnxruntime_pybind11_state
+set "VCRT_OK=0"
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    for /f "tokens=3" %%V in ('reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version 2^>nul ^| findstr /i "Version"') do set "VCRT_VER=%%V"
+    set "VCRT_VER=!VCRT_VER:v=!"
+    for /f "tokens=1,2 delims=." %%A in ("!VCRT_VER!") do (
+        if %%A GEQ 14 if %%B GEQ 30 set "VCRT_OK=1"
+    )
+)
+if "!VCRT_OK!" == "0" (
+    echo.
+    echo  [ERROR] Microsoft Visual C++ 2022 Redistributable is not installed.
+    echo  onnxruntime 1.21+ requires it. The app will crash without it.
+    echo.
+    echo  Download and install it from:
+    echo    https://aka.ms/vs/17/release/vc_redist.x64.exe
+    echo.
+    echo  After installing, run this file again.
+    echo.
+    pause
+    exit /b 1
+)
+
 :: ── Launch the application ────────────────────────────────────────────────
 echo ^» Starting Chart Analysis GUI...
 "%VENV_PYTHON%" src\main_modern.py %*

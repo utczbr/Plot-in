@@ -21,16 +21,20 @@ from .calibration_fast import FastCalibration
 
 logger = logging.getLogger(__name__)
 
-# Check for PyTorch availability
+# Check for PyTorch availability.
+# Catch OSError as well as ImportError: on Windows a broken torch installation
+# (missing MSVC Redistributable, CUDA mismatch, etc.) raises
+# OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed.
 try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
     HAS_TORCH = True
-except ImportError:
+except (ImportError, OSError, Exception):  # noqa: BLE001
     HAS_TORCH = False
-    torch = None
-    nn = None
+    torch = None  # type: ignore[assignment]
+    nn = None     # type: ignore[assignment]
+    optim = None  # type: ignore[assignment]
 
 
 class AxisType(Enum):

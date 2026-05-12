@@ -11,7 +11,15 @@ from .calibration_fast import FastCalibration
 from .calibration_adaptive import RANSACCalibration
 from .calibration_precise import PROSACCalibration
 from .visual_tick_detector import VisualTickCalibration
-from .calibration_neural import NeuralCalibration, LogCalibration
+try:
+    from .calibration_neural import NeuralCalibration, LogCalibration
+    _NEURAL_AVAILABLE = True
+except (ImportError, OSError, Exception):  # noqa: BLE001
+    # PyTorch not installed or its DLLs failed to load (common on Windows
+    # without the right MSVC Redistributable or CUDA toolkit).
+    NeuralCalibration = None  # type: ignore[assignment,misc]
+    LogCalibration = None     # type: ignore[assignment,misc]
+    _NEURAL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +99,20 @@ class CalibrationFactory:
         elif engine_type_lower == 'visual':
             return VisualTickCalibration(**kwargs)
         elif engine_type_lower == 'neural':
+            if not _NEURAL_AVAILABLE or NeuralCalibration is None:
+                logger.warning(
+                    "NeuralCalibration requested but PyTorch is not available "
+                    "(missing or failed to load). Falling back to FastCalibration."
+                )
+                return FastCalibration()
             return NeuralCalibration(**kwargs)
         elif engine_type_lower == 'log':
+            if not _NEURAL_AVAILABLE or LogCalibration is None:
+                logger.warning(
+                    "LogCalibration requested but PyTorch is not available. "
+                    "Falling back to FastCalibration."
+                )
+                return FastCalibration()
             return LogCalibration(**kwargs)
-        
+
         raise ValueError(f"Engine creation not implemented for: {engine_type_lower}")

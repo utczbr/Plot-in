@@ -91,9 +91,16 @@ def install_requirements(
     if install_scope == "user":
         scope_args = ["--user"]
 
+    # PyTorch CPU wheels live on a separate index; inject the extra index URL
+    # automatically whenever a '+cpu' spec is present so pip can find them.
+    PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+
     # Install in chunks to keep command length manageable across OSes.
     chunk_size = 30
     for idx in range(0, len(requirements), chunk_size):
         chunk = requirements[idx : idx + chunk_size]
-        cmd = [str(python_executable), "-m", "pip", "install", *scope_args, *chunk]
+        extra_index_args: List[str] = []
+        if any("+cpu" in spec for spec in chunk):
+            extra_index_args = ["--extra-index-url", PYTORCH_CPU_INDEX]
+        cmd = [str(python_executable), "-m", "pip", "install", *scope_args, *extra_index_args, *chunk]
         run_command(cmd)

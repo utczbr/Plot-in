@@ -17,12 +17,20 @@ from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
 from pipelines.chart_pipeline import ChartAnalysisPipeline
 
+# Catch OSError as well as ImportError: on Windows, easyocr transitively imports
+# torch, and if the torch DLL fails to load (missing MSVC Redistributable,
+# CUDA/cuDNN mismatch, etc.) Python raises:
+#   OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed.
+# We catch any Exception here so the app can still start and use Paddle instead.
 try:
     import easyocr
     EASYOCR_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):  # noqa: BLE001
     EASYOCR_AVAILABLE = False
-    logging.warning("EasyOCR module not found. OCR capabilities will be limited.")
+    logging.warning(
+        "EasyOCR could not be loaded (possibly a broken torch/CUDA installation). "
+        "OCR will fall back to Paddle."
+    )
 
 
 def _resolve_models_dir(models_dir: str) -> Path:

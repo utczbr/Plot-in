@@ -22,9 +22,14 @@ optuna==3.4.0
 matplotlib==3.7.5
 tqdm==4.66.4
 
-# Deep Learning (optional for GPU)
-torch==2.1.1; extra == "gpu"
-torchvision==0.16.1; extra == "gpu"
+# Deep Learning
+# torch+cpu must be listed BEFORE easyocr so pip resolves easyocr's torch
+# dependency against the CPU wheel rather than the default CUDA build.
+# On Windows/Linux without a GPU the CUDA wheel fails with:
+#   OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed.
+# The CPU wheel has no CUDA/cuDNN dependency and works everywhere.
+torch==2.1.2+cpu; sys_platform != "darwin"
+torchvision==0.16.2+cpu; sys_platform != "darwin"
 
 # OCR Engines
 easyocr==1.7.1

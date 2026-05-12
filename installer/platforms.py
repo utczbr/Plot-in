@@ -41,10 +41,10 @@ def detect_platform() -> PlatformInfo:
 
 def validate_python_version() -> Optional[str]:
     major, minor = sys.version_info[:2]
-    if major != 3 or minor < 8 or minor >= 12:
+    if major != 3 or minor < 8 or minor >= 14:
         return (
             f"Python {major}.{minor} is not supported. "
-            "Please use Python >=3.8 and <3.12."
+            "Please use Python >=3.8 and <3.14."
         )
     return None
 

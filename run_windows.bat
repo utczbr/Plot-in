@@ -13,9 +13,19 @@
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
-set "VENV_DIR=%~dp0venv"
+set "VENV_DIR=%~dp0.venv"
+set "VENV_DIR_ALT=%~dp0venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "VENV_ACTIVATE=%VENV_DIR%\Scripts\activate.bat"
+
+:: Fall back to plain 'venv' folder if '.venv' is absent (legacy / manual installs)
+if not exist "%VENV_ACTIVATE%" (
+    if exist "%VENV_DIR_ALT%\Scripts\activate.bat" (
+        set "VENV_DIR=%VENV_DIR_ALT%"
+        set "VENV_PYTHON=%VENV_DIR_ALT%\Scripts\python.exe"
+        set "VENV_ACTIVATE=%VENV_DIR_ALT%\Scripts\activate.bat"
+    )
+)
 
 :: ── Activate venv only if not already inside one ─────────────────────────
 :: VIRTUAL_ENV is exported by activate.bat; absent in a bare shell.

@@ -21,10 +21,24 @@ except ImportError:
     silhouette_score = None
     calinski_harabasz_score = None
 
+# Prefer sklearn's built-in HDBSCAN (scikit-learn >=1.3, no C++ compiler needed).
+# Fall back to the standalone `hdbscan` package if present.
 try:
-    import hdbscan as hdbscan_mod
+    from sklearn.cluster import HDBSCAN as _SklearnHDBSCAN
+    hdbscan_mod = _SklearnHDBSCAN  # expose as hdbscan_mod.HDBSCAN below
+    class _HDBSCANWrapper:
+        """Thin wrapper so hdbscan_mod.HDBSCAN(...) works for both backends."""
+        HDBSCAN = _SklearnHDBSCAN
 except ImportError:
-    hdbscan_mod = None
+    try:
+        import hdbscan as hdbscan_mod  # type: ignore[no-redef]
+        class _HDBSCANWrapper:  # type: ignore[no-redef]
+            HDBSCAN = hdbscan_mod.HDBSCAN
+    except ImportError:
+        hdbscan_mod = None
+        _HDBSCANWrapper = None  # type: ignore[assignment]
+
+_hdbscan_cls = _HDBSCANWrapper.HDBSCAN if _HDBSCANWrapper is not None else None
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +98,12 @@ class HDBSCANClusterer:
     """HDBSCAN clusterer - better for noisy/variable density data."""
     
     def __init__(self, min_cluster_size: int = 3, min_samples: Optional[int] = None, metric: str = "euclidean"):
-        if hdbscan_mod is None:
-            raise ImportError("hdbscan is required for HDBSCANClusterer.")
-        self._hdb = hdbscan_mod.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples, metric=metric)
+        if _hdbscan_cls is None:
+            raise ImportError(
+                "HDBSCAN is not available. "
+                "It is bundled with scikit-learn >=1.3 — please ensure scikit-learn is installed."
+            )
+        self._hdb = _hdbscan_cls(min_cluster_size=min_cluster_size, min_samples=min_samples, metric=metric)
         self._labels: Optional[np.ndarray] = None
         self._probs: Optional[np.ndarray] = None
         self._last_X: Optional[np.ndarray] = None

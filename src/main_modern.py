@@ -1,3 +1,21 @@
+# ---------------------------------------------------------------------------
+# CRITICAL: Pre-import onnxruntime BEFORE torch / easyocr.
+#
+# On Windows, the torch CPU build ships its own MSVC runtime DLLs and adds
+# torch/lib/ to the DLL search path on import.  If onnxruntime is imported
+# *after* torch, it picks up torch's incompatible DLLs and crashes with:
+#   ImportError: DLL load failed while importing onnxruntime_pybind11_state
+#
+# By importing onnxruntime first (before `import analysis` pulls in easyocr
+# → torch), onnxruntime binds to the system DLLs and both libraries coexist.
+# If onnxruntime itself is missing or broken, we silently skip here and let
+# the lazy import in model_manager.py surface the error later in the GUI.
+# ---------------------------------------------------------------------------
+try:
+    import onnxruntime as _ort_preload  # noqa: F401  — imported for DLL side-effect only
+except (ImportError, OSError):
+    pass  # Will be handled with a GUI dialog by model_manager._ensure_ort()
+
 import sys
 from pathlib import Path
 project_root = Path(__file__).resolve().parents[1]

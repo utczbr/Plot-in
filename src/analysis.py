@@ -1,4 +1,11 @@
 
+# Pre-import onnxruntime before torch/easyocr to avoid DLL conflicts on Windows.
+# See main_modern.py header comment for full explanation.
+try:
+    import onnxruntime as _ort_preload  # noqa: F401
+except (ImportError, OSError):
+    pass
+
 import os
 import sys
 import logging

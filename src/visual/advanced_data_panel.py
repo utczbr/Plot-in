@@ -246,8 +246,23 @@ class AdvancedDataTreeWidget(QTreeWidget):
                     QTreeWidgetItem(item_display, ["Bounding Box", f"[{bbox[0]:.1f}, {bbox[1]:.1f}, {bbox[2]:.1f}, {bbox[3]:.1f}]", "list", ""])
                 if 'estimated_value' in item:
                     QTreeWidgetItem(item_display, ["Estimated Value", f"{item['estimated_value']:.2f}", "float", ""])
+                elif 'value' in item:
+                    val = item['value']
+                    QTreeWidgetItem(item_display, ["Value", f"{val:.4f}" if isinstance(val, (int, float)) else str(val), "float" if isinstance(val, (int, float)) else "str", ""])
                 if 'cleaned_value' in item:
                     QTreeWidgetItem(item_display, ["Cleaned Value", f"{item['cleaned_value']:.2f}", "float", ""])
+                if 'row' in item:
+                    QTreeWidgetItem(item_display, ["Row", str(item['row']), "int", ""])
+                if 'col' in item:
+                    QTreeWidgetItem(item_display, ["Column", str(item['col']), "int", ""])
+                if 'row_label' in item and item['row_label']:
+                    QTreeWidgetItem(item_display, ["Row Label", str(item['row_label']), "str", ""])
+                if 'col_label' in item and item['col_label']:
+                    QTreeWidgetItem(item_display, ["Column Label", str(item['col_label']), "str", ""])
+                if 'value_confidence' in item and item['value_confidence'] is not None:
+                    QTreeWidgetItem(item_display, ["Value Confidence", f"{item['value_confidence']:.3f}", "float", ""])
+                if 'value_source' in item and item['value_source'] is not None:
+                    QTreeWidgetItem(item_display, ["Value Source", str(item['value_source']), "str", ""])
                 
             class_item.setExpanded(True)
             

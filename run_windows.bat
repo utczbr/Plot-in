@@ -94,6 +94,29 @@ if "!VCRT_OK!" == "0" (
     exit /b 1
 )
 
+:: ── Check that PyQt6 is available in the venv ─────────────────────────────
+:: If the installer's pip batch was interrupted (e.g. torch failure), PyQt6
+:: may be missing even though the venv exists.  Attempt a quick fix.
+"%VENV_PYTHON%" -c "import PyQt6" >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  [NOTICE] PyQt6 is not installed in the virtual environment.
+    echo  Attempting to install it now...
+    echo.
+    "%VENV_PYTHON%" -m pip install PyQt6==6.6.1 PyQt6-Qt6==6.6.1 PyQt6-sip==13.6.0
+    if !ERRORLEVEL! NEQ 0 (
+        echo.
+        echo  [ERROR] Failed to install PyQt6.
+        echo  Try running install_windows.bat again, or install manually:
+        echo    "%VENV_PYTHON%" -m pip install PyQt6==6.6.1
+        echo.
+        pause
+        exit /b 1
+    )
+    echo  PyQt6 installed successfully.
+    echo.
+)
+
 :: ── Launch the application ────────────────────────────────────────────────
 echo ^» Starting Chart Analysis GUI...
 "%VENV_PYTHON%" src\main_modern.py %*

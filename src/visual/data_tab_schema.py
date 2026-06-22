@@ -274,7 +274,10 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
     elements = result.get("elements")
     if not isinstance(elements, list):
         elements = []
-    elements = sorted(elements, key=lambda e: (_bbox_from_element(e) or [0])[0])
+    if chart_type == "heatmap":
+        elements = sorted(elements, key=lambda e: (e.get("row") or 0, e.get("col") or 0))
+    else:
+        elements = sorted(elements, key=lambda e: (_bbox_from_element(e) or [0])[0])
 
     for idx, element in enumerate(elements):
         if not isinstance(element, dict):

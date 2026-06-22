@@ -786,7 +786,13 @@ class ModernChartAnalysisApp(QMainWindow):
             "axis_title":  {"normal": (255, 165, 0), "highlight":   (255, 165, 0)},
             "chart_title": {"normal": (50, 50, 220),   "highlight": (100, 100, 255)},
             "legend":      {"normal": (210, 105, 30),  "highlight": (210, 180, 140)},
+            "color_bar":   {"normal": (0, 160, 160),   "highlight": (0, 220, 220)},
+            "color_bar_label": {"normal": (0, 200, 200), "highlight": (0, 255, 255)},
+            "color_bar_title": {"normal": (200, 50, 200), "highlight": (255, 100, 255)},
+            "cell":        {"normal": (100, 149, 237), "highlight": (135, 206, 250)},
             "axis_labels": {"normal": (255, 0, 255),   "highlight": (255, 105, 180)},
+            "data_label":       {"normal": (200, 200, 80),  "highlight": (230, 230, 100)},
+            "color_bar_region": {"normal": (0, 180, 180),  "highlight": (0, 240, 240)},
             "scale_label": {"normal": (255, 117, 24),  "highlight": (255, 140, 0)},
             "tick_label":  {"normal": (0, 255, 255),   "highlight": (0, 206, 209)},
             "other":       {"normal": (128, 128, 128), "highlight": (192, 192, 192)},
@@ -1697,6 +1703,8 @@ Click to configure advanced options."""
             ("tick_label", "Tick Labels"),
             ("legend", "Legend"),
             ("data_label", "Data Labels"),
+            ("color_bar_label", "Color Bar Labels"),
+            ("color_bar_title", "Color Bar Titles"),
             ("other", "Other Text"),
             ("layout_text", "Layout Text (DocLayout)")
         ]
@@ -2306,7 +2314,7 @@ Click to configure advanced options."""
         'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
         'box':       ['box', 'outlier', 'range_indicator', 'median_line', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
         'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
-        'heatmap':   ['cell', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'color_bar', 'scale_label'],
+        'heatmap':   ['cell', 'color_bar', 'color_bar_label', 'color_bar_title', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
     }
     _CHART_TYPE_CLASSES_FALLBACK = [
         'bar', 'scatter', 'data_point', 'chart_title',
@@ -2373,6 +2381,14 @@ Click to configure advanced options."""
 
             self._det_scene.set_detections(detections, colors)
             
+            # Draw grid lines for heatmaps if grid centers exist in metadata
+            metadata = self.current_analysis_result.get('metadata', {})
+            row_centers = metadata.get('row_centers')
+            col_centers = metadata.get('col_centers')
+            cell_detections = detections.get('cell', [])
+            if hasattr(self._det_scene, 'set_grid_lines'):
+                self._det_scene.set_grid_lines(row_centers, col_centers, cell_detections)
+
             # Pass calibration down to detection scene
             if 'calibration' in self.current_analysis_result:
                 if hasattr(self._det_scene, 'set_calibration'):
@@ -3463,9 +3479,37 @@ Click to configure advanced options."""
                 "tick_label": [],
                 "legend": [],
                 "data_label": [],
+                "color_bar_label": [],
+                "color_bar_title": [],
                 "other": [],
                 "layout_text": [],
             }
+
+            # Dynamic section renaming based on chart type
+            default_titles = {
+                "chart_title": "Chart Title",
+                "axis_title": "Axis Titles",
+                "scale_label": "Scale Labels",
+                "tick_label": "Tick Labels",
+                "legend": "Legend",
+                "data_label": "Data Labels",
+                "color_bar_label": "Color Bar Labels",
+                "color_bar_title": "Color Bar Titles",
+                "other": "Other Text",
+                "layout_text": "Layout Text (DocLayout)"
+            }
+            for sec_key, sec_title in default_titles.items():
+                if sec_key in self.ocr_section_widgets:
+                    self.ocr_section_widgets[sec_key]["group"].setTitle(sec_title)
+
+            if chart_type == "heatmap":
+                if "scale_label" in self.ocr_section_widgets:
+                    self.ocr_section_widgets["scale_label"]["group"].setTitle("Row Labels")
+                if "tick_label" in self.ocr_section_widgets:
+                    self.ocr_section_widgets["tick_label"]["group"].setTitle("Column / Tick Labels")
+            elif chart_type == "pie":
+                if "legend" in self.ocr_section_widgets:
+                    self.ocr_section_widgets["legend"]["group"].setTitle("Slice Labels")
 
             def _extend_section(section_key: str, source_class: str, items: Any):
                 if isinstance(items, dict):
@@ -3482,6 +3526,8 @@ Click to configure advanced options."""
                 "axis_title": "axis_title",
                 "legend": "legend",
                 "data_label": "data_label",
+                "color_bar_label": "color_bar_label",
+                "color_bar_title": "color_bar_title",
                 "other": "other",
             }
             for detection_key, section_key in direct_mapping.items():
@@ -3517,9 +3563,6 @@ Click to configure advanced options."""
                         continue
                     text = str(item.get("text", "")).strip()
                     cleaned_value = item.get("cleaned_value")
-
-                    if not text and cleaned_value is None:
-                        continue
 
                     looks_numeric = cleaned_value is not None
                     if not looks_numeric and text:
@@ -3578,7 +3621,7 @@ Click to configure advanced options."""
                         _extend_section("layout_text", region.get("class_name", "text"), [region])
 
             widgets_created = 0
-            for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "other", "layout_text"):
+            for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "color_bar_label", "color_bar_title", "other", "layout_text"):
                 section_info = self.ocr_section_widgets.get(section_key)
                 if not section_info:
                     continue
@@ -3594,8 +3637,6 @@ Click to configure advanced options."""
                     cleaned_value = item.get("cleaned_value")
 
                     if text in bar_label_texts or bbox_tuple in bar_label_bboxes:
-                        continue
-                    if not text and cleaned_value is None:
                         continue
 
                     dedupe_key = (text, bbox_tuple)
@@ -3791,18 +3832,26 @@ Click to configure advanced options."""
         if not isinstance(rows, list):
             rows = []
 
-        scale_info = self.current_analysis_result.get("scale_info", {})
-        logging.debug("Scale info: %s", scale_info)
-        r_squared = scale_info.get("r_squared")
-        if r_squared is not None:
-            confidence_color = "#4CAF50" if r_squared > 0.9 else "#FF9800" if r_squared > 0.7 else "#F44336"
-            self.scale_r2_label.setText(f"R²: {r_squared:.4f}")
-            self.scale_r2_label.setStyleSheet(
-                f"QLabel {{ color: {confidence_color}; font-weight: bold; font-size: 11px; }}"
-            )
+        if chart_type == "heatmap":
+            diagnostics = self.current_analysis_result.get("diagnostics", {})
+            grid_rows = diagnostics.get("grid_rows", "-")
+            grid_cols = diagnostics.get("grid_cols", "-")
+            cb_type = diagnostics.get("color_bar_type", "unknown")
+            self.scale_r2_label.setText(f"Grid: {grid_rows}x{grid_cols} | Colorbar: {cb_type}")
+            self.scale_r2_label.setStyleSheet("QLabel { color: #4CAF50; font-weight: bold; font-size: 11px; }")
         else:
-            self.scale_r2_label.setText("R²: N/A")
-            self.scale_r2_label.setStyleSheet("QLabel { color: #888888; font-size: 11px; }")
+            scale_info = self.current_analysis_result.get("scale_info", {})
+            logging.debug("Scale info: %s", scale_info)
+            r_squared = scale_info.get("r_squared")
+            if r_squared is not None:
+                confidence_color = "#4CAF50" if r_squared > 0.9 else "#FF9800" if r_squared > 0.7 else "#F44336"
+                self.scale_r2_label.setText(f"R²: {r_squared:.4f}")
+                self.scale_r2_label.setStyleSheet(
+                    f"QLabel {{ color: {confidence_color}; font-weight: bold; font-size: 11px; }}"
+                )
+            else:
+                self.scale_r2_label.setText("R²: N/A")
+                self.scale_r2_label.setStyleSheet("QLabel { color: #888888; font-size: 11px; }")
 
         self.data_group.setTitle(f"{chart_type.title() if chart_type else 'Chart'} Data")
         row_count = int(summary.get("row_count", len(rows)))
@@ -4074,9 +4123,56 @@ Click to configure advanced options."""
             
             row += 1
 
+        # Add Grid Lines checkbox if grid centers exist in metadata
+        metadata = self.current_analysis_result.get('metadata', {}) if self.current_analysis_result else {}
+        grid_visible = (
+            metadata.get('row_centers') is not None
+            and metadata.get('col_centers') is not None
+        )
+        
+        if grid_visible:
+            if 'grid_lines' in self.view_checkboxes_pool:
+                grid_checkbox = self.view_checkboxes_pool['grid_lines']
+                previous_state = grid_checkbox.isChecked()
+            else:
+                grid_checkbox = QCheckBox()
+                grid_checkbox.stateChanged.connect(self.schedule_image_update)
+                if not self._use_legacy_canvas and self._det_scene:
+                    grid_checkbox.stateChanged.connect(
+                        lambda state: self._det_scene.set_grid_visible(state == Qt.CheckState.Checked.value)
+                    )
+                self.view_checkboxes_pool['grid_lines'] = grid_checkbox
+                previous_state = True
+            
+            grid_checkbox.setText("⎯ Grid Lines")
+            grid_checkbox.setToolTip("Show/hide the calculated grid lines for heatmaps")
+            grid_checkbox.setChecked(previous_state)
+            grid_checkbox.setVisible(True)
+            
+            grid_style = """
+                QCheckBox {
+                    color: #4A90E2;
+                    font-weight: bold;
+                    font-size: 10px;
+                }
+                QCheckBox::indicator {
+                    width: 16px;
+                    height: 16px;
+                }
+            """
+            grid_checkbox.setStyleSheet(grid_style)
+            
+            self.view_content_layout.addWidget(grid_checkbox, row, 0, 1, 2)
+            self.visibility_checks['grid_lines'] = grid_checkbox
+            row += 1
+
 
     _CLASS_DISPLAY_NAMES = {
         "data_point": "Key Points",
+        "cell": "Heatmap Cells",
+        "color_bar": "Color Bars",
+        "color_bar_label": "Color Bar Labels",
+        "color_bar_title": "Color Bar Titles",
     }
 
     def _add_view_checkbox(self, class_name, items, row, col):

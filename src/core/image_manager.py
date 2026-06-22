@@ -76,6 +76,12 @@ class ImageManager:
                             'axis_labels': (255, 0, 255),
                             'scale_label': (255, 117, 24),
                             'tick_label': (0, 255, 255),
+                            'color_bar_label': (0, 200, 200),
+                            'color_bar_title': (200, 50, 200),
+                            'cell': (100, 149, 237),
+                            'color_bar': (0, 160, 160),
+                            'data_label': (200, 200, 80),
+                            'color_bar_region': (0, 180, 180),
                             'other': (128, 128, 128),
                             'baseline': (240, 240, 240)
                         }

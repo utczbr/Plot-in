@@ -33,6 +33,16 @@ class MockModule:
     def __call__(self, *args, **kwargs):
         return MockModule()
 
+# Save original modules
+original_modules = {m: sys.modules.get(m) for m in [
+    'extractors',
+    'extractors.base_extractor',
+    'extractors.bar_associator',
+    'services.orientation_detection_service',
+    'extractors.significance_associator',
+    'extractors.error_bar_validator'
+]}
+
 # Patch required modules before loading
 sys.modules['extractors'] = MockModule()
 sys.modules['extractors.base_extractor'] = MockModule()
@@ -40,6 +50,13 @@ sys.modules['extractors.bar_associator'] = MockModule()
 sys.modules['services.orientation_detection_service'] = MockModule()
 sys.modules['extractors.significance_associator'] = MockModule()
 sys.modules['extractors.error_bar_validator'] = MockModule()
+
+# Clean up mock modules immediately so we don't pollute other tests
+for m, orig in original_modules.items():
+    if orig is None:
+        sys.modules.pop(m, None)
+    else:
+        sys.modules[m] = orig
 
 # Now we can exec the module and get our function
 import logging

@@ -132,12 +132,112 @@ def _collect_options(args: argparse.Namespace) -> InstallOptions:
     return options
 
 
+def _check_connectivity(host: str = "huggingface.co", timeout: float = 5.0) -> bool:
+    """Quick DNS + TCP check to see if *host* is reachable."""
+    import socket
+    try:
+        socket.create_connection((host, 443), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def _try_huggingface_download(models_dir: Path, *, max_retries: int = 3) -> bool:
+    """Attempt snapshot_download from Hugging Face with retries.
+
+    Returns True on success, False on failure.
+    """
+    import time as _time
+
+    # Ensure huggingface_hub is available
+    try:
+        import huggingface_hub  # noqa: F401
+    except ImportError:
+        print("  Installing huggingface_hub CLI...")
+        for pip_extra_args in ([], ["--break-system-packages"]):
+            try:
+                subprocess.check_call(
+                    [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]"] + pip_extra_args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                break
+            except subprocess.CalledProcessError:
+                continue
+        else:
+            logging.warning("Could not install huggingface_hub; skipping HF download path.")
+            return False
+
+    cmd = [
+        _sys.executable, "-c",
+        (
+            "from huggingface_hub import snapshot_download; "
+            f"snapshot_download(repo_id='utcz/Plot-in_requirements', local_dir=r'{models_dir}')"
+        ),
+    ]
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"  Hugging Face download attempt {attempt}/{max_retries}...")
+            subprocess.check_call(cmd, timeout=600)
+            return True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logging.warning("HF download attempt %d/%d failed: %s", attempt, max_retries, exc)
+            if attempt < max_retries:
+                wait = 2 ** attempt
+                print(f"  Retrying in {wait}s...")
+                _time.sleep(wait)
+
+    return False
+
+
+def _try_manifest_download(models_dir: Path) -> bool:
+    """Fall back to per-file Google Drive downloads via model_manifest.json.
+
+    Returns True if all files were downloaded, False otherwise.
+    """
+    manifest_path = Path(__file__).resolve().parent / "installer" / "model_manifest.json"
+    if not manifest_path.exists():
+        logging.warning("model_manifest.json not found at %s; cannot use fallback.", manifest_path)
+        return False
+
+    from installer.models import load_model_manifest, verify_or_download_models
+    from installer.install_types import InstallOptions
+
+    try:
+        specs = load_model_manifest(manifest_path)
+    except Exception as exc:
+        logging.error("Failed to load model manifest: %s", exc)
+        return False
+
+    print("  Downloading models individually from Google Drive (manifest fallback)...")
+    summary = verify_or_download_models(
+        InstallOptions(),
+        specs,
+        models_root=models_dir,
+        python_executable=Path(_sys.executable),
+    )
+
+    total = summary.verified + summary.downloaded
+    if summary.failed:
+        print(f"  Manifest fallback: {total} OK, {summary.failed} failed.")
+        for failure in summary.failures:
+            print(f"    ✗ {failure}")
+        return False
+
+    print(f"  Manifest fallback: all {total} models verified/downloaded.")
+    return True
+
+
 def _check_and_download_models(models_dir: Path) -> None:
     required_models = [
         "classification.onnx",
         "detect_bar.onnx",
         "detect_box.onnx",
-        "detect_heatmap.onnx",
+        "heatmap_macro_detect.onnx",
+        "heatmap_colorbar_detect.onnx",
+        "heatmap_lettice_detect.onnx",
+        "heatmap_text_detect.onnx",
         "detect_histogram.onnx",
         "detect_line.onnx",
         "detect_scatter.onnx",
@@ -161,38 +261,52 @@ def _check_and_download_models(models_dir: Path) -> None:
         logging.info("All required models are present in %s", models_dir)
         return
 
-    print(f"\nMissing {len(missing)} models in {models_dir}. Downloading from Hugging Face...")
+    print(f"\nMissing {len(missing)} model(s) in {models_dir}.")
     logging.info("Missing models: %s", missing)
 
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        import huggingface_hub
-    except ImportError:
-        print("Installing huggingface_hub CLI...")
-        try:
-            subprocess.check_call(
-                [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]"],
-                stdout=subprocess.DEVNULL
-            )
-        except subprocess.CalledProcessError:
-            # Fallback for Debian 12+ externally managed environments
-            subprocess.check_call(
-                [_sys.executable, "-m", "pip", "install", "huggingface_hub[cli]", "--break-system-packages"],
-                stdout=subprocess.DEVNULL
-            )
+    # ── 1. Check connectivity ────────────────────────────────────────────
+    online = _check_connectivity()
+    if not online:
+        print("  ⚠  No internet connection detected (huggingface.co unreachable).")
+        logging.warning("Network connectivity check failed.")
+    else:
+        print("  Network OK — attempting Hugging Face download...")
 
-    print("Downloading models from utcz/Plot-in_requirements...")
-    cmd = [
-        _sys.executable, "-c",
-        f"from huggingface_hub import snapshot_download; snapshot_download(repo_id='utcz/Plot-in_requirements', local_dir='{models_dir}')"
-    ]
-    try:
-        subprocess.check_call(cmd)
-        print("Models downloaded successfully.\n")
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: Failed to download models from Hugging Face: {e}")
-        logging.error("Hugging Face download failed: %s", e)
+    # ── 2. Try Hugging Face snapshot_download (with retries) ─────────────
+    if online and _try_huggingface_download(models_dir):
+        # Re-check — snapshot_download may have fetched everything
+        still_missing = [m for m in required_models if not (models_dir / m).exists()]
+        if not still_missing:
+            print("Models downloaded successfully from Hugging Face.\n")
+            return
+        print(f"  {len(still_missing)} model(s) still missing after HF download.")
+
+    # ── 3. Fallback: per-file manifest download (Google Drive) ───────────
+    print("  Falling back to per-file manifest download...")
+    if _try_manifest_download(models_dir):
+        still_missing = [m for m in required_models if not (models_dir / m).exists()]
+        if not still_missing:
+            print("All models downloaded successfully (manifest fallback).\n")
+            return
+
+    # ── 4. Report remaining failures ─────────────────────────────────────
+    still_missing = [m for m in required_models if not (models_dir / m).exists()]
+    if still_missing:
+        print(f"\n  ERROR: {len(still_missing)} model(s) could not be downloaded:")
+        for m in still_missing:
+            print(f"    ✗ {m}")
+        print()
+        print("  Possible fixes:")
+        print("    • Check your internet connection and try again.")
+        print("    • If behind a proxy/firewall, ensure huggingface.co and")
+        print("      drive.google.com are accessible.")
+        print("    • Manually download models from:")
+        print("      https://huggingface.co/utcz/Plot-in_requirements")
+        print(f"      and place them in: {models_dir}")
+        print()
+        logging.error("Model download incomplete. Missing: %s", still_missing)
         _sys.exit(1)
 
 

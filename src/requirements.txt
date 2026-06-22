@@ -18,9 +18,6 @@ scipy==1.11.4
 # commented out; users who want the standalone package can install it manually
 # after installing Microsoft C++ Build Tools.
 # hdbscan==0.8.33
-optuna==3.4.0
-matplotlib==3.7.5
-tqdm==4.66.4
 
 # Deep Learning
 # torch+cpu must be listed BEFORE easyocr so pip resolves easyocr's torch
@@ -36,7 +33,6 @@ easyocr==1.7.1
 # PaddleOCR: uses ONNX Runtime models, no paddlepaddle dependency required.
 
 # Data Processing
-pandas==2.1.4
 Pillow==10.1.0
 
 # Document Processing

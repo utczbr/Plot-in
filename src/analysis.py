@@ -260,6 +260,13 @@ def main():
                         choices=['Linear', 'PROSAC', 'neural', 'log', 'visual', 'fast'],
                         help='Calibration method (neural recommended for log-scale/non-linear axes)')
     parser.add_argument('--annotated', action='store_true', help='Save annotated images')
+    parser.add_argument(
+        '--heatmap-mode', default='legacy',
+        choices=['legacy', 'fft', 'fft+color', 'full'],
+        help='Heatmap extraction pipeline mode: '
+             'legacy (DBSCAN/HSV) | fft (Goertzel grid) | '
+             'fft+color (+ LUT+CIEDE2000) | full (all optimisations)',
+    )
     parser.add_argument('--language', default=None, help='Comma-separated list of languages for OCR')
     parser.add_argument('--input-type', default='auto', choices=['auto', 'image', 'pdf'],
                         help='Input type filter: auto | image | pdf')
@@ -304,6 +311,7 @@ def main():
         context_path=args.context,
         filter_outcome=args.filter_outcome,
         filter_group=args.filter_group,
+        advanced_settings={'heatmap_mode': args.heatmap_mode},
     )
 
 

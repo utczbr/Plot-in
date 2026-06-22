@@ -17,7 +17,7 @@
   },
   "ocr_settings": {
     "easyocr_gpu": true,
-    "easyocr_download_enabled": true,
+    "easyocr_download_enabled": false,
     "easyocr_contrast_ths": 0.0,
     "easyocr_adjust_contrast": 0.5,
     "easyocr_min_size": 10,
@@ -84,5 +84,6 @@
     "method": "auto",
     "use_robust_gd": true
   },
-  "use_doclayout_text": true
+  "use_doclayout_text": true,
+  "heatmap_mode": "full"
 }

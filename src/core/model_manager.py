@@ -147,7 +147,10 @@ class ModelManager:
 
     # Models that are optional: missing or failing to load will log a warning
     # instead of raising RuntimeError, and their session is stored as None.
-    _OPTIONAL_MODELS = frozenset({'doclayout'})
+    _OPTIONAL_MODELS = frozenset({
+        'doclayout',
+        'heatmap_macro', 'heatmap_colorbar', 'heatmap_lattice', 'heatmap_text',
+    })
 
     def load_models(self, models_dir: str, force_reload: bool = False):
         """Load all required models atomically and reuse across all images."""

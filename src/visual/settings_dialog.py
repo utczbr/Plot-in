@@ -96,6 +96,7 @@ class SettingsDialog(QDialog):
         self._create_detection_tab()
         self._create_calibration_tab()
         self._create_processing_tab()
+        self._create_heatmap_tab()
         self._create_output_tab()
         # self._create_nn_classifier_tab()  # Hidden — preserved for future re-enablement
         
@@ -469,6 +470,112 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         self.tabs.addTab(tab, "Processing")
 
+    def _create_heatmap_tab(self):
+        """Create heatmap-specific extraction settings tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+
+        # ── Next-Gen Pipeline Mode ───────────────────────────────────────────
+        pipeline_group = QGroupBox("Next-Gen Extraction Pipeline")
+        pipeline_layout = QGridLayout(pipeline_group)
+
+        mode_label = QLabel("Pipeline Mode:")
+        mode_label.setToolTip(
+            "Select the heatmap extraction optimisation level.\n"
+            "Higher modes add FFT grid detection, 3D LUT colour inversion,\n"
+            "and affine-gap sequence alignment at the cost of calibration time."
+        )
+        pipeline_layout.addWidget(mode_label, 0, 0)
+
+        self.heatmap_mode_combo = QComboBox()
+        self.heatmap_mode_combo.setToolTip(mode_label.toolTip())
+        safe_combo_populate(self.heatmap_mode_combo, [
+            "Legacy  (DBSCAN + HSV)",
+            "FFT Grid  (Goertzel lattice)",
+            "FFT Grid + 3D LUT Color  (CIEDE2000)",
+            "Full  (FFT + LUT + PROSAC + Gotoh)",
+        ])
+        pipeline_layout.addWidget(self.heatmap_mode_combo, 0, 1)
+
+        # Friendly description label that updates when the combo changes
+        self._heatmap_mode_desc = QLabel()
+        self._heatmap_mode_desc.setWordWrap(True)
+        self._heatmap_mode_desc.setStyleSheet(
+            "color: #aaaaaa; font-style: italic; font-size: 9px; padding: 4px;"
+        )
+        pipeline_layout.addWidget(self._heatmap_mode_desc, 1, 0, 1, 2)
+
+        self.heatmap_mode_combo.currentIndexChanged.connect(self._update_heatmap_mode_desc)
+        self._update_heatmap_mode_desc(self.heatmap_mode_combo.currentIndex())
+
+        pipeline_group.setLayout(pipeline_layout)
+        scroll_layout.addWidget(pipeline_group)
+
+        # ── Grid Detection Info ───────────────────────────────────────────────
+        grid_info_group = QGroupBox("Grid Reconstruction Info")
+        grid_info_layout = QVBoxLayout(grid_info_group)
+        grid_info_text = QLabel(
+            "Legacy: 2-pass DBSCAN clustering on YOLO cell centroids.\n"
+            "FFT modes: Goertzel IIR frequency pruning (O(N·K)) + circular-mean\n"
+            "phase fusion with R\u0305 coherence guard. Falls back to DBSCAN if\n"
+            "the period is ambiguous or coherence R\u0305 < 0.20."
+        )
+        grid_info_text.setWordWrap(True)
+        grid_info_text.setStyleSheet("color: #888888; font-size: 9px;")
+        grid_info_layout.addWidget(grid_info_text)
+        scroll_layout.addWidget(grid_info_group)
+
+        # ── Color Inversion Info ──────────────────────────────────────────────
+        color_info_group = QGroupBox("Color Inversion Info")
+        color_info_layout = QVBoxLayout(color_info_group)
+        color_info_text = QLabel(
+            "Legacy: HSV V-channel brightness (no calibration).\n"
+            "3D LUT modes: CIEDE2000 \u0394E\u2080\u2080 precomputed into a 33\u00b3 RGB \u2192 scalar\n"
+            "look-up table at calibration time; runtime inference is O(1)\n"
+            "branchless trilinear interpolation (SIMD-friendly).\n\n"
+            "Discrete colorbars are routed through MeanShift \u2192 nearest-bin\n"
+            "CIEDE2000 matching instead."
+        )
+        color_info_text.setWordWrap(True)
+        color_info_text.setStyleSheet("color: #888888; font-size: 9px;")
+        color_info_layout.addWidget(color_info_text)
+        scroll_layout.addWidget(color_info_group)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+        self.tabs.addTab(tab, "Heatmap")
+
+    def _update_heatmap_mode_desc(self, index: int):
+        """Update the description label when the pipeline mode combo changes."""
+        descriptions = [
+            "Safe default. Uses 2-pass DBSCAN for grid reconstruction and HSV "
+            "V-channel for colour mapping. No additional dependencies.",
+
+            "Adds Goertzel O(N\u00b7K) lattice detection with harmonic energy folding "
+            "and parabolic subpixel refinement. Grid lines are snapped to YOLO "
+            "centroids via circular-mean phase fusion. Falls back to DBSCAN if "
+            "the circular coherence R\u0305 < 0.20.",
+
+            "FFT Grid + precomputed 3D RGB\u2192scalar LUT using CIEDE2000 \u0394E\u2080\u2080. "
+            "Calibration runs once per colour bar (\u223c3\u20135 s for 33\u00b3 nodes); "
+            "runtime colour inversion is O(1) branchless trilinear interpolation. "
+            "Discrete colorbars are detected automatically via gradient sparsity.",
+
+            "All optimisations enabled: FFT grid + 3D LUT colour + PROSAC "
+            "(OCR-confidence-sorted homography) + Banded Gotoh affine-gap "
+            "DP (O(N\u00b7k)) for label alignment + arithmetic/geometric label "
+            "interpolation. Recommended for publication-quality extraction.",
+        ]
+        desc = descriptions[index] if 0 <= index < len(descriptions) else ""
+        self._heatmap_mode_desc.setText(desc)
+
     def _create_output_tab(self):
         """Create output settings tab with import/export."""
         tab = QWidget()
@@ -798,6 +905,7 @@ class SettingsDialog(QDialog):
                 'use_robust_gd': True
             },
             'use_doclayout_text': True,
+            'heatmap_mode': 'legacy',
         }
 
     def _get_high_accuracy_preset(self):
@@ -867,6 +975,7 @@ class SettingsDialog(QDialog):
         preset['output_settings']['include_debug_info'] = True
         preset['output_settings']['image_quality'] = 100
         preset['performance']['ocr_workers'] = 2
+        preset['heatmap_mode'] = 'full'
         return preset
 
     def _populate_ui_from_settings(self):
@@ -934,6 +1043,12 @@ class SettingsDialog(QDialog):
         self.include_debug_check.setChecked(output_settings.get('include_debug_info', False))
         self.json_indent_spin.setValue(output_settings.get('json_indent', 4))
         self.image_quality_spin.setValue(output_settings.get('image_quality', 95))
+
+        # Heatmap pipeline mode
+        _heatmap_idx_map = {'legacy': 0, 'fft': 1, 'fft+color': 2, 'full': 3}
+        _hm_mode = self.settings.get('heatmap_mode', 'legacy')
+        self.heatmap_mode_combo.setCurrentIndex(_heatmap_idx_map.get(_hm_mode, 0))
+        self._update_heatmap_mode_desc(self.heatmap_mode_combo.currentIndex())
 
         # NN Classifier
         if hasattr(self, 'nn_classifier_enabled'):
@@ -1008,6 +1123,12 @@ class SettingsDialog(QDialog):
                 'enabled': self.nn_classifier_enabled.isChecked(),
                 'model_path': self.nn_classifier_path.text()
             }
+
+        # Heatmap pipeline mode
+        _heatmap_mode_map = {0: 'legacy', 1: 'fft', 2: 'fft+color', 3: 'full'}
+        self.settings['heatmap_mode'] = _heatmap_mode_map.get(
+            self.heatmap_mode_combo.currentIndex(), 'legacy'
+        )
 
     def _export_settings(self):
         """Export current settings to file."""

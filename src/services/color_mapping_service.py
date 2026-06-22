@@ -123,18 +123,7 @@ class ColorMappingService:
             except Exception:
                 pass  # Fall through to fallbacks
 
-        # Tier 2: LAB lightness mapping (good for grayscale/intensity colorscales)
-        try:
-            lab = cv2.cvtColor(cell_image, cv2.COLOR_BGR2LAB)
-            avg_l = np.mean(lab[:, :, 0])  # L channel (lightness)
-            normalized = avg_l / 255.0
-            self.last_confidence = 0.6
-            self.last_value_source = 'lab_lightness'
-            return self.min_value + normalized * self.value_range
-        except Exception:
-            pass
-
-        # Tier 3: HSV hue mapping (good for rainbow/colorscale heatmaps)
+        # Tier 2: HSV hue mapping (good for rainbow/colorscale heatmaps)
         try:
             hsv = cv2.cvtColor(cell_image, cv2.COLOR_BGR2HSV)
             avg_h = np.mean(hsv[:, :, 0])  # H channel (hue, 0-179 in OpenCV)
@@ -151,6 +140,17 @@ class ColorMappingService:
                 self.last_confidence = 0.4
                 self.last_value_source = 'hsv_hue'
                 return self.min_value + hue_normalized * self.value_range
+        except Exception:
+            pass
+
+        # Tier 3: LAB lightness mapping (good for grayscale/intensity colorscales)
+        try:
+            lab = cv2.cvtColor(cell_image, cv2.COLOR_BGR2LAB)
+            avg_l = np.mean(lab[:, :, 0])  # L channel (lightness)
+            normalized = avg_l / 255.0
+            self.last_confidence = 0.6
+            self.last_value_source = 'lab_lightness'
+            return self.min_value + normalized * self.value_range
         except Exception:
             pass
 

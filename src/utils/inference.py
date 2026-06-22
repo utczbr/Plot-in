@@ -111,6 +111,41 @@ def _postprocess_bbox_output(
     return detections
 
 
+def _postprocess_yolo_nms_output(
+    output: np.ndarray,
+    conf_threshold: float,
+    ratio: float,
+    pad: tuple,
+) -> list:
+    """Post-process YOLO output that already includes NMS (e.g., YOLOv10/11 or NMS-embedded ONNX).
+    Expected shape: (1, N, 6) where last dim is [x1, y1, x2, y2, conf, cls].
+    """
+    pad_w, pad_h = pad
+    # Shape is (1, N, 6) -> Extract sequence
+    preds = output[0]
+
+    mask = preds[:, 4] >= conf_threshold
+    if not np.any(mask):
+        return []
+
+    filtered = preds[mask].copy()
+
+    # Scale back x1, y1, x2, y2
+    filtered[:, 0] = (filtered[:, 0] - pad_w) / ratio
+    filtered[:, 1] = (filtered[:, 1] - pad_h) / ratio
+    filtered[:, 2] = (filtered[:, 2] - pad_w) / ratio
+    filtered[:, 3] = (filtered[:, 3] - pad_h) / ratio
+
+    detections = []
+    for row in filtered:
+        detections.append({
+            'xyxy': [int(row[0]), int(row[1]), int(row[2]), int(row[3])],
+            'conf': float(row[4]),
+            'cls': int(row[5]),
+        })
+    return detections
+
+
 def _postprocess_pose_output(
     output: np.ndarray,
     conf_threshold: float,
@@ -192,8 +227,11 @@ def _postprocess_pose_output(
 
 def _infer_model_output_type(output: np.ndarray, class_map: dict, requested: str) -> str:
     """Infer output type when requested='auto'."""
-    if requested in ('bbox', 'pose'):
+    if requested in ('bbox', 'pose', 'yolo_nms'):
         return requested
+
+    if output.ndim == 3 and output.shape[2] == 6:
+        return 'yolo_nms'
 
     if requested != 'auto':
         logging.warning("Unknown model_output_type=%r; falling back to bbox.", requested)
@@ -265,7 +303,14 @@ def run_inference(
         outputs = session.run(None, {input_name: input_img})
 
         output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
-        if output_type == 'pose':
+        if output_type == 'yolo_nms':
+            return _postprocess_yolo_nms_output(
+                output=outputs[0],
+                conf_threshold=conf_threshold,
+                ratio=ratio,
+                pad=pad,
+            )
+        elif output_type == 'pose':
             return _postprocess_pose_output(
                 output=outputs[0],
                 conf_threshold=conf_threshold,
@@ -323,7 +368,14 @@ def run_inference_on_image(
         outputs = session.run(None, {input_name: input_img})
 
         output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
-        if output_type == 'pose':
+        if output_type == 'yolo_nms':
+            return _postprocess_yolo_nms_output(
+                output=outputs[0],
+                conf_threshold=conf_threshold,
+                ratio=ratio,
+                pad=pad,
+            )
+        elif output_type == 'pose':
             return _postprocess_pose_output(
                 output=outputs[0],
                 conf_threshold=conf_threshold,

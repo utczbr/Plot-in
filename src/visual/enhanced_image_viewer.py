@@ -37,7 +37,12 @@ class DraggableBoundingBox(QGraphicsRectItem):
             'chart_title': QColor(50, 50, 220, 120),
             'legend': QColor(210, 105, 30, 120),
             'axis_title': QColor(255, 100, 255, 120),
-            'data_label': QColor(200, 200, 100, 120)
+            'data_label': QColor(200, 200, 100, 120),
+            'color_bar_label': QColor(0, 200, 200, 120),
+            'color_bar_title': QColor(200, 50, 200, 120),
+            'cell': QColor(100, 149, 237, 120),
+            'color_bar': QColor(0, 160, 160, 120),
+            'color_bar_region': QColor(0, 180, 180, 120)
         }
         
         color = color_map.get(self.class_name, QColor(128, 128, 128, 120))

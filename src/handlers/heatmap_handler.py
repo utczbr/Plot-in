@@ -3,13 +3,18 @@ Heatmap handler implementing grid-based chart processing.
 
 This handler processes heatmaps by mapping cell colors to numeric values
 using color space analysis and spatial classification.
+
+Phase 1-3 optimisations are gated by HeatmapConfig feature flags so that
+the default (all flags=False) reproduces the existing 2-pass DBSCAN / HSV
+behaviour exactly.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import numpy as np
 import cv2
 from handlers.base_handler import GridChartHandler, ExtractionResult, ChartCoordinateSystem
 from services.orientation_service import Orientation
 from utils.clustering_utils import cluster_1d_dbscan
+from services.heatmap.config import HeatmapConfig
 
 
 class HeatmapHandler(GridChartHandler):
@@ -17,9 +22,23 @@ class HeatmapHandler(GridChartHandler):
 
     COORDINATE_SYSTEM = ChartCoordinateSystem.GRID
 
-    def __init__(self, classifier=None, **kwargs):
+    def __init__(
+        self,
+        classifier=None,
+        heatmap_config: Optional[HeatmapConfig] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.classifier = classifier
+        self.cfg = heatmap_config or HeatmapConfig()
+
+        # Lazily instantiated — created only when the matching flag is True
+        self._lattice_detector = None
+        self._hybrid_anchor    = None
+        self._rectifier        = None
+        self._artifact_rejector = None
+        self._sequence_aligner = None
+        self._label_interpolator = None
 
     def get_chart_type(self) -> str:
         return "heatmap"
@@ -62,57 +81,31 @@ class HeatmapHandler(GridChartHandler):
             if self.color_mapper:
                 color_bars = detections.get('color_bar', [])
                 if color_bars:
-                    self._calibrate_color_mapper(image, color_bars[0], axis_labels)
+                    calib_labels = detections.get('color_bar_label', [])
+                    if not calib_labels:
+                        calib_labels = axis_labels
+                    self._calibrate_color_mapper(image, color_bars[0], calib_labels)
             
             # --- Dynamic Grid Detection ---
-            # 1. Collect all cell centers
+            # 1. Collect all cell centres
             centers = []
             for cell in heatmap_cells:
                 bbox = cell['xyxy']
                 cx = (bbox[0] + bbox[2]) / 2
                 cy = (bbox[1] + bbox[3]) / 2
                 centers.append({'cx': cx, 'cy': cy, 'cell': cell})
-            
-            # 2. Cluster to find unique Rows (y) and Cols (x) using DBSCAN
-            # §4.3: 2-pass DBSCAN — coarse pass for cell geometry, then geometry-aware eps
+
+            # 2. Reconstruct grid (FFT Goertzel path or legacy 2-pass DBSCAN)
             h, w = image.shape[:2]
-            cy_vals = [c['cy'] for c in centers]
-            cx_vals = [c['cx'] for c in centers]
-
-            # Pass 1: Coarse clustering with legacy eps to estimate cell geometry
-            coarse_rows = cluster_1d_dbscan(cy_vals, h * 0.015)
-            coarse_cols = cluster_1d_dbscan(cx_vals, w * 0.015)
-
-            # Estimate median cell dimensions from coarse grid
-            if len(coarse_rows) >= 2 and len(coarse_cols) >= 2:
-                row_diffs = np.diff(sorted(coarse_rows))
-                col_diffs = np.diff(sorted(coarse_cols))
-                median_cell_h = float(np.median(row_diffs)) if len(row_diffs) > 0 else h * 0.015
-                median_cell_w = float(np.median(col_diffs)) if len(col_diffs) > 0 else w * 0.015
-
-                # Pass 2: Re-cluster with geometry-aware eps = 0.5 × cell dimension
-                eps_y = median_cell_h * 0.5
-                eps_x = median_cell_w * 0.5
-                self._row_centers = cluster_1d_dbscan(cy_vals, eps_y)
-                self._col_centers = cluster_1d_dbscan(cx_vals, eps_x)
-                self.logger.info(
-                    f"2-pass DBSCAN: cell geometry {median_cell_w:.0f}×{median_cell_h:.0f}px, "
-                    f"eps_x={eps_x:.1f}, eps_y={eps_y:.1f}"
-                )
-            else:
-                # Fallback: use coarse pass results directly
-                self._row_centers = coarse_rows
-                self._col_centers = coarse_cols
-
-            # Warn if degenerate grid
-            if len(self._row_centers) < 2 or len(self._col_centers) < 2:
-                self.logger.warning(f"Degenerate grid detected: {len(self._row_centers)} rows x {len(self._col_centers)} cols")
-            else:
-                self.logger.info(f"Detected Grid: {len(self._row_centers)} rows x {len(self._col_centers)} cols")
+            grid_diagnostics = self._reconstruct_grid(image, heatmap_cells, centers, h, w, detections)
             
             # 3. Align Text Labels to Rows/Cols
-            row_labels = self._align_labels_to_grid(classified_labels.get('y_labels', []), self._row_centers, is_vertical=True)
-            col_labels = self._align_labels_to_grid(classified_labels.get('x_labels', []), self._col_centers, is_vertical=False)
+            row_labels = self._align_labels_to_grid(
+                classified_labels.get('y_labels', []), self._row_centers, is_vertical=True
+            )
+            col_labels = self._align_labels_to_grid(
+                classified_labels.get('x_labels', []), self._col_centers, is_vertical=False
+            )
 
             # Process heatmap cells to extract values
             elements = []
@@ -159,6 +152,10 @@ class HeatmapHandler(GridChartHandler):
             }
             if clamped_count > 0:
                 diagnostics['low_confidence_cells'] = clamped_count
+            # Enrich with grid-method and color-bar-type info (Task 4.4)
+            diagnostics.update(grid_diagnostics)
+            if hasattr(self.color_mapper, 'is_discrete'):
+                diagnostics['color_bar_type'] = 'discrete' if self.color_mapper.is_discrete else 'continuous'
 
             return ExtractionResult(
                 chart_type=self.get_chart_type(),
@@ -171,41 +168,182 @@ class HeatmapHandler(GridChartHandler):
             self.logger.error(f"Error in HeatmapHandler.process: {e}")
             return ExtractionResult.from_error(self.get_chart_type(), e)
 
+    def _reconstruct_grid(
+        self,
+        image: np.ndarray,
+        heatmap_cells: List[Dict],
+        centers: List[Dict],
+        h: int,
+        w: int,
+        detections: Optional[Dict[str, Any]] = None,
+    ) -> Dict:
+        """
+        Determine row_centers and col_centers for the heatmap grid.
+
+        Two modes selected by cfg.use_fft_grid:
+          True  → GoertzelLatticeDetector + HybridGridAnchor (Phase 1),
+                   with 2-pass DBSCAN as inner fallback.
+          False → Legacy 2-pass DBSCAN (unchanged behaviour).
+
+        When a 'chart' detection from the Macro expert model is available,
+        it is used as a tighter ROI for FFT analysis (instead of computing
+        the union of cell bboxes).
+
+        Returns a diagnostics dict for inclusion in ExtractionResult.
+        """
+        diagnostics: Dict = {}
+
+        cy_vals = [c['cy'] for c in centers]
+        cx_vals = [c['cx'] for c in centers]
+
+        # ── Phase 1: Goertzel + HybridGridAnchor path ────────────────────────
+        if self.cfg.use_fft_grid and len(heatmap_cells) >= 3:
+            try:
+                # Lazy-init detector and anchor
+                if self._lattice_detector is None:
+                    from services.heatmap.lattice_detector import GoertzelLatticeDetector
+                    self._lattice_detector = GoertzelLatticeDetector(
+                        num_harmonics=self.cfg.fft_num_harmonics,
+                        dc_mask_radius=self.cfg.fft_dc_mask_radius,
+                        freq_count=self.cfg.goertzel_freq_count,
+                    )
+                if self._hybrid_anchor is None:
+                    from services.heatmap.hybrid_grid_anchor import HybridGridAnchor
+                    self._hybrid_anchor = HybridGridAnchor(
+                        confidence_threshold=self.cfg.hybrid_conf_threshold,
+                        snap_tolerance_ratio=self.cfg.hybrid_snap_ratio,
+                        circular_coherence_min=self.cfg.hybrid_circular_coherence_min,
+                    )
+
+                # Determine ROI for FFT analysis.
+                # Prefer Macro 'chart' detection (tight heatmap-only crop)
+                # over cell-union bbox (may include noise from titles/legend).
+                chart_dets = (detections or {}).get('chart', [])
+                if chart_dets:
+                    chart_bbox = chart_dets[0]['xyxy']
+                    roi_x1 = max(0, int(chart_bbox[0]))
+                    roi_y1 = max(0, int(chart_bbox[1]))
+                    roi_x2 = min(w, int(chart_bbox[2]))
+                    roi_y2 = min(h, int(chart_bbox[3]))
+                    diagnostics['fft_roi_source'] = 'macro_chart'
+                else:
+                    # Fallback: union bbox of YOLO cell detections
+                    x1s = [c['cell']['xyxy'][0] for c in centers]
+                    y1s = [c['cell']['xyxy'][1] for c in centers]
+                    x2s = [c['cell']['xyxy'][2] for c in centers]
+                    y2s = [c['cell']['xyxy'][3] for c in centers]
+                    roi_x1 = max(0, int(min(x1s)))
+                    roi_y1 = max(0, int(min(y1s)))
+                    roi_x2 = min(w,  int(max(x2s)))
+                    roi_y2 = min(h,  int(max(y2s)))
+                    diagnostics['fft_roi_source'] = 'cell_union'
+
+                if roi_x2 > roi_x1 + 6 and roi_y2 > roi_y1 + 6:
+                    roi_gray = cv2.cvtColor(
+                        image[roi_y1:roi_y2, roi_x1:roi_x2], cv2.COLOR_BGR2GRAY
+                    )
+                    T_x, T_y = self._lattice_detector.extract_rectangular_periods(roi_gray)
+
+                    if T_x is not None and T_y is not None:
+                        col_centers, row_centers = self._hybrid_anchor.align_grid_to_detections(
+                            yolo_cells=heatmap_cells,
+                            T_x=T_x,
+                            T_y=T_y,
+                            image_shape=(h, w),
+                        )
+
+                        if col_centers is not None and row_centers is not None:
+                            self._col_centers = col_centers.tolist()
+                            self._row_centers = row_centers.tolist()
+                            diagnostics.update({
+                                'grid_method': 'fft_hybrid',
+                                'fft_periods': {'T_x': round(T_x, 2), 'T_y': round(T_y, 2)},
+                            })
+                            self.logger.info(
+                                "FFT Goertzel grid: %d cols × %d rows "
+                                "(T_x=%.1fpx T_y=%.1fpx)",
+                                len(self._col_centers), len(self._row_centers), T_x, T_y,
+                            )
+                            return diagnostics
+            except Exception as exc:
+                self.logger.debug("FFT grid failed — falling back to DBSCAN: %s", exc)
+
+        # ── Legacy fallback: 2-pass DBSCAN ────────────────────────────────────
+        coarse_rows = cluster_1d_dbscan(cy_vals, h * 0.015)
+        coarse_cols = cluster_1d_dbscan(cx_vals, w * 0.015)
+
+        if len(coarse_rows) >= 2 and len(coarse_cols) >= 2:
+            row_diffs = np.diff(sorted(coarse_rows))
+            col_diffs = np.diff(sorted(coarse_cols))
+            median_cell_h = float(np.median(row_diffs)) if len(row_diffs) > 0 else h * 0.015
+            median_cell_w = float(np.median(col_diffs)) if len(col_diffs) > 0 else w * 0.015
+            eps_y = median_cell_h * 0.5
+            eps_x = median_cell_w * 0.5
+            self._row_centers = cluster_1d_dbscan(cy_vals, eps_y)
+            self._col_centers = cluster_1d_dbscan(cx_vals, eps_x)
+            self.logger.info(
+                "2-pass DBSCAN: cell geometry %d×%dpx, eps_x=%.1f, eps_y=%.1f",
+                int(median_cell_w), int(median_cell_h), eps_x, eps_y,
+            )
+        else:
+            self._row_centers = coarse_rows
+            self._col_centers = coarse_cols
+
+        if len(self._row_centers) < 2 or len(self._col_centers) < 2:
+            self.logger.warning(
+                "Degenerate grid detected: %d rows × %d cols",
+                len(self._row_centers), len(self._col_centers),
+            )
+        else:
+            self.logger.info(
+                "Detected Grid: %d rows × %d cols",
+                len(self._row_centers), len(self._col_centers),
+            )
+
+        diagnostics['grid_method'] = 'dbscan'
+        return diagnostics
+
     def _extract_cell_value(self, image: np.ndarray, cell: Dict[str, Any]) -> float:
         """Extract numeric value from heatmap cell based on color."""
         x1, y1, x2, y2 = [int(coord) for coord in cell['xyxy']]
-        
+
         # Ensure coordinates are within image bounds
         h, w = image.shape[:2]
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
-        
+
         if x2 <= x1 or y2 <= y1:
-            return 0.0  # Invalid bounding box
-            
+            return 0.0
+
         cell_img = image[y1:y2, x1:x2]
-        
         if cell_img.size == 0:
             return 0.0
 
-        # Use color mapping service if available
+        # Phase 2: Artifact rejection before colour averaging
+        if self.cfg.use_artifact_rejector and (x2 - x1) > 15 and (y2 - y1) > 15:
+            if self._artifact_rejector is None:
+                from services.heatmap.artifact_rejector import HeatmapArtifactRejector
+                self._artifact_rejector = HeatmapArtifactRejector(
+                    d=self.cfg.bilateral_d,
+                    sigma_color=self.cfg.bilateral_sigma,
+                    sigma_space=self.cfg.bilateral_sigma,
+                )
+            try:
+                cell_img = self._artifact_rejector.process_cell(cell_img)
+            except Exception as exc:
+                self.logger.debug("ArtifactRejector skipped for cell: %s", exc)
+
+        # Use colour mapping service if available
         if self.color_mapper:
             try:
                 return self.color_mapper.map_color_to_value(cell_img)
             except Exception:
-                # Fallback to average color analysis
                 pass
-        
-        # Fallback: Use average HSV value for color-to-value mapping
+
+        # Legacy fallback: HSV V-channel brightness
         hsv = cv2.cvtColor(cell_img, cv2.COLOR_BGR2HSV)
-        # For heatmaps, typically the V (value) channel or color intensity represents the data value
-        avg_hsv = np.mean(hsv, axis=(0, 1))
-        
-        # Map HSV to a normalized value (0-1 range)
-        # This is a simplified approach; in practice, a proper color scale mapping would be used
-        intensity = avg_hsv[2] / 255.0  # V channel (brightness)
-        
-        return float(intensity)
+        intensity = float(np.mean(hsv[:, :, 2])) / 255.0
+        return intensity
 
     def _calibrate_color_mapper(self, image: np.ndarray, color_bar: Dict[str, Any], labels: List[Dict]) -> None:
         """
@@ -227,6 +365,27 @@ class HeatmapHandler(GridChartHandler):
         w, h = x2 - x1, y2 - y1
         is_vertical = h > w
         bar_length = h if is_vertical else w
+
+        # ── DEBUG: Log color bar bbox and sample a few pixels ───────────
+        bar_cx_dbg = int((x1 + x2) / 2)
+        self.logger.info(
+            "CALIB_DEBUG color_bar bbox=[%d,%d,%d,%d] w=%d h=%d is_vert=%s center_x=%d",
+            x1, y1, x2, y2, w, h, is_vertical, bar_cx_dbg,
+        )
+        for t_dbg in (0.0, 0.25, 0.5, 0.75, 1.0):
+            if is_vertical:
+                sy = int(y1 + t_dbg * (y2 - y1))
+                sx = bar_cx_dbg
+            else:
+                sx = int(x1 + t_dbg * (x2 - x1))
+                sy = int((y1 + y2) / 2)
+            sy = max(0, min(sy, image.shape[0] - 1))
+            sx = max(0, min(sx, image.shape[1] - 1))
+            px = image[sy, sx]
+            self.logger.info(
+                "CALIB_DEBUG sample t=%.2f pos=(%d,%d) BGR=%s", t_dbg, sx, sy, px.tolist()
+            )
+        # ── END DEBUG ─────────────────────────────────────────────────────
         
         # --- Phase 1: Extract label positions and values ---
         label_anchors = []  # [(position_ratio, value), ...]
@@ -260,6 +419,14 @@ class HeatmapHandler(GridChartHandler):
         
         # Sort anchors by position
         label_anchors.sort(key=lambda x: x[0])
+
+        # ── DEBUG: Log label anchors ──────────────────────────────────────
+        self.logger.info(
+            "CALIB_DEBUG label_anchors (%d): %s",
+            len(label_anchors),
+            [(f"{p:.3f}", f"{v:.2f}") for p, v in label_anchors[:15]],
+        )
+        # ── END DEBUG ─────────────────────────────────────────────────────
         
         # --- Phase 2: Dense sampling (100 points) ---
         n_samples = 100
@@ -275,7 +442,15 @@ class HeatmapHandler(GridChartHandler):
             max_val = max(a[1] for a in label_anchors)
             
             for i in range(n_samples):
-                t = i / (n_samples - 1)  # 0.0 to 1.0
+                # Restrict sampling strictly to the range of known labels to prevent 
+                # sampling background pixels if the color bar bounding box is imprecise.
+                min_t = label_anchors[0][0]
+                max_t = label_anchors[-1][0]
+                # If all labels are bunched up, allow a little bit of breathing room, but clamp to 0-1
+                if max_t - min_t < 0.1:
+                    min_t, max_t = 0.0, 1.0
+                    
+                t = min_t + (i / (n_samples - 1)) * (max_t - min_t)
                 
                 # Sample pixel position
                 if is_vertical:
@@ -334,6 +509,23 @@ class HeatmapHandler(GridChartHandler):
             self.color_mapper.min_value = 0.0
             self.color_mapper.max_value = 1.0
             self.color_mapper.value_range = 1.0
+
+        # ── DEBUG: Log calibration curve quality ──────────────────────────
+        if samples:
+            bgrs = [np.mean(s[0], axis=(0, 1)) for s in samples]
+            bgr_std = np.std(bgrs)
+            self.logger.info(
+                "CALIB_DEBUG %d samples, BGR std=%.2f, first_bgr=%s, last_bgr=%s",
+                len(samples), bgr_std,
+                np.mean(samples[0][0], axis=(0, 1)).astype(int).tolist(),
+                np.mean(samples[-1][0], axis=(0, 1)).astype(int).tolist(),
+            )
+            if bgr_std < 5:
+                self.logger.warning(
+                    "CALIB_DEBUG *** Low color variance (%.2f) — likely sampling background! ***",
+                    bgr_std,
+                )
+        # ── END DEBUG ─────────────────────────────────────────────────────
         
         # --- Phase 3: Calibrate ---
         if len(samples) >= 2:
@@ -408,58 +600,115 @@ class HeatmapHandler(GridChartHandler):
             return 0
         return int(np.argmin([abs(c - value) for c in centers]))
 
-    def _align_labels_to_grid(self, labels: List[Dict], grid_centers: List[float], is_vertical: bool) -> Dict[int, str]:
-        """Align text labels to grid row/col indices using IoU projection and Hungarian matching."""
-        alignment = {}
+    def _align_labels_to_grid(
+        self, labels: List[Dict], grid_centers: List[float], is_vertical: bool
+    ) -> Dict[int, str]:
+        """
+        Align text labels to grid row/col indices.
+
+        When cfg.use_nw_aligner=True: BandedGotohAligner (Phase 3).
+        Otherwise: legacy IoU + Hungarian matching.
+
+        Label interpolation (cfg.use_label_interpolator=True) fills any
+        unmatched slots provided numeric_density > 30% (Patch 5).
+        """
+        alignment: Dict[int, str] = {}
         if not labels or not grid_centers:
             return alignment
-        
-        # Compute spacing between grid lines
-        if len(grid_centers) > 1:
-            spacing = np.mean(np.diff(grid_centers))
-        else:
-            spacing = 50  # default
-        
-        # Compute IoU matrix: labels x grid_indices
-        n_labels = len(labels)
-        n_grid = len(grid_centers)
+
+        # ── Legacy IoU + Hungarian (default path) ─────────────────────────────
+        spacing = float(np.mean(np.diff(grid_centers))) if len(grid_centers) > 1 else 50.0
+        n_labels, n_grid = len(labels), len(grid_centers)
         iou_matrix = np.zeros((n_labels, n_grid))
-        
+
         for i, label in enumerate(labels):
             bbox = label['xyxy']
-            
             for j, center in enumerate(grid_centers):
-                # Create projection band for this grid line
                 if is_vertical:
-                    # Row projection: horizontal band at y=center
-                    band_min = center - spacing / 2
-                    band_max = center + spacing / 2
-                    label_min = bbox[1]  # y1
-                    label_max = bbox[3]  # y2
+                    band_min, band_max = center - spacing / 2, center + spacing / 2
+                    label_min, label_max = bbox[1], bbox[3]
                 else:
-                    # Col projection: vertical band at x=center
-                    band_min = center - spacing / 2
-                    band_max = center + spacing / 2
-                    label_min = bbox[0]  # x1
-                    label_max = bbox[2]  # x2
-                
-                # Compute 1D IoU
-                intersection = max(0, min(label_max, band_max) - max(label_min, band_min))
-                union = (label_max - label_min) + (band_max - band_min) - intersection
-                iou = intersection / max(union, 1e-6)
-                iou_matrix[i, j] = iou
-        
-        # Hungarian matching to find optimal assignment
+                    band_min, band_max = center - spacing / 2, center + spacing / 2
+                    label_min, label_max = bbox[0], bbox[2]
+                inter = max(0.0, min(label_max, band_max) - max(label_min, band_min))
+                union = (label_max - label_min) + (band_max - band_min) - inter
+                iou_matrix[i, j] = inter / max(union, 1e-6)
+
         from scipy.optimize import linear_sum_assignment
-        cost_matrix = -iou_matrix  # Negate for minimization
-        row_ind, col_ind = linear_sum_assignment(cost_matrix)
-        
-        # Assign only if IoU > threshold
+        row_ind, col_ind = linear_sum_assignment(-iou_matrix)
         iou_threshold = 0.3
         for r, c in zip(row_ind, col_ind):
             if iou_matrix[r, c] > iou_threshold:
                 alignment[c] = labels[r].get('text', '')
-        
+
+        # ── Phase 3: Banded Gotoh refinement (optional) ───────────────────────
+        if self.cfg.use_nw_aligner:
+            try:
+                if self._sequence_aligner is None:
+                    from services.heatmap.sequence_aligner import BandedGotohAligner
+                    self._sequence_aligner = BandedGotohAligner(
+                        gap_open=self.cfg.nw_gap_open,
+                        gap_extend=self.cfg.nw_gap_extend,
+                        max_dist=self.cfg.nw_max_dist,
+                        band=self.cfg.nw_band_width,
+                    )
+                label_positions = np.array([
+                    (lb['xyxy'][1] + lb['xyxy'][3]) / 2 if is_vertical
+                    else (lb['xyxy'][0] + lb['xyxy'][2]) / 2
+                    for lb in labels
+                ])
+                grid_arr = np.array(grid_centers)
+                pairs = self._sequence_aligner.align_sequences(label_positions, grid_arr)
+                gotoh_alignment: Dict[int, str] = {}
+                for ocr_i, grid_j in pairs:
+                    gotoh_alignment[grid_j] = labels[ocr_i].get('text', '')
+                # Merge: Gotoh wins over Hungarian on matched positions
+                alignment.update(gotoh_alignment)
+            except Exception as exc:
+                self.logger.debug("BandedGotohAligner failed — keeping Hungarian result: %s", exc)
+
+        # ── Phase 3: Label interpolation (Patch 5: numeric density guard) ─────
+        if self.cfg.use_label_interpolator and alignment:
+            numeric_vals = []
+            for text in alignment.values():
+                try:
+                    numeric_vals.append(float(str(text).replace(',', '.')))
+                except (ValueError, TypeError):
+                    pass
+            numeric_density = len(numeric_vals) / max(len(alignment), 1)
+
+            if numeric_density > 0.30 and len(numeric_vals) >= 2:
+                try:
+                    if self._label_interpolator is None:
+                        from services.heatmap.label_interpolator import AxisLabelInterpolator
+                        self._label_interpolator = AxisLabelInterpolator(
+                            variance_tolerance=self.cfg.interp_variance_tol,
+                        )
+                    valid_idx  = sorted(alignment.keys())
+                    valid_vals = []
+                    for k in valid_idx:
+                        try:
+                            valid_vals.append(float(str(alignment[k]).replace(',', '.')))
+                        except (ValueError, TypeError):
+                            valid_vals.append(float('nan'))
+
+                    # Filter to truly numeric entries
+                    clean_idx, clean_vals = [], []
+                    for i, v in zip(valid_idx, valid_vals):
+                        if not np.isnan(v):
+                            clean_idx.append(i)
+                            clean_vals.append(v)
+
+                    if len(clean_vals) >= 2:
+                        filled = self._label_interpolator.fill_missing_labels(
+                            clean_idx, clean_vals, len(grid_centers)
+                        )
+                        for j, val in enumerate(filled):
+                            if j not in alignment:
+                                alignment[j] = str(round(val, 6))
+                except Exception as exc:
+                    self.logger.debug("AxisLabelInterpolator failed: %s", exc)
+
         return alignment
 
     # extract_values method removed (dead code)

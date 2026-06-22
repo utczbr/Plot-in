@@ -54,7 +54,7 @@ def resolve_requirements(options: InstallOptions, os_name: str) -> List[str]:
     if options.interface_mode == "cli":
         excluded_names.update(EXCLUDED_IN_CLI)
     if options.ocr_backend.lower() != "easyocr":
-        excluded_names.add("easyocr")
+        excluded_names.update({"easyocr", "torch", "torchvision", "torchaudio"})
 
     deduped: List[str] = []
     seen_names = set()
@@ -74,6 +74,12 @@ def resolve_requirements(options: InstallOptions, os_name: str) -> List[str]:
     return deduped
 
 
+def _is_torch_spec(spec: str) -> bool:
+    """Return True for torch / torchvision / torchaudio lines (including +cpu)."""
+    name = _normalize_requirement_name(spec)
+    return name in {"torch", "torchvision", "torchaudio"}
+
+
 def install_requirements(
     python_executable: Path,
     requirements: Iterable[str],
@@ -87,20 +93,40 @@ def install_requirements(
 
     run_command([str(python_executable), "-m", "pip", "install", "--upgrade", "pip"])
 
-    scope_args = []
+    scope_args: List[str] = []
     if install_scope == "user":
         scope_args = ["--user"]
 
-    # PyTorch CPU wheels live on a separate index; inject the extra index URL
-    # automatically whenever a '+cpu' spec is present so pip can find them.
+    # PyTorch CPU wheels live on a separate index.
     PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
-    # Install in chunks to keep command length manageable across OSes.
-    chunk_size = 30
-    for idx in range(0, len(requirements), chunk_size):
-        chunk = requirements[idx : idx + chunk_size]
+    # ── Separate torch from everything else ──────────────────────────────
+    # torch+cpu is fragile on Windows (missing MSVC, version conflicts, etc.).
+    # Installing it in a separate pip call prevents its failure from blocking
+    # critical packages like PyQt6 that are listed later in requirements.
+    torch_specs = [r for r in requirements if _is_torch_spec(r)]
+    other_specs = [r for r in requirements if not _is_torch_spec(r)]
+
+    # ── 1. Install torch/torchvision separately (non-fatal) ──────────────
+    if torch_specs:
         extra_index_args: List[str] = []
-        if any("+cpu" in spec for spec in chunk):
+        if any("+cpu" in spec for spec in torch_specs):
             extra_index_args = ["--extra-index-url", PYTORCH_CPU_INDEX]
-        cmd = [str(python_executable), "-m", "pip", "install", *scope_args, *extra_index_args, *chunk]
+        cmd = [
+            str(python_executable), "-m", "pip", "install",
+            *scope_args, *extra_index_args, *torch_specs,
+        ]
+        try:
+            run_command(cmd)
+        except RuntimeError as exc:
+            logging.warning(
+                "torch installation failed (non-fatal, easyocr may install "
+                "a compatible version automatically): %s", exc,
+            )
+
+    # ── 2. Install everything else in chunks ─────────────────────────────
+    chunk_size = 30
+    for idx in range(0, len(other_specs), chunk_size):
+        chunk = other_specs[idx : idx + chunk_size]
+        cmd = [str(python_executable), "-m", "pip", "install", *scope_args, *chunk]
         run_command(cmd)

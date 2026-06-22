@@ -59,6 +59,8 @@ class TestOrchestratorRegistry(unittest.TestCase):
         orchestrator.meta_clustering_service = MagicMock(name='meta')
         orchestrator.color_mapping_service = MagicMock(name='color')
         orchestrator.legend_matching_service = MagicMock(name='legend')
+        orchestrator.heatmap_config = MagicMock(name='config')
+        orchestrator.heatmap_config.use_bimodal_router = False
         orchestrator.logger = MagicMock(name='logger')
 
         cartesian = orchestrator._build_handler('dummy_cartesian', DummyCartesian)

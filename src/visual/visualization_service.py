@@ -48,7 +48,10 @@ class VisualizationService:
             "chart_title": (255, 255, 100), "axis_title": (255, 100, 255), "legend": (100, 255, 255),
             "data_label": (200, 200, 100), "other": (200, 200, 200),
             "box": (255, 150, 50), "line": (50, 150, 255), "scatter": (150, 50, 255),
-            "data_point": (150, 255, 50), "slice": (255, 120, 120)
+            "data_point": (150, 255, 50), "slice": (255, 120, 120),
+            "color_bar": (160, 160, 0), "cell": (237, 149, 100),
+            "color_bar_label": (0, 200, 200), "color_bar_title": (200, 50, 200),
+            "color_bar_region": (0, 180, 180)
         }
 
         # Draw all detection boxes
@@ -314,8 +317,55 @@ class VisualizationService:
                     else:
                         x1, y1 = map(int, [x1, y1])
                     text = f"({point.get('x_calibrated', 0):.1f},{point['y_calibrated']:.1f})"
-                    cv2.putText(img_annotated, text, (x1, y1 - int(10 * font_scale)), 
-                                cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, value_color, thickness)
+        # Draw heatmap grid lines if row_centers and col_centers exist in metadata
+        metadata = analysis_data.get('metadata', {})
+        row_centers = metadata.get('row_centers')
+        col_centers = metadata.get('col_centers')
+        cell_detections = (analysis_data.get('detections') or {}).get('cell', []) or (analysis_data.get('detections') or {}).get('heatmap_cell', [])
+
+        if row_centers and col_centers and cell_detections:
+            x1s, y1s, x2s, y2s = [], [], [], []
+            for det in cell_detections:
+                bbox = det.get('xyxy')
+                if bbox and len(bbox) == 4:
+                    x1s.append(bbox[0])
+                    y1s.append(bbox[1])
+                    x2s.append(bbox[2])
+                    y2s.append(bbox[3])
+            
+            if x1s:
+                grid_x1 = min(x1s)
+                grid_y1 = min(y1s)
+                grid_x2 = max(x2s)
+                grid_y2 = max(y2s)
+
+                if original_dims:
+                    grid_x1 = int(grid_x1 * w_ratio)
+                    grid_y1 = int(grid_y1 * h_ratio)
+                    grid_x2 = int(grid_x2 * w_ratio)
+                    grid_y2 = int(grid_y2 * h_ratio)
+                else:
+                    grid_x1, grid_y1, grid_x2, grid_y2 = map(int, [grid_x1, grid_y1, grid_x2, grid_y2])
+
+                grid_color = (220, 150, 70)
+                
+                # Draw vertical lines
+                for cx in col_centers:
+                    if original_dims:
+                        cx = int(cx * w_ratio)
+                    else:
+                        cx = int(cx)
+                    if grid_x1 <= cx <= grid_x2:
+                        cv2.line(img_annotated, (cx, grid_y1), (cx, grid_y2), grid_color, max(1, thickness - 1), cv2.LINE_AA)
+
+                # Draw horizontal lines
+                for cy in row_centers:
+                    if original_dims:
+                        cy = int(cy * h_ratio)
+                    else:
+                        cy = int(cy)
+                    if grid_y1 <= cy <= grid_y2:
+                        cv2.line(img_annotated, (grid_x1, cy), (grid_x2, cy), grid_color, max(1, thickness - 1), cv2.LINE_AA)
 
         return img_annotated
 

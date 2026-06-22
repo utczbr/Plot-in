@@ -39,8 +39,12 @@ class FastOCREngine:
             # Minimal preprocessing for speed
             processed_crop = self._minimal_preprocess(crop)
 
+            allowlist = None
+            if context in ('color_bar_label', 'scale_label', 'tick_label'):
+                allowlist = '0123456789.-+eE'
+
             # Perform OCR
-            text, confidence = self._perform_ocr(processed_crop)
+            text, confidence = self._perform_ocr(processed_crop, allowlist)
             results.append({'text': text, 'confidence': confidence})
 
         return results
@@ -70,18 +74,22 @@ class FastOCREngine:
         
         return gray
     
-    def _perform_ocr(self, image: np.ndarray) -> Tuple[str, float]:
+    def _perform_ocr(self, image: np.ndarray, allowlist: str = None) -> Tuple[str, float]:
         """
         Perform OCR on a single image.
 
         Args:
             image: Preprocessed image
+            allowlist: Optional string of allowed characters
 
         Returns:
             Tuple[str, float]: (OCR result text, confidence score)
         """
         try:
-            result = self.reader.readtext(image, detail=1, paragraph=False)  # Changed to detail=1 to get confidence
+            if allowlist:
+                result = self.reader.readtext(image, allowlist=allowlist, detail=1, paragraph=False)
+            else:
+                result = self.reader.readtext(image, detail=1, paragraph=False)  # Changed to detail=1 to get confidence
             if result and len(result) > 0:
                 # Extract text and confidence from the first result
                 bbox, text, confidence = result[0]

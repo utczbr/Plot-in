@@ -42,6 +42,7 @@ from services.meta_clustering_service import MetaClusteringService
 from services.orientation_service import Orientation, OrientationService
 from services.color_mapping_service import ColorMappingService  # NEW
 from services.legend_matching_service import LegendMatchingService  # NEW
+from services.heatmap.config import HeatmapConfig
 
 
 class ChartAnalysisOrchestrator:
@@ -68,6 +69,7 @@ class ChartAnalysisOrchestrator:
     _HANDLER_EXTRAS: Dict[str, Callable[["ChartAnalysisOrchestrator"], Dict[str, Any]]] = {
         "heatmap": lambda self: {
             "classifier": HeatmapChartClassifier(logger=self.logger),
+            "heatmap_config": self.heatmap_config,
         },
         "pie": lambda self: {
             "classifier": PieChartClassifier(logger=self.logger),
@@ -76,18 +78,21 @@ class ChartAnalysisOrchestrator:
 
     def __init__(self,
                  calibration_service,
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None,
+                 heatmap_config: Optional[HeatmapConfig] = None):
         """
         Initialize the orchestrator with required services.
 
         Args:
             calibration_service: Service for calibrating chart axes
             logger: Optional logger for tracking analysis
+            heatmap_config: Optional HeatmapConfig for advanced heatmap features
         """
         self.calibration_service = calibration_service
         hyperparams_path = Path(__file__).resolve().parent / 'lylaa_hypertuning_results.json'
         self.spatial_classifier = ProductionSpatialClassifier(hyperparams_path=hyperparams_path)
         self.logger = logger or logging.getLogger(__name__)
+        self.heatmap_config = heatmap_config or HeatmapConfig()
 
         # Initialize shared services
         self.dual_axis_service = DualAxisDetectionService()
@@ -123,8 +128,28 @@ class ChartAnalysisOrchestrator:
                 "logger": self.logger,
             }
         elif issubclass(handler_cls, GridChartHandler):
+            cfg = self.heatmap_config
+            if cfg.use_bimodal_router:
+                try:
+                    from services.heatmap.bimodal_color_mapper import BimodalColorMapper
+                    from services.heatmap.color_inverter import LUTColorInverter
+                    color_mapper = BimodalColorMapper(
+                        base_mapper=self.color_mapping_service,
+                        inverter=LUTColorInverter(lut_resolution=cfg.lut_resolution),
+                        sparsity_thresh=cfg.bimodal_sparsity_thresh,
+                    )
+                    self.logger.info(
+                        "BimodalColorMapper enabled (LUT res=%d).", cfg.lut_resolution
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "BimodalColorMapper init failed, using ColorMappingService: %s", exc
+                    )
+                    color_mapper = self.color_mapping_service
+            else:
+                color_mapper = self.color_mapping_service
             kwargs = {
-                "color_mapper": self.color_mapping_service,
+                "color_mapper": color_mapper,
                 "logger": self.logger,
             }
         elif issubclass(handler_cls, PolarChartHandler):

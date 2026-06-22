@@ -78,7 +78,13 @@ DEFAULT_COLORS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
     "axis_title":  {"normal": (255, 165, 0),   "highlight": (255, 165, 0)},
     "chart_title": {"normal": (50, 50, 220),   "highlight": (100, 100, 255)},
     "legend":      {"normal": (210, 105, 30),  "highlight": (210, 180, 140)},
+    "color_bar":   {"normal": (0, 160, 160),   "highlight": (0, 220, 220)},
+    "color_bar_label": {"normal": (0, 200, 200), "highlight": (0, 255, 255)},
+    "color_bar_title": {"normal": (200, 50, 200), "highlight": (255, 100, 255)},
+    "cell":        {"normal": (100, 149, 237), "highlight": (135, 206, 250)},
     "axis_labels": {"normal": (255, 0, 255),   "highlight": (255, 105, 180)},
+    "data_label":       {"normal": (200, 200, 80),  "highlight": (230, 230, 100)},
+    "color_bar_region": {"normal": (0, 180, 180),  "highlight": (0, 240, 240)},
     "scale_label": {"normal": (255, 117, 24),  "highlight": (255, 140, 0)},
     "tick_label":  {"normal": (0, 255, 255),   "highlight": (0, 206, 209)},
     "error_bar":   {"normal": (220, 20, 60),   "highlight": (255, 99, 71)},
@@ -1030,6 +1036,7 @@ class DetectionScene(QGraphicsScene):
         self._base_pixmap_item: Optional[QGraphicsPixmapItem] = None
         self._rect_items: List[EditableRectItem] = []
         self._baseline_item: Optional['BaselineItem'] = None
+        self._grid_items: List[QGraphicsLineItem] = []
         self._calibration: dict = {}
         self._visible_classes: Dict[str, bool] = {}
         self._colors: Dict[str, Dict[str, Tuple[int, int, int]]] = dict(DEFAULT_COLORS)
@@ -1122,6 +1129,7 @@ class DetectionScene(QGraphicsScene):
         self.clear()
         self._rect_items.clear()
         self._baseline_item = None
+        self._grid_items.clear()
         self._highlighted_item = None
         self._visible_classes.clear()
 
@@ -1222,6 +1230,74 @@ class DetectionScene(QGraphicsScene):
         self._baseline_item.setVisible(visible)
         self.addItem(self._baseline_item)
 
+    def set_grid_lines(
+        self,
+        row_centers: Optional[List[float]],
+        col_centers: Optional[List[float]],
+        cell_detections: Optional[List[Dict[str, Any]]],
+    ) -> None:
+        """Add horizontal and vertical grid lines representing the reconstructed heatmap grid."""
+        # 1. Clear old grid items
+        for item in self._grid_items:
+            self.removeItem(item)
+        self._grid_items.clear()
+
+        if not row_centers or not col_centers or not cell_detections:
+            return
+
+        # 2. Determine the bounding box of the grid by taking the union of all cell bboxes
+        x1s, y1s, x2s, y2s = [], [], [], []
+        for det in cell_detections:
+            bbox = det.get("xyxy")
+            if bbox and len(bbox) == 4:
+                x1s.append(bbox[0])
+                y1s.append(bbox[1])
+                x2s.append(bbox[2])
+                y2s.append(bbox[3])
+
+        if not x1s:
+            return
+
+        grid_x1 = min(x1s)
+        grid_y1 = min(y1s)
+        grid_x2 = max(x2s)
+        grid_y2 = max(y2s)
+
+        # 3. Create dashed line items
+        grid_color = QColor(74, 144, 226, 180)  # Nice soft semi-transparent blue
+        pen = QPen(grid_color)
+        pen.setWidth(1)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+
+        # Draw vertical lines at col_centers
+        for cx in col_centers:
+            if grid_x1 <= cx <= grid_x2:
+                line_item = QGraphicsLineItem(cx, grid_y1, cx, grid_y2)
+                line_item.setPen(pen)
+                line_item.setZValue(5)  # below texts/classes, above background image
+                self.addItem(line_item)
+                self._grid_items.append(line_item)
+
+        # Draw horizontal lines at row_centers
+        for cy in row_centers:
+            if grid_y1 <= cy <= grid_y2:
+                line_item = QGraphicsLineItem(grid_x1, cy, grid_x2, cy)
+                line_item.setPen(pen)
+                line_item.setZValue(5)
+                self.addItem(line_item)
+                self._grid_items.append(line_item)
+
+        # Apply visibility
+        visible = self._visible_classes.get("grid_lines", True)
+        self.set_grid_visible(visible)
+
+    def set_grid_visible(self, visible: bool) -> None:
+        """Toggle visibility of grid line items."""
+        self._visible_classes["grid_lines"] = visible
+        for item in self._grid_items:
+            item.setVisible(visible)
+
     # ── Visibility ──
 
     def set_class_visible(self, class_name: str, visible: bool) -> None:
@@ -1231,6 +1307,10 @@ class DetectionScene(QGraphicsScene):
         if class_name == "baseline":
             if self._baseline_item:
                 self._baseline_item.setVisible(visible)
+            return
+
+        if class_name == "grid_lines":
+            self.set_grid_visible(visible)
             return
 
         for item in self._rect_items:

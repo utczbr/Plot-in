@@ -42,11 +42,28 @@ CLASS_MAP_HISTOGRAM: Dict[int, str] = {
     5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
-# Heatmap detection model
+# Heatmap detection model (legacy monolithic — kept for backward compatibility)
 CLASS_MAP_HEATMAP: Dict[int, str] = {
-    0: 'chart', 1: 'cell', 2: 'chart_title', 3: 'color_bar',
-    4: 'legend', 5: 'axis_title', 6: 'data_label', 7: 'axis_labels',
-    8: 'significance_marker'
+    0: 'chart', 1: 'cell', 2: 'axis_title', 3: 'color_bar',
+    4: 'legend', 5: 'chart_title', 6: 'data_label', 7: 'axis_labels',
+    8: 'color_bar_label', 9: 'color_bar_title'
+}
+
+# Heatmap expert models (cascaded pipeline)
+CLASS_MAP_HEATMAP_MACRO: Dict[int, str] = {
+    0: 'chart', 1: 'color_bar_region', 2: 'legend'
+}
+
+CLASS_MAP_HEATMAP_COLORBAR: Dict[int, str] = {
+    0: 'color_bar', 1: 'color_bar_label', 2: 'color_bar_title'
+}
+
+CLASS_MAP_HEATMAP_LATTICE: Dict[int, str] = {
+    0: 'cell', 1: 'data_label'
+}
+
+CLASS_MAP_HEATMAP_TEXT: Dict[int, str] = {
+    0: 'axis_labels', 1: 'axis_title', 2: 'chart_title'
 }
 
 # Pie chart object detection model (kept for compatibility/training contract)
@@ -121,6 +138,10 @@ __all__ = [
     'CLASS_MAP_SCATTER',
     'CLASS_MAP_HISTOGRAM',
     'CLASS_MAP_HEATMAP',
+    'CLASS_MAP_HEATMAP_MACRO',
+    'CLASS_MAP_HEATMAP_COLORBAR',
+    'CLASS_MAP_HEATMAP_LATTICE',
+    'CLASS_MAP_HEATMAP_TEXT',
     'CLASS_MAP_PIE_OBJ',
     'CLASS_MAP_PIE_POSE',
     'CLASS_MAP_PIE',

@@ -32,8 +32,33 @@ from strategies.base import StrategyServices
 # Class maps
 from core.class_maps import (
     CLASS_MAP_CLASSIFICATION,
+    CLASS_MAP_HEATMAP,
+    CLASS_MAP_HEATMAP_MACRO,
+    CLASS_MAP_HEATMAP_COLORBAR,
+    CLASS_MAP_HEATMAP_LATTICE,
+    CLASS_MAP_HEATMAP_TEXT,
     get_class_map,
 )
+from services.heatmap.config import HeatmapConfig
+
+# Preset heatmap configurations keyed by --heatmap-mode CLI flag value
+_HEATMAP_MODE_TO_CONFIG = {
+    'legacy':    HeatmapConfig(),
+    'fft':       HeatmapConfig(use_fft_grid=True),
+    'fft+color': HeatmapConfig(
+        use_fft_grid=True,
+        use_bimodal_router=True,
+        use_ciede2000=True,
+    ),
+    'full':      HeatmapConfig(
+        use_fft_grid=True,
+        use_artifact_rejector=True,
+        use_ciede2000=True,
+        use_bimodal_router=True,
+        use_nw_aligner=True,
+        use_label_interpolator=True,
+    ),
+}
 
 class ChartAnalysisPipeline(BasePipeline):
     """
@@ -153,10 +178,16 @@ class ChartAnalysisPipeline(BasePipeline):
             
             # 6. Strategy-based Orchestration
             if self.orchestrator is None:
+                _heatmap_mode = 'legacy'
+                if isinstance(advanced_settings, dict):
+                    _heatmap_mode = str(advanced_settings.get('heatmap_mode', 'legacy'))
+                _heatmap_cfg = _HEATMAP_MODE_TO_CONFIG.get(_heatmap_mode, HeatmapConfig())
                 self.orchestrator = ChartAnalysisOrchestrator(
                     calibration_service=self.calibration_engine,
                     logger=logging.getLogger("Orchestrator"),
+                    heatmap_config=_heatmap_cfg,
                 )
+                self.logger.info("Orchestrator init: heatmap_mode='%s'.", _heatmap_mode)
             if self._standard_strategy is None:
                 self._standard_strategy = StandardStrategy(orchestrator=self.orchestrator)
             if self._chart_to_table_strategy is None:
@@ -276,12 +307,20 @@ class ChartAnalysisPipeline(BasePipeline):
         return primary_final_result
 
     def _classify_chart_types(self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2) -> List[str]:
-        """Determines the types of the chart."""
+        """Determines the types of the chart.
+
+        Primary classification is done by the YOLO classification model.  When
+        'heatmap' is absent from its top-k output we run a lightweight secondary
+        probe with the heatmap detection model: if ≥3 ``cell`` boxes are found
+        with confidence ≥ 0.25 the image is almost certainly a heatmap (bar/
+        histogram/line charts never produce ``cell`` detections) and we prepend
+        'heatmap' as the primary type.
+        """
         model = self.models_manager.get_model('classification')
         if not model:
             self.logger.error("Classification model missing")
-            return ['bar'] # Default
-            
+            return ['bar']  # Default
+
         try:
             conf_threshold = self._resolve_float_setting(
                 advanced_settings,
@@ -299,12 +338,105 @@ class ChartAnalysisPipeline(BasePipeline):
                         if len(types) >= top_k:
                             break
                 if types:
+                    # ── Heatmap rescue ────────────────────────────────────────────
+                    # The classification model occasionally confuses heatmaps with
+                    # bar charts because both are rectangular.  ``cell`` detections
+                    # from the heatmap detection model are a strong discriminant:
+                    # no other chart type produces them.
+                    if 'heatmap' not in types:
+                        types = self._heatmap_rescue(img, types, advanced_settings)
                     return types
                 self.logger.warning("Classification only produced generic 'chart'; defaulting to 'bar'.")
         except Exception as e:
             self.logger.error(f"Classification error: {e}")
-            
+
         return ['bar']
+
+    # Minimum number of `cell` detections required to override classification.
+    _HEATMAP_RESCUE_MIN_CELLS: int = 3
+    # Detection confidence threshold used by the rescue probe (kept low so we
+    # do not miss faint cells in low-contrast heatmaps).
+    _HEATMAP_RESCUE_CONF: float = 0.40
+
+    def _heatmap_rescue(
+        self,
+        img: np.ndarray,
+        current_types: List[str],
+        advanced_settings: Optional[Dict],
+    ) -> List[str]:
+        """Run a cascaded Macro→Lattice heatmap probe.
+
+        First runs the Macro model to obtain a chart ROI, then runs the
+        Lattice model on the crop to count cell detections.  Falls back
+        to full-image Lattice inference when the Macro model is missing
+        or fails to detect a chart region.
+
+        Returns *current_types* unchanged when the probe finds fewer than
+        ``_HEATMAP_RESCUE_MIN_CELLS`` cell detections.
+        """
+        lattice_model = self.models_manager.get_model('heatmap_lattice')
+        if not lattice_model:
+            return current_types
+
+        try:
+            conf = self._resolve_float_setting(
+                advanced_settings,
+                keys=('heatmap_rescue_conf',),
+                default=self._HEATMAP_RESCUE_CONF,
+            )
+            if advanced_settings:
+                det_conf = advanced_settings.get('detection_confidence_overrides', {})
+                if isinstance(det_conf, dict) and 'heatmap' in det_conf:
+                    try:
+                        conf = float(det_conf['heatmap'])
+                    except (ValueError, TypeError):
+                        pass
+
+            # Phase 1: Try to get a chart ROI from the Macro model
+            chart_roi = None
+            macro_model = self.models_manager.get_model('heatmap_macro')
+            if macro_model:
+                try:
+                    macro_dets = run_inference_on_image(
+                        macro_model, img, conf, CLASS_MAP_HEATMAP_MACRO,
+                        nms_threshold=0.45,
+                    )
+                    for d in macro_dets:
+                        if CLASS_MAP_HEATMAP_MACRO.get(d.get('cls', -1)) == 'chart':
+                            chart_roi = d['xyxy']
+                            break
+                except Exception as exc:
+                    self.logger.debug("Heatmap rescue Macro probe failed: %s", exc)
+
+            # Phase 2: Run Lattice on crop (or full image)
+            if chart_roi is not None:
+                probe_dets = self._run_expert_on_roi(
+                    lattice_model, img, chart_roi,
+                    CLASS_MAP_HEATMAP_LATTICE, conf, 0.45,
+                )
+            else:
+                probe_dets = run_inference_on_image(
+                    lattice_model, img, conf, CLASS_MAP_HEATMAP_LATTICE,
+                    nms_threshold=0.45,
+                )
+
+            cell_count = sum(
+                1 for d in probe_dets
+                if CLASS_MAP_HEATMAP_LATTICE.get(d.get('cls', -1)) == 'cell'
+            )
+            if cell_count >= self._HEATMAP_RESCUE_MIN_CELLS:
+                self.logger.info(
+                    "Heatmap rescue: found %d cell detections (roi_cropped=%s) "
+                    "— overriding '%s' → 'heatmap'.",
+                    cell_count, chart_roi is not None,
+                    current_types[0] if current_types else '?',
+                )
+                rescued = ['heatmap'] + [t for t in current_types if t != 'heatmap']
+                return rescued[:2]
+        except Exception as exc:
+            self.logger.warning("Heatmap rescue probe failed: %s", exc)
+
+        return current_types
 
     def _detect_elements(
         self,
@@ -315,6 +447,9 @@ class ChartAnalysisPipeline(BasePipeline):
         """Runs object detection for the specific chart type."""
         model = self.models_manager.get_model(chart_type)
         if not model:
+            # For heatmap, the model key is no longer 'heatmap' but split into experts
+            if chart_type == 'heatmap':
+                return self._detect_heatmap_experts(img, advanced_settings)
             self.logger.error(f"No detection model for {chart_type}")
             return {}
             
@@ -395,6 +530,206 @@ class ChartAnalysisPipeline(BasePipeline):
         organized = _reclassify_top_boxes(organized, img.shape[1])
                 
         return organized
+
+    # ── Heatmap Expert Models: Cascaded ROI Pipeline ──────────────────────────
+
+    _HEATMAP_EXPERT_CONF: float = 0.4
+    _HEATMAP_EXPERT_NMS: float = 0.45
+
+    def _detect_heatmap_experts(
+        self,
+        img: np.ndarray,
+        advanced_settings: Optional[Dict] = None,
+    ) -> Dict[str, List[Dict]]:
+        """Cascaded heatmap detection using 4 expert models.
+
+        Pipeline:
+          1. **Macro** (full image) → chart ROI, color_bar_region ROI, legend
+          2. **Lattice** (cropped to chart ROI) → cells, data_labels
+          3. **Colorbar** (cropped to color_bar_region ROI) → color_bar, labels, title
+          4. **Text** (full image) → axis_labels, axis_title, chart_title
+
+        Coordinates from cropped experts are re-projected to full-image space.
+        Falls back to full-image inference when ROI detection fails.
+        """
+        conf = self._resolve_float_setting(
+            advanced_settings,
+            keys=('heatmap_expert_conf',),
+            default=self._HEATMAP_EXPERT_CONF,
+        )
+        if advanced_settings:
+            det_conf = advanced_settings.get('detection_confidence_overrides', {})
+            if isinstance(det_conf, dict) and 'heatmap' in det_conf:
+                try:
+                    conf = float(det_conf['heatmap'])
+                except (ValueError, TypeError):
+                    pass
+        nms = self._HEATMAP_EXPERT_NMS
+        h, w = img.shape[:2]
+
+        organized: Dict[str, List[Dict]] = {
+            'chart': [], 'color_bar_region': [], 'legend': [],
+            'cell': [], 'data_label': [],
+            'color_bar': [], 'color_bar_label': [], 'color_bar_title': [],
+            'axis_labels': [], 'axis_title': [], 'chart_title': [],
+            'unknown': [],
+        }
+
+        # ── Phase 1: Macro (full image) ──────────────────────────────────────
+        macro_model = self.models_manager.get_model('heatmap_macro')
+        chart_roi = None      # (x1, y1, x2, y2) in full-image coords
+        cbr_roi = None         # color_bar_region ROI
+
+        if macro_model:
+            macro_dets = run_inference_on_image(
+                macro_model, img, conf, CLASS_MAP_HEATMAP_MACRO,
+                nms_threshold=nms,
+            )
+            for det in macro_dets:
+                cls_name = CLASS_MAP_HEATMAP_MACRO.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+                    if cls_name == 'chart' and chart_roi is None:
+                        chart_roi = det['xyxy']
+                    elif cls_name == 'color_bar_region' and cbr_roi is None:
+                        cbr_roi = det['xyxy']
+            self.logger.info(
+                "Heatmap Macro: chart_roi=%s, cbr_roi=%s, legends=%d",
+                chart_roi is not None, cbr_roi is not None,
+                len(organized['legend']),
+            )
+        else:
+            self.logger.warning("heatmap_macro model not loaded — Lattice will run on full image")
+
+        # ── Phase 2a: Lattice (cropped to chart ROI or full image) ───────────
+        lattice_model = self.models_manager.get_model('heatmap_lattice')
+        if lattice_model:
+            if chart_roi is not None:
+                lattice_dets = self._run_expert_on_roi(
+                    lattice_model, img, chart_roi,
+                    CLASS_MAP_HEATMAP_LATTICE, conf, nms,
+                )
+            else:
+                # Fallback: run on full image
+                lattice_dets = run_inference_on_image(
+                    lattice_model, img, conf, CLASS_MAP_HEATMAP_LATTICE,
+                    nms_threshold=nms,
+                )
+            for det in lattice_dets:
+                cls_name = CLASS_MAP_HEATMAP_LATTICE.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info(
+                "Heatmap Lattice: %d cells, %d data_labels (roi_cropped=%s)",
+                len(organized['cell']), len(organized['data_label']),
+                chart_roi is not None,
+            )
+        else:
+            self.logger.warning("heatmap_lattice model not loaded — no cell detections")
+
+        # ── Phase 2b: Colorbar (cropped to color_bar_region ROI) ─────────────
+        colorbar_model = self.models_manager.get_model('heatmap_colorbar')
+        if colorbar_model and cbr_roi is not None:
+            cb_dets = self._run_expert_on_roi(
+                colorbar_model, img, cbr_roi,
+                CLASS_MAP_HEATMAP_COLORBAR, conf, nms,
+            )
+            for det in cb_dets:
+                cls_name = CLASS_MAP_HEATMAP_COLORBAR.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info(
+                "Heatmap Colorbar: %d color_bar, %d labels, %d titles",
+                len(organized['color_bar']),
+                len(organized['color_bar_label']),
+                len(organized['color_bar_title']),
+            )
+        elif colorbar_model and cbr_roi is None:
+            # No color_bar_region detected — try full-image fallback
+            cb_dets = run_inference_on_image(
+                colorbar_model, img, conf, CLASS_MAP_HEATMAP_COLORBAR,
+                nms_threshold=nms,
+            )
+            for det in cb_dets:
+                cls_name = CLASS_MAP_HEATMAP_COLORBAR.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info(
+                "Heatmap Colorbar (full-image fallback): %d color_bar",
+                len(organized['color_bar']),
+            )
+
+        # ── Phase 3: Text (full image) ───────────────────────────────────────
+        text_model = self.models_manager.get_model('heatmap_text')
+        if text_model:
+            text_dets = run_inference_on_image(
+                text_model, img, conf, CLASS_MAP_HEATMAP_TEXT,
+                nms_threshold=nms,
+            )
+            for det in text_dets:
+                cls_name = CLASS_MAP_HEATMAP_TEXT.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info(
+                "Heatmap Text: %d axis_labels, %d axis_titles, %d chart_titles",
+                len(organized['axis_labels']),
+                len(organized['axis_title']),
+                len(organized['chart_title']),
+            )
+        else:
+            self.logger.warning("heatmap_text model not loaded — no text detections")
+
+        return organized
+
+    @staticmethod
+    def _run_expert_on_roi(
+        session,
+        full_image: np.ndarray,
+        roi: List[int],
+        class_map: Dict,
+        conf_threshold: float,
+        nms_threshold: float,
+    ) -> List[Dict]:
+        """Run an expert model on a cropped ROI and re-project coordinates.
+
+        Args:
+            session: ONNX InferenceSession for the expert model.
+            full_image: Full input image (H, W, C).
+            roi: ROI bounding box [x1, y1, x2, y2] in full-image coords.
+            class_map: Class ID → name mapping for the expert.
+            conf_threshold: Confidence threshold.
+            nms_threshold: NMS IoU threshold.
+
+        Returns:
+            List of detection dicts with coordinates in full-image space.
+        """
+        h, w = full_image.shape[:2]
+        rx1 = max(0, int(roi[0]))
+        ry1 = max(0, int(roi[1]))
+        rx2 = min(w, int(roi[2]))
+        ry2 = min(h, int(roi[3]))
+
+        if rx2 <= rx1 + 10 or ry2 <= ry1 + 10:
+            # ROI too small — skip
+            return []
+
+        crop = full_image[ry1:ry2, rx1:rx2]
+        dets = run_inference_on_image(
+            session, crop, conf_threshold, class_map,
+            nms_threshold=nms_threshold,
+        )
+
+        # Re-project from crop-local to full-image coordinates
+        for det in dets:
+            x1, y1, x2, y2 = det['xyxy']
+            det['xyxy'] = [
+                x1 + rx1,
+                y1 + ry1,
+                x2 + rx1,
+                y2 + ry1,
+            ]
+
+        return dets
 
     def _detect_text_layout(
         self,
@@ -520,7 +855,7 @@ class ChartAnalysisPipeline(BasePipeline):
         # 'text' / 'ocr_confidence' on it later propagates automatically.
         ocr_batch: list = list(axis_labels)
 
-        for class_name in ('chart_title', 'legend', 'axis_title', 'data_label'):
+        for class_name in ('chart_title', 'legend', 'axis_title', 'data_label', 'color_bar_label', 'color_bar_title'):
             for det in detections.get(class_name, []):
                 det['ocr_source'] = class_name
                 ocr_batch.append(det)
@@ -537,8 +872,12 @@ class ChartAnalysisPipeline(BasePipeline):
         crops = []
         for region in all_regions:
             x1, y1, x2, y2 = [int(c) for c in region['xyxy']]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
+            
+            # Slightly increase the box before extracting text to avoid clipping
+            PADDING = 2
+            x1, y1 = max(0, x1 - PADDING), max(0, y1 - PADDING)
+            x2, y2 = min(w, x2 + PADDING), min(h, y2 + PADDING)
+            
             crop = img[y1:y2, x1:x2]
             label_type = region.get('ocr_source', 'axis_label')
             crops.append((crop, label_type))

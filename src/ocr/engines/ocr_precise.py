@@ -42,9 +42,13 @@ class PreciseOCREngine:
             best_text = ""
             best_conf = -1.0
             
+            allowlist = None
+            if context in ('color_bar_label', 'scale_label', 'tick_label'):
+                allowlist = '0123456789.-+eE'
+
             # Evaluate all variants and pick the winner
             for i, variant in enumerate(variants):
-                text, confidence = self._perform_ocr(variant)
+                text, confidence = self._perform_ocr(variant, allowlist)
                 # logging.debug(f"Variant {i} ('{text}'): {confidence:.4f}")
                 
                 # Selection logic:
@@ -127,18 +131,22 @@ class PreciseOCREngine:
         
         return variants
     
-    def _perform_ocr(self, image: np.ndarray) -> Tuple[str, float]:
+    def _perform_ocr(self, image: np.ndarray, allowlist: str = None) -> Tuple[str, float]:
         """
         Perform OCR on a single image.
 
         Args:
             image: Preprocessed image
+            allowlist: Optional string of allowed characters
 
         Returns:
             Tuple[str, float]: (OCR result text, confidence score)
         """
         try:
-            result = self.reader.readtext(image, detail=1, paragraph=False)  # Changed to detail=1 to get confidence
+            if allowlist:
+                result = self.reader.readtext(image, allowlist=allowlist, detail=1, paragraph=False)
+            else:
+                result = self.reader.readtext(image, detail=1, paragraph=False)  # Changed to detail=1 to get confidence
             if result and len(result) > 0:
                 # Extract text and confidence from the first result
                 bbox, text, confidence = result[0]

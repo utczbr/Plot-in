@@ -19,9 +19,20 @@ except (ImportError, OSError):
 import sys
 from pathlib import Path
 project_root = Path(__file__).resolve().parents[1]
+src_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root / 'scripts'))
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+# Guarantee this file's own directory (src/) is importable so top-level
+# packages that live there (core, ocr, calibration, pipelines, visual, ...)
+# can always be imported as e.g. `from core.protocol_row_builder import ...`.
+# Normally Python auto-adds the launched script's directory to sys.path[0],
+# but that's not guaranteed in every invocation context (symlinked launchers,
+# -m invocation, frozen builds, or worker/thread contexts that re-resolve
+# sys.path), which previously caused intermittent
+# "ModuleNotFoundError: No module named 'core.protocol_row_builder'" crashes.
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
 from shared.state_root import ensure_state_dirs, resolve_state_root
 
 def _is_pyqt_missing_error(exc: ModuleNotFoundError) -> bool:
@@ -270,7 +281,12 @@ class MultiSelectTableWidget(QTableWidget):
             self._is_editing_undo = True
             self._undo_stack.push(cmd)
             self._is_editing_undo = False
-            self.cellChanged.emit(changes[-1][0], changes[-1][1])
+            # Emit for every changed cell (not just the last one) so any
+            # listener that syncs the underlying data model — e.g. the
+            # protocol table's row_dict sync — picks up ALL pasted cells,
+            # not only the final one in the batch.
+            for r, c, _old, _new in changes:
+                self.cellChanged.emit(r, c)
 
     def _delete_selection(self):
         changes = []
@@ -291,7 +307,12 @@ class MultiSelectTableWidget(QTableWidget):
             self._is_editing_undo = True
             self._undo_stack.push(cmd)
             self._is_editing_undo = False
-            self.cellChanged.emit(changes[-1][0], changes[-1][1])
+            # Emit for every deleted cell (not just the last one) so any
+            # listener that syncs the underlying data model — e.g. the
+            # protocol table's row_dict sync — picks up ALL deleted cells,
+            # not only the final one in the multi-selection.
+            for r, c, _old, _new in changes:
+                self.cellChanged.emit(r, c)
 
 
 def _extract_calibration_r2(calibration_entry: Any) -> Optional[float]:
@@ -485,7 +506,7 @@ class ModernAnalysisThread(QThread):
     analysis_complete = pyqtSignal(object)
     progress_updated = pyqtSignal(int)
 
-    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None):
+    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None, chart_type=None):
         super().__init__(parent)
         self.output_stem = output_stem
         self.image_path = image_path
@@ -496,6 +517,7 @@ class ModernAnalysisThread(QThread):
         self.context = context
         self.provenance = provenance
         self.manual_detections = manual_detections
+        self.chart_type = chart_type
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -539,6 +561,7 @@ class ModernAnalysisThread(QThread):
                 provenance=self.provenance,
                 manual_detections=self.manual_detections,
                 output_stem=self.output_stem,
+                chart_type=self.chart_type,
             )
 
             self.progress_updated.emit(100)
@@ -1169,7 +1192,7 @@ class ModernChartAnalysisApp(QMainWindow):
             # If already loading, keep current worker to avoid multiple heavy downloads.
             return
 
-        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        default_ocr = 'Paddle'
         ocr_engine_name = (settings or {}).get('ocr_engine', default_ocr)
         needs_easyocr = ocr_engine_name == 'EasyOCR'
 
@@ -2241,11 +2264,21 @@ Click to configure advanced options."""
                 self.progress_bar.setVisible(False)
                 return
             
+        # Reuse the already-confirmed chart type for re-extraction instead of
+        # letting the pipeline reclassify the image. Reclassification could
+        # yield 2 chart-type hypotheses which, combined with manual_detections,
+        # previously caused every extracted row to be duplicated (and doubled
+        # again on each subsequent re-extract).
+        confirmed_chart_type = None
+        if self.current_analysis_result:
+            confirmed_chart_type = self.current_analysis_result.get('chart_type') or None
+
         self.analysis_thread = ModernAnalysisThread(
             str(image_path), conf, output_path, self.advanced_settings or {}, models_dir,
             context=self.context,
             provenance={"source": "manual_edit"},
             manual_detections=manual_detections,
+            chart_type=confirmed_chart_type,
         )
         self.analysis_thread.status_updated.connect(self.update_status)
         self.analysis_thread.progress_updated.connect(self.progress_bar.setValue)
@@ -2356,13 +2389,23 @@ Click to configure advanced options."""
             # Convert PIL Image → QPixmap via numpy → QImage
             import numpy as np
             from PyQt6.QtGui import QImage, QPixmap
-            np_array = np.array(self.original_pil_image)
+            # IMPORTANT: QImage's raw-buffer constructor does NOT copy or take
+            # ownership of the pixel data — it just wraps the pointer. Passing
+            # a throwaway `np_array.copy().data` (nothing keeps that temporary
+            # array alive) leaves QImage holding a dangling pointer once the
+            # temporary gets garbage-collected, which crashes the process
+            # (observed as random hard crashes/aborts when loading some
+            # images, notably certain JPEGs, because timing made the GC race
+            # more likely to lose). Keep a named reference to the buffer and
+            # force Qt to deep-copy the pixel data via .copy() before that
+            # local reference can be dropped.
+            np_array = np.ascontiguousarray(np.array(self.original_pil_image))
             h, w = np_array.shape[:2]
             if np_array.ndim == 2:
-                q_image = QImage(np_array.copy().data, w, h, w, QImage.Format.Format_Grayscale8)
+                q_image = QImage(np_array.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
             else:
                 bytes_per_line = 3 * w
-                q_image = QImage(np_array.copy().data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                q_image = QImage(np_array.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
             pixmap = QPixmap.fromImage(q_image)
             self._det_scene.load_image(pixmap)
         elif hasattr(self, 'current_image_path') and self.current_image_path:
@@ -3001,7 +3044,25 @@ Click to configure advanced options."""
             self.current_image_path = image_path
             self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
         except Exception as e:
-            self.update_status(f"❌ Error loading image: {e}")
+            # The cached JSON pointed at an image file that is now missing,
+            # moved, or unreadable (e.g. output/render folder changed between
+            # sessions). Rather than leaving the UI stuck on a bare error
+            # every time this file is clicked, drop the stale cache entry and
+            # fall back to re-running analysis fresh.
+            logging.getLogger(__name__).warning(
+                "Cached image %s could not be loaded (%s) — invalidating cache "
+                "entry and re-running analysis.", image_path, e,
+            )
+            self._benchmark_result_cache.pop(image_path, None)
+            try:
+                idx = self.image_files.index(image_path)
+                self._update_file_list_button_cached_state(idx, cached=False)
+            except (ValueError, AttributeError):
+                pass
+            self.update_status(
+                f"⚠️ Cached image could not be loaded ({e}); re-running analysis..."
+            )
+            self.load_image_for_assisted_analysis()
             return
 
         try:
@@ -4768,11 +4829,16 @@ Click to configure advanced options."""
                 return
             
             # Convert to NumPy array
-            np_array = np.array(img_to_show)
+            # See _update_scene_display for why we keep a named reference to
+            # the buffer and force a deep-copy via .copy() immediately —
+            # QImage's raw-buffer constructor does not take ownership of the
+            # data, and an unreferenced temporary buffer can be garbage
+            # collected out from under it, causing a hard crash.
+            np_array = np.ascontiguousarray(np.array(img_to_show))
             height, width, channel = np_array.shape
             bytes_per_line = 3 * width
             
-            q_image = QImage(np_array.copy().data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
+            q_image = QImage(np_array.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).copy()
             pixmap = QPixmap.fromImage(q_image)
             
             # Ensure this is run on the main thread
@@ -5299,7 +5365,34 @@ if __name__ == "__main__":
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     
     app = QApplication(sys.argv)
-    
+
+    # PyQt6 aborts the whole process (SIGABRT / "Abort trap: 6") when a
+    # Python exception escapes a Qt slot, since there's no safe way for it to
+    # propagate back through the C++ call stack. Without a hook, any
+    # unexpected error raised while handling a button click, signal, etc.
+    # (e.g. a transient import error, a bad file path) crashes the entire
+    # application instead of surfacing as a recoverable error. Install a
+    # global hook that logs the error and shows a dialog instead.
+    def _handle_uncaught_exception(exc_type, exc_value, exc_tb):
+        import traceback
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logging.getLogger(__name__).critical("Uncaught exception:\n%s", tb_str)
+        try:
+            QMessageBox.critical(
+                None,
+                "Unexpected Error",
+                "An unexpected error occurred and was logged:\n\n"
+                f"{exc_type.__name__}: {exc_value}\n\n"
+                "The application will try to keep running. If this keeps "
+                "happening, please check analysis.log and report the issue.",
+            )
+        except Exception:
+            # If even showing the dialog fails, fall back to the default
+            # behavior so we don't swallow the error silently.
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _handle_uncaught_exception
+
     app.setApplicationName("Plot-in")
     app.setApplicationVersion("12.0")
     app.setOrganizationName("Plot-in")

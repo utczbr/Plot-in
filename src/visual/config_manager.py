@@ -8,7 +8,7 @@ from pathlib import Path
 
 @dataclass
 class OCRSettings:
-    engine: str = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+    engine: str = 'Paddle'
     gpu: bool = False
     scale_factor: float = 2.0
     contrast_threshold: float = 0.3

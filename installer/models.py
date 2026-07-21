@@ -6,6 +6,10 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+import urllib.request
+import urllib.error
+import urllib.parse
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .install_types import InstallOptions
@@ -54,29 +58,13 @@ def load_model_manifest(path: Path) -> List[ModelSpec]:
     return specs
 
 
-def _ensure_gdown_available(python_executable: Path) -> None:
-    probe = run_command(
-        [str(python_executable), "-m", "pip", "show", "gdown"],
-        allow_failure=True,
-    )
-    if probe.returncode == 0:
-        return
-    run_command([str(python_executable), "-m", "pip", "install", "gdown>=5.2.0"])
-
-
-def _download_with_gdown(python_executable: Path, url: str, output_path: Path) -> None:
-    _ensure_gdown_available(python_executable)
-    run_command(
-        [
-            str(python_executable),
-            "-m",
-            "gdown",
-            "--fuzzy",
-            "--output",
-            str(output_path),
-            url,
-        ]
-    )
+def _download_file(url: str, output_path: Path) -> None:
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Plot-in-Installer/1.0'})
+        with urllib.request.urlopen(req, timeout=60) as response, open(output_path, 'wb') as out_file:
+            out_file.write(response.read())
+    except Exception as e:
+        raise RuntimeError(f"Failed to download {url}: {e}")
 
 
 def _verify_hash(path: Path, expected_sha256: str) -> bool:
@@ -111,7 +99,7 @@ def verify_or_download_models(
             tmp_path = Path(tmp_file.name)
 
         try:
-            _download_with_gdown(python_executable, spec.url, tmp_path)
+            _download_file(spec.url, tmp_path)
             if not _verify_hash(tmp_path, spec.sha256):
                 raise RuntimeError(
                     f"Checksum mismatch after download for {spec.relative_path}. "

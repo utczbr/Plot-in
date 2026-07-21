@@ -258,8 +258,12 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
 3. Validation harness includes CCC/Kappa; ICC/survey pipeline is not implemented.
 4. Protocol-row editing is supported in GUI/runtime payloads, but a canonical persisted corrected-backend artifact remains to be formalized.
 
-### Strategy Layer (Active in Default Pipeline as of March 2, 2026)
-5. `src/strategies/` package is now wired into `ChartAnalysisPipeline.run()` stage 6 via `StrategyRouter`. Default `pipeline_mode='hybrid'` ensures robust routing. Other modes (`vlm`, `chart_to_table`, `standard`, `auto`) are available via `advanced_settings`.
+### Strategy Layer (Structurally Wired, Functionally Inert Beyond Standard)
+5. `src/strategies/` package is wired into `ChartAnalysisPipeline.run()` stage 6 via `StrategyRouter`. Default `pipeline_mode='standard'` routes all extractions through `StandardStrategy` (wrapping `ChartAnalysisOrchestrator`). Other modes (`vlm`, `hybrid`, `chart_to_table`, `auto`) exist as code but are functionally inert today:
+   - `VLMStrategy` requires a `VLMBackend` subclass; **zero concrete implementations exist** — it is an interface without a backend.
+   - `HybridStrategy` is constructed with `vlm=None` (the pipeline never assigns a VLM); its escalation path (`calibration_quality == 'uncalibrated'`) is gated on `self.vlm is not None` and therefore **can never fire**. In practice it is a pass-through to `StandardStrategy`.
+   - `ChartToTableStrategy` (DePlot/MatCha via Pix2Struct) is code-complete but `transformers` is not in `requirements.txt`, so it would `ImportError` on any standard install.
+   - `'auto'` mode's calibration-quality branch in `StrategyRouter.select()` is called with `calibration_quality=None` hardcoded at its only call site (strategy selection happens before calibration runs in the pipeline), making that branch unreachable.
 6. CP JSON sidecar (`conformal_quantiles.json`) is integrated — `ConformalPredictor.interval()` attaches uncertainty distributions to Cartesian values.
 
 ### Extractor-Level (Partially Resolved)
@@ -283,14 +287,14 @@ Status legend:
 | Item | Status |
 |---|---|
 | 1.1 Current flow | Implemented+Active |
-| 1.2 Strategy dispatch layer | Partial |
-| 1.3 Strategy interface (`PipelineStrategy`, `StrategyServices`) | Implemented+Dormant |
-| 1.4 `StandardStrategy` | Implemented+Dormant |
-| 1.5 `ChartToTableStrategy` | Implemented+Dormant |
+| 1.2 Strategy dispatch layer | Implemented+Active (routes to Standard only in practice) |
+| 1.3 Strategy interface (`PipelineStrategy`, `StrategyServices`) | Implemented+Active |
+| 1.4 `StandardStrategy` | Implemented+Active |
+| 1.5 `ChartToTableStrategy` | Implemented+Dormant (missing `transformers` dependency) |
 | 1.5.1 Model memory management refinement | Partial |
-| 1.6 `VLMStrategy` | Implemented+Dormant |
-| 1.7 `HybridStrategy` | Partial |
-| 1.8 `StrategyRouter` policy | Implemented+Dormant |
+| 1.6 `VLMStrategy` | Interface only — no concrete `VLMBackend` exists |
+| 1.7 `HybridStrategy` | Inert — always constructed with `vlm=None`, escalation cannot fire |
+| 1.8 `StrategyRouter` policy | Implemented+Active (`'auto'` calibration branch unreachable) |
 | 1.9 Integration into `ChartAnalysisPipeline.run()` | Implemented+Active |
 | 1.10 Contract invariants | Partial |
 | 1.11 New file layout | Implemented+Active |
@@ -446,11 +450,11 @@ Status legend:
 
 ### Strategy Package (`src/strategies/`)
 - `base.py` — `PipelineStrategy` ABC + `StrategyServices` frozen dataclass (service bundle for strategies).
-- `standard.py` — Wraps `ChartAnalysisOrchestrator.process_chart()`; adds `strategy_id='standard'` diagnostic.
-- `vlm.py` — `VLMStrategy` (abstract `VLMBackend` required) + `VLMBackend` ABC.
-- `chart_to_table.py` — `ChartToTableStrategy` using DePlot/MatCha (Pix2Struct); lazy model loading.
-- `hybrid.py` — `HybridStrategy`: runs Standard first; escalates to VLM on `calibration_quality='uncalibrated'`.
-- `router.py` — `StrategyRouter.select()`: explicit mode dispatch + auto-routing by quality signals.
+- `standard.py` — **Only active strategy.** Wraps `ChartAnalysisOrchestrator.process_chart()`; adds `strategy_id='standard'` diagnostic.
+- `vlm.py` — `VLMStrategy` (abstract `VLMBackend` required) + `VLMBackend` ABC. **No concrete backend exists; interface only.**
+- `chart_to_table.py` — `ChartToTableStrategy` using DePlot/MatCha (Pix2Struct); lazy model loading. **Dormant: `transformers` not in requirements.**
+- `hybrid.py` — `HybridStrategy`: runs Standard first; escalates to VLM on `calibration_quality='uncalibrated'`. **Inert: always constructed with `vlm=None`.**
+- `router.py` — `StrategyRouter.select()`: explicit mode dispatch + auto-routing by quality signals. Default `pipeline_mode='standard'`.
 
 ### Metric-Learning Bar Association
 - `src/extractors/bar_label_model.py` — `compute_pair_features()` (16-dim resolution-normalized feature vector), `BarLabelMLP` (NumPy inference), `hungarian_match()` (rectangular cost matrix + score threshold post-filter).

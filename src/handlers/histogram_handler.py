@@ -9,7 +9,6 @@ from typing import List, Dict, Any
 
 from handlers.base_handler import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
-from extractors.histogram_extractor import HistogramExtractor
 
 
 class HistogramHandler(CartesianExtractionHandler):

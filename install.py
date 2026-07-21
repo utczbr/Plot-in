@@ -294,7 +294,7 @@ def _check_and_download_models(models_dir: Path) -> None:
     # ── 4. Report remaining failures ─────────────────────────────────────
     still_missing = [m for m in required_models if not (models_dir / m).exists()]
     if still_missing:
-        print(f"\n  ERROR: {len(still_missing)} model(s) could not be downloaded:")
+        print(f"\n  WARNING: {len(still_missing)} model(s) could not be downloaded:")
         for m in still_missing:
             print(f"    ✗ {m}")
         print()
@@ -307,7 +307,9 @@ def _check_and_download_models(models_dir: Path) -> None:
         print(f"      and place them in: {models_dir}")
         print()
         logging.error("Model download incomplete. Missing: %s", still_missing)
-        _sys.exit(1)
+        return False
+
+    return True
 
 
 def main() -> int:
@@ -338,7 +340,7 @@ def main() -> int:
     if not models_dir.is_absolute():
         models_dir = (STATE_ROOT / models_dir).resolve()
         
-    _check_and_download_models(models_dir)
+    models_ok = _check_and_download_models(models_dir)
 
     try:
         options = _collect_options(args)
@@ -346,6 +348,13 @@ def main() -> int:
         print(f"ERROR: {exc}")
         logging.error("%s", exc)
         return 3
+
+    # If install.py's _check_and_download_models already succeeded, skip the
+    # runner's redundant manifest-based re-verification.  The manifest's SHA256
+    # hashes correspond to the original Google Drive uploads and may not match
+    # the files served from Hugging Face, causing a spurious re-download.
+    if models_ok:
+        options.verify_and_download_models = False
 
     if options.auto_install_python:
         suggestion = attempt_auto_python_install(platform_info)

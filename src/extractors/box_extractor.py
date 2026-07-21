@@ -13,7 +13,6 @@ from extractors.box.box_validator import validate_and_correct_box_values
 from extractors.box_associator import BoxElementAssociator
 from services.orientation_detection_service import OrientationDetectionService
 from extractors.smart_whisker_estimator import SmartWhiskerEstimator
-from extractors.vision_based_whisker_detector import VisionBasedWhiskerDetector
 from extractors.improved_pixel_based_detector import ImprovedPixelBasedDetector
 
 
@@ -333,13 +332,6 @@ class BoxExtractor(BaseExtractor):
 
                         box_info['whisker_low_pixel'] = None
                         box_info['whisker_high_pixel'] = None
-
-                # Final validation
-                final_min = box_info['whisker_low']
-                final_q1 = box_info['q1']
-                final_median = box_info['median']
-                final_q3 = box_info['q3']
-                final_max = box_info['whisker_high']
 
                 # §3b.4: Monotone projection — enforce valid five-number ordering
                 box_info = self._enforce_monotone_summary(box_info, i)

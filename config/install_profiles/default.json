@@ -5,7 +5,7 @@
   "purpose": "user",
   "interface_mode": "gui",
   "runtime": {
-    "models_dir": "/home/stuart/Documentos/OCR/LYAA-fine-tuning/src/models",
+    "models_dir": "src/models",
     "ocr_backend": "EasyOCR",
     "ocr_languages": [
       "en",
@@ -15,7 +15,7 @@
   "advanced_settings": {
     "ocr_engine": "EasyOCR",
     "ocr_accuracy": "Precise",
-    "pipeline_mode": "auto",
+    "pipeline_mode": "standard",
     "spatial_method": "LYLLA",
     "scatter_subpixel_mode": "otsu",
     "bar_association_mode": "metric_learning",
@@ -44,7 +44,7 @@
         "en",
         "pt"
       ],
-      "easyocr_model_storage_dir": "/home/stuart/.EasyOCR"
+      "easyocr_model_storage_dir": ""
     },
     "detection_thresholds": {
       "classification": 0.8,
@@ -100,8 +100,5 @@
     },
     "use_doclayout_text": true
   },
-  "environment": {
-    "EASYOCR_MODULE_PATH": "/home/stuart/.EasyOCR",
-    "PADDLE_HOME": "/home/stuart/.paddle"
-  }
+  "environment": {}
 }

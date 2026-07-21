@@ -128,7 +128,7 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "Preset Loaded", f"'{preset_name}' preset has been loaded. Review and save.")
 
     def _update_ocr_accuracy_state(self, text):
-        if text in ["EasyOCR", "TesseractOCR"]:
+        if text in ["TesseractOCR"]:
             self.ocr_accuracy_combo.setEnabled(True)
         else:
             self.ocr_accuracy_combo.setEnabled(False)
@@ -150,7 +150,7 @@ class SettingsDialog(QDialog):
         
         engine_layout.addWidget(QLabel("OCR Engine:"), 0, 0)
         self.ocr_engine_combo = QComboBox()
-        safe_combo_populate(self.ocr_engine_combo, ['Paddle', 'Paddle_docs', 'TesseractOCR', 'EasyOCR'])
+        safe_combo_populate(self.ocr_engine_combo, ['Paddle', 'Paddle_docs', 'TesseractOCR'])
         engine_layout.addWidget(self.ocr_engine_combo, 0, 1)
 
         engine_layout.addWidget(QLabel("OCR Accuracy:"), 1, 0)
@@ -163,7 +163,7 @@ class SettingsDialog(QDialog):
         self.use_gpu_check = QCheckBox("Use GPU")
         self.use_gpu_check.setChecked(self.settings['ocr_settings']['easyocr_gpu'])
         self.use_gpu_check.setToolTip(
-            "Enable GPU acceleration for EasyOCR. "
+            "Enable GPU acceleration for OCR. "
             "Disabled on macOS by default (no CUDA support; MPS not yet integrated)."
         )
         engine_layout.addWidget(self.use_gpu_check, 2, 0, 1, 2)
@@ -235,7 +235,7 @@ class SettingsDialog(QDialog):
         self.scale_factor_spin.setToolTip("Upscale images before OCR (higher = better quality, slower)")
         advanced_layout.addWidget(self.scale_factor_spin, 0, 1)
         
-        advanced_layout.addWidget(QLabel("EasyOCR Contrast Threshold:"), 1, 0)
+        advanced_layout.addWidget(QLabel("OCR Contrast Threshold:"), 1, 0)
         self.contrast_ths_spin = QDoubleSpinBox()
         self.contrast_ths_spin.setRange(0.0, 1.0)
         self.contrast_ths_spin.setSingleStep(0.05)
@@ -823,9 +823,9 @@ class SettingsDialog(QDialog):
     def _get_default_settings(self):
         """Get default settings."""
         return {
-            'ocr_engine': 'Paddle' if sys.platform == 'darwin' else 'EasyOCR',
+            'ocr_engine': 'Paddle',
             'ocr_accuracy': 'Optimized',
-            'pipeline_mode': 'hybrid',
+            'pipeline_mode': 'standard',
             'spatial_method': 'LYLLA',
             'scatter_subpixel_mode': 'gaussian',
             'bar_association_mode': 'metric_learning',
@@ -928,7 +928,7 @@ class SettingsDialog(QDialog):
     def _get_fast_processing_preset(self):
         """Fast processing preset - faster but may be less accurate."""
         preset = self._get_default_settings()
-        preset['ocr_engine'] = 'EasyOCR'
+        preset['ocr_engine'] = 'Paddle'
         preset['ocr_accuracy'] = 'Fast'
         preset['spatial_method'] = 'Diagonal'
         preset['calibration_method'] = 'Linear'
@@ -1020,7 +1020,7 @@ class SettingsDialog(QDialog):
         self.baseline_tol_spin.setValue(calibration_settings.get('baseline_validation_tolerance', 0.2))
 
         # Method and SOTA Flags
-        self.pipeline_mode_combo.setCurrentText(self.settings.get('pipeline_mode', 'hybrid'))
+        self.pipeline_mode_combo.setCurrentText(self.settings.get('pipeline_mode', 'standard'))
         self.spatial_method_combo.setCurrentText(self.settings.get('spatial_method', 'LYLLA'))
         self.scatter_subpixel_combo.setCurrentText(self.settings.get('scatter_subpixel_mode', 'gaussian'))
         self.bar_association_combo.setCurrentText(self.settings.get('bar_association_mode', 'metric_learning'))

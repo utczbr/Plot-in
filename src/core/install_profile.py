@@ -56,12 +56,30 @@ def apply_profile_environment(profile: Dict[str, Any]) -> None:
     if not isinstance(env_values, dict):
         return
 
+    home_dir = str(Path.home())
     for key, value in env_values.items():
         if not isinstance(key, str):
             continue
         if value is None:
             continue
-        os.environ[str(key)] = str(value)
+        str_value = str(value)
+        # Skip empty values (sanitized defaults)
+        if not str_value:
+            continue
+        # Defense-in-depth: skip values that look like another user's
+        # home directory (e.g. leftover from a committed profile snapshot)
+        if _is_foreign_home_path(str_value, home_dir):
+            continue
+        os.environ[str(key)] = str_value
+
+
+def _is_foreign_home_path(value: str, home_dir: str) -> bool:
+    """Return True if value looks like a /home/<user>/ or /Users/<user>/ path
+    that doesn't belong to the current user."""
+    for prefix in ("/home/", "/Users/"):
+        if value.startswith(prefix) and not value.startswith(home_dir):
+            return True
+    return False
 
 
 def merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:

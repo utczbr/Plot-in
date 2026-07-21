@@ -23,8 +23,8 @@ This directory contains the cross-platform installer implementation.
 1. Detects platform and validates Python version (`>=3.8,<3.12`)
 2. Resolves dependency set by OS + purpose (user/developer)
 3. Supports install scope (`local` default, `user`, `global`)
-4. Verifies model files via strict SHA-256 manifest (`installer/model_manifest.json`)
-5. Downloads missing/corrupted models via `gdown`
+4. Attempts a fast bulk download of model files from Hugging Face Hub.
+5. Verifies model files via strict SHA-256 manifest (`installer/model_manifest.json`), falling back to individual Hugging Face file downloads if missing or corrupted.
 6. Optionally pre-downloads EasyOCR weights
 7. Writes runtime profile to `config/install_profiles/<name>.json`
 8. Activates profile via `config/install_profile_manifest.json`

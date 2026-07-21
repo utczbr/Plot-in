@@ -46,6 +46,8 @@ class TestChartPipeline(unittest.TestCase):
                 {'cls': 0, 'conf': 0.9},  # generic "chart"
                 {'cls': 1, 'conf': 0.89}, # specific "bar"
             ],
+            [], # Heatmap rescue macro
+            [], # Heatmap rescue lattice
             [{'cls': 0, 'conf': 0.9, 'xyxy': [10, 10, 50, 50]}] # Detection: Bar
         ]
         
@@ -82,7 +84,7 @@ class TestChartPipeline(unittest.TestCase):
             {'cls': 7, 'conf': 0.97},  # histogram
         ]
 
-        chart_type = self.pipeline._classify_chart_type(np.zeros((10, 10, 3), dtype=np.uint8))
+        chart_type = self.pipeline._classify_chart_types(np.zeros((10, 10, 3), dtype=np.uint8))[0]
         self.assertEqual(chart_type, 'histogram')
 
     @patch('pipelines.chart_pipeline.MODELS_CONFIG', new=SimpleNamespace(

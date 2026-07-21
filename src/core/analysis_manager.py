@@ -90,12 +90,7 @@ class AnalysisManager:
         # Get settings (default to empty dict if not set)
         settings = self._advanced_settings or {}
         ocr_engine_name = settings.get('ocr_engine', 'Paddle')
-        ocr_accuracy = settings.get('ocr_accuracy', 'Optimized').lower()
         calibration_method = settings.get('calibration_method', 'PROSAC')
-
-        if ocr_engine_name == 'EasyOCR' and self._easyocr_reader is None:
-            self.logger.error("EasyOCR engine selected but EasyOCR reader is not initialized")
-            return None
 
         models_dir = None
         if hasattr(self._models, "get_loaded_models_dir"):
@@ -126,23 +121,15 @@ class AnalysisManager:
         perf_cfg = settings.get('performance', {})
         use_gpu = bool(perf_cfg.get('use_gpu', False)) if isinstance(perf_cfg, dict) else False
         
-        # Create OCR engine
-        if ocr_engine_name == 'EasyOCR':
-            ocr_engine = OCREngineFactory.create_engine(ocr_accuracy, self._easyocr_reader)
-        elif ocr_engine_name == 'Paddle':
-            ocr_engine = OCREngineFactory.create_engine(
-                'paddle_onnx',
-                self._easyocr_reader,
-                det_model_path=str(det_model_path),
-                rec_model_path=str(rec_model_path),
-                dict_path=str(dict_path),
-                cls_model_path=str(cls_model_path),
-                use_gpu=use_gpu,
-            )
-        elif ocr_engine_name == 'Paddle_docs':
+        # Create OCR engine. Paddle is the only actively supported/selectable
+        # engine now (EasyOCR has been removed from the UI). Any legacy or
+        # unrecognized engine name (including a stale 'EasyOCR' value from an
+        # old saved config) falls back to Paddle rather than requiring an
+        # EasyOCR reader that is no longer wired up anywhere in the app.
+        if ocr_engine_name == 'Paddle_docs':
             ocr_engine = OCREngineFactory.create_engine(
                 'paddle_full',
-                self._easyocr_reader,
+                None,
                 doc_ori_model_path=str(doc_ori_model_path),
                 unwarp_model_path=str(unwarp_model_path),
                 det_model_path=str(det_model_path),
@@ -152,13 +139,20 @@ class AnalysisManager:
                 use_gpu=use_gpu,
             )
         else:
-            if self._easyocr_reader is None:
-                self.logger.error(
-                    "Unsupported OCR engine '%s' and EasyOCR reader is not initialized.",
+            if ocr_engine_name not in ('Paddle',):
+                self.logger.warning(
+                    "OCR engine '%s' is no longer supported; using Paddle instead.",
                     ocr_engine_name,
                 )
-                return None
-            ocr_engine = OCREngineFactory.create_engine('fast', self._easyocr_reader)
+            ocr_engine = OCREngineFactory.create_engine(
+                'paddle_onnx',
+                None,
+                det_model_path=str(det_model_path),
+                rec_model_path=str(rec_model_path),
+                dict_path=str(dict_path),
+                cls_model_path=str(cls_model_path),
+                use_gpu=use_gpu,
+            )
         
         # Create calibration engine
         calibration_engine = CalibrationFactory.create(calibration_method)
@@ -172,8 +166,15 @@ class AnalysisManager:
     def run_single_analysis(self, image_path: str, conf: float, output_path: str,
                             provenance: Optional[Dict[str, Any]] = None,
                             manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-                            output_stem: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Run analysis on a single image."""
+                            output_stem: Optional[str] = None,
+                            chart_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Run analysis on a single image.
+
+        chart_type: when set (e.g. re-extracting after manual bbox edits),
+        skips reclassification and reuses this already-confirmed chart type,
+        which also avoids duplicate-processing the same manual detections
+        against multiple chart-type hypotheses.
+        """
         pipeline = self._create_pipeline()
         if not pipeline:
             return None
@@ -186,6 +187,7 @@ class AnalysisManager:
             provenance=provenance,
             manual_detections=manual_detections,
             output_stem=output_stem,
+            chart_type=chart_type,
         )
 
         if result:

@@ -1,0 +1,36 @@
+name: Config path guard
+
+on:
+  pull_request:
+    paths:
+      - 'config/**'
+  push:
+    branches: [main]
+    paths:
+      - 'config/**'
+
+jobs:
+  check-personal-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject personal paths in config/
+        run: |
+          echo "Checking config/ for leaked personal paths..."
+          FAIL=0
+          # Match /home/<user>/ or /Users/<user>/ patterns (but not template placeholders)
+          if grep -rn --include='*.json' -E '"/home/[^"]+"|"/Users/[^"]+"' config/; then
+            echo "::error::Found personal home-directory paths in config/ files."
+            echo "Replace with relative paths, empty strings, or template placeholders."
+            FAIL=1
+          fi
+          # Match the old project name as a path component
+          if grep -rn --include='*.json' 'LYAA' config/; then
+            echo "::error::Found references to old project name 'LYAA' in config/ files."
+            FAIL=1
+          fi
+          if [ "$FAIL" -ne 0 ]; then
+            exit 1
+          fi
+          echo "✅ No personal paths found in config/"

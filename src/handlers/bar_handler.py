@@ -10,8 +10,6 @@ from typing import List, Dict, Any
 from handlers.base_handler import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
 
-# NEW: Import BarExtractor to use the new topological association
-from extractors.bar_extractor import BarExtractor
 
 
 class BarHandler(CartesianExtractionHandler):

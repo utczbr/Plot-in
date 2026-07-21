@@ -162,6 +162,19 @@ def _render_page_as_image(
         w, h = pixmap.width, pixmap.height
         del pixmap
 
+        # `Pixmap.save()` does not return a boolean status. It raises on failure,
+        # but it can theoretically leave a truncated/empty file behind (disk full, 
+        # interrupted write, permissions), which later fails with a confusing 
+        # "cannot identify image file" error when something tries to open it. 
+        # Verify the file is actually a non-trivial, real file on disk before 
+        # handing it back as usable.
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            logger.error(
+                f"❌ Full-page render for page {page_num + 1} did not produce a "
+                f"valid file at {file_path}. Skipping this page."
+            )
+            return None
+
         logger.info(f"🖼️  Full-page render saved: {filename} ({w}x{h}px @ {dpi} DPI)")
         return {
             'page_num': page_num + 1,
@@ -625,27 +638,6 @@ def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: 
         logger.error(f"❌ Error processing PDF: {e}")
         return []
 
-
-# --- Funções de Compatibilidade (Backward Compatibility) ---
-
-def extract_charts_from_pdf(pdf_path: Path, output_dir: Path, min_width: int = 300, min_height: int = 200) -> List[dict]:
-    """
-    Função de compatibilidade para manter interface da versão anterior.
-    
-    DEPRECATED: Use extract_charts_from_pdf_optimized() para melhor performance.
-    """
-    logger.warning("⚠️ Usando função legacy. Recomenda-se migrar para extract_charts_from_pdf_optimized()")
-    return extract_charts_from_pdf_optimized(pdf_path, output_dir, min_width, min_height)
-
-
-def rerender_chart_at_high_res(pdf_path: Path, page_num: int, chart_rect: fitz.Rect, output_path: Path, dpi: int = 300) -> Optional[Path]:
-    """
-    Função de compatibilidade para manter interface da versão anterior.
-    
-    DEPRECATED: Use rerender_chart_at_high_res_optimized() ou process_pdf_charts_optimized() para melhor performance.
-    """
-    logger.warning("⚠️ Usando função legacy. Recomenda-se migrar para rerender_chart_at_high_res_optimized()")
-    return rerender_chart_at_high_res_optimized(pdf_path, page_num, chart_rect, output_path, dpi)
 
 
 # --- Função Principal para Testes ---

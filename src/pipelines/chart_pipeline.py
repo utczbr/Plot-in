@@ -102,7 +102,8 @@ class ChartAnalysisPipeline(BasePipeline):
             advanced_settings: Optional[Dict] = None,
             provenance: Optional[Dict[str, Any]] = None,
             manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-            output_stem: Optional[str] = None) -> Optional[Dict[str, Any]]:
+            output_stem: Optional[str] = None,
+            chart_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Run the analysis pipeline on a single image.
         
@@ -113,6 +114,9 @@ class ChartAnalysisPipeline(BasePipeline):
             advanced_settings: Optional configuration overrides
             provenance: Optional tracking info
             manual_detections: Pre-computed detections (bypasses YOLO)
+            chart_type: Optional already-confirmed chart type. When provided
+                (typically during a manual bbox re-extract), classification is
+                skipped entirely and only this single chart type is used.
             
         Returns:
             Dictionary with analysis results or None on failure
@@ -134,7 +138,20 @@ class ChartAnalysisPipeline(BasePipeline):
             return None
             
         # 2. Classification
-        chart_types = self._classify_chart_types(img, advanced_settings, top_k=2)
+        if chart_type:
+            # A chart type was already confirmed upstream (e.g. re-extracting
+            # after manual bbox correction). Skip reclassification and use a
+            # single hypothesis so we don't process the same detections twice.
+            chart_types = [normalize_chart_type(chart_type)]
+        elif manual_detections is not None:
+            # Manual detections represent a single, already-confirmed set of
+            # boxes. Running them through more than one chart-type hypothesis
+            # would process the identical detections multiple times and
+            # duplicate every extracted element (see loop below), so we
+            # restrict classification to a single top guess in this case.
+            chart_types = self._classify_chart_types(img, advanced_settings, top_k=1)
+        else:
+            chart_types = self._classify_chart_types(img, advanced_settings, top_k=2)
         self.logger.info(f"Classified as: {chart_types}")
         
         primary_final_result = None
@@ -155,6 +172,15 @@ class ChartAnalysisPipeline(BasePipeline):
                 
             if not detections:
                 self.logger.warning(f"No detections found for {chart_type}.")
+                if ct != chart_types[-1]:
+                    self.logger.info("Falling back to next hypothesis.")
+                    continue
+            elif manual_detections is None:
+                quality = self._evaluate_detection_quality(chart_type, detections)
+                self.logger.info(f"Detection quality for {chart_type}: {quality:.2f}")
+                if quality < 0.50 and ct != chart_types[-1]:
+                    self.logger.warning("Detection quality too low. Falling back to next hypothesis.")
+                    continue
 
             # 3b. Text layout detection via DocLayout-YOLO (optional)
             if 'layout_text_regions' not in merged_detections:
@@ -284,6 +310,9 @@ class ChartAnalysisPipeline(BasePipeline):
 
             if primary_final_result is None:
                 primary_final_result = final_result
+                
+            # If we successfully processed a chart type, break out of the top_k fallback loop
+            break
 
         # End of chart_types loop
         if primary_final_result is None:
@@ -330,14 +359,27 @@ class ChartAnalysisPipeline(BasePipeline):
             dets = run_inference_on_image(model, img, conf_threshold, CLASS_MAP_CLASSIFICATION)
             if dets:
                 types = []
+                top_conf = None
                 # Prefer the best *specific* chart classes. The generic 'chart' class is ambiguous.
                 for det in sorted(dets, key=lambda x: x['conf'], reverse=True):
                     candidate = CLASS_MAP_CLASSIFICATION.get(det['cls'], 'bar')
                     if candidate != 'chart':
+                        if top_conf is None:
+                            top_conf = float(det['conf'])
                         types.append(normalize_chart_type(candidate))
                         if len(types) >= top_k:
                             break
                 if types:
+                    if top_conf is not None and top_conf < 0.5:
+                        # Below-confidence classifications are too unreliable to
+                        # act on automatically; flag as 'unknown' so the GUI can
+                        # surface it distinctly and the user can classify/annotate
+                        # manually instead of getting a silently wrong guess.
+                        self.logger.info(
+                            f"Top chart-type confidence {top_conf:.2f} is below the 50%% "
+                            f"threshold; classifying as 'unknown'."
+                        )
+                        return ['unknown']
                     # ── Heatmap rescue ────────────────────────────────────────────
                     # The classification model occasionally confuses heatmaps with
                     # bar charts because both are rectangular.  ``cell`` detections
@@ -437,6 +479,28 @@ class ChartAnalysisPipeline(BasePipeline):
             self.logger.warning("Heatmap rescue probe failed: %s", exc)
 
         return current_types
+
+    def _evaluate_detection_quality(self, chart_type: str, detections: Dict[str, List[Dict]]) -> float:
+        """
+        Evaluate the overall quality/confidence of the detections for a given chart type.
+        Returns a score from 0.0 to 1.0.
+        """
+        if chart_type == 'heatmap':
+            # Use 'chart' (from heatmap_macro_detect.onnx) instead of 'cell' to avoid
+            # false positives on bar chart grids.
+            element_key = 'chart'
+        else:
+            element_key = get_chart_element_key(chart_type)
+            
+        chart_elements = detections.get(element_key, [])
+        if not chart_elements:
+            return 0.0
+            
+        confs = [float(el.get('conf', 0.0)) for el in chart_elements if 'conf' in el]
+        if not confs:
+            return 0.0
+            
+        return sum(confs) / len(confs)
 
     def _detect_elements(
         self,

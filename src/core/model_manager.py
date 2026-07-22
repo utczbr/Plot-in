@@ -45,6 +45,7 @@ def _ensure_ort():
     try:
         import onnxruntime as ort_mod
         _ort = ort_mod
+        setattr(sys.modules[__name__], 'ort', _ort)
         return _ort
     except (ImportError, OSError) as exc:
         # Build a diagnostic message

@@ -15,7 +15,6 @@ sys.modules.setdefault('sklearn.ensemble', MagicMock())
 sys.modules.setdefault('sklearn.preprocessing', MagicMock())
 
 from handlers.base_handler import CartesianExtractionHandler
-from handlers.legacy import BaseChartHandler
 from handlers.bar_handler import BarHandler
 from handlers.line_handler import LineHandler
 from handlers.scatter_handler import ScatterHandler
@@ -38,10 +37,6 @@ class TestHandlerMigration(unittest.TestCase):
         handlers = [BarHandler, LineHandler, ScatterHandler, BoxHandler, HistogramHandler]
         for handler_cls in handlers:
             self.assertTrue(issubclass(handler_cls, CartesianExtractionHandler))
-            self.assertNotIn(BaseChartHandler, handler_cls.__mro__)
-
-    def test_legacy_base_is_compatibility_shim(self):
-        self.assertTrue(issubclass(BaseChartHandler, CartesianExtractionHandler))
 
     @patch('extractors.bar_extractor.BarExtractor.extract', return_value={'bars': [{'value': 1}]})
     def test_bar_extract_values_accepts_orientation_enum(self, mock_extract):

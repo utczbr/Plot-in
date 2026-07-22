@@ -16,6 +16,8 @@ def _touch(path: Path):
 
 
 def _patch_model_config(monkeypatch):
+    from core.model_manager import _ensure_ort
+    _ensure_ort()
     monkeypatch.setattr(
         "core.model_manager.MODELS_CONFIG",
         SimpleNamespace(

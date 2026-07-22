@@ -1525,6 +1525,81 @@ class DetectionCanvasView(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    def _handle_view_press(self, event) -> bool:
+        scene_pos = self.mapToScene(event.position().toPoint())
+        for item in self.scene().items(scene_pos):
+            if isinstance(item, EditableRectItem) and item.isVisible():
+                bbox = item.detection.get("xyxy")
+                if bbox:
+                    self._det_scene.highlight_item_by_bbox(bbox, item.class_name)
+                    self.bbox_clicked.emit(item.class_name, list(bbox))
+                    event.accept()
+                    return True
+        self._det_scene.clear_highlight()
+        return False
+
+    def _handle_create_box_press(self, event) -> bool:
+        self._rubber_band_origin = event.position().toPoint()
+        if not self._rubber_band:
+            self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+        self._rubber_band.setGeometry(QRect(self._rubber_band_origin, QSize(0, 0)))
+        self._rubber_band.show()
+        event.accept()
+        return True
+
+    def _handle_edit_keypoints_press(self, event) -> bool:
+        scene_pos = self.mapToScene(event.position().toPoint())
+        hit_keypoint = any(
+            isinstance(item, EditablePointItem)
+            for item in self.scene().items(scene_pos)
+        )
+        if not hit_keypoint:
+            self._det_scene.clearSelection()
+            if hasattr(self._det_scene, "clear_selected_slice_group"):
+                self._det_scene.clear_selected_slice_group()
+            event.accept()
+            return True
+        return False
+
+    def _handle_create_keypoint_press(self, event) -> bool:
+        scene_pos = self.mapToScene(event.position().toPoint())
+        logger.debug("CREATE_KEYPOINT click at=%s", scene_pos)
+
+        target_group = None
+        for item in self._det_scene._rect_items:
+            if not isinstance(item, PieSliceGroup) or not item.isVisible():
+                continue
+            xyxy = item.detection.get("xyxy")
+            if xyxy and len(xyxy) == 4:
+                x1, y1, x2, y2 = xyxy
+                hit_rect = QRectF(x1, y1, x2 - x1, y2 - y1)
+            else:
+                hit_rect = item.sceneBoundingRect()
+            if hit_rect.contains(scene_pos):
+                target_group = item
+                break
+
+        if target_group is not None:
+            if target_group.is_complete():
+                self.status_message.emit("Slice already has 5 keypoints.", 4000)
+                event.accept()
+                return True
+            next_idx = target_group.next_keypoint_index()
+            if next_idx is not None:
+                local_pos = target_group.mapFromScene(scene_pos)
+                pt = EditablePointItem(local_pos.x(), local_pos.y(), next_idx, target_group)
+                pt.set_editor_mode(EditorMode.EDIT_KEYPOINTS)
+                target_group.point_items.append(pt)
+                target_group.refresh_keypoint_geometry()
+                target_group.apply_visual_state()
+
+                scene = self.scene()
+                if hasattr(scene, 'keypoint_created'):
+                    scene.keypoint_created.emit(target_group, pt)
+                event.accept()
+                return True
+        return False
+
     def keyPressEvent(self, event) -> None:
         """Delete key removes selected items in EDIT_BOXES mode.
            Ctrl+Z / Ctrl+Y trigger undo/redo via the scene signal.
@@ -1575,87 +1650,17 @@ class DetectionCanvasView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.LeftButton:
             if self._mode == EditorMode.VIEW:
-                scene_pos = self.mapToScene(event.position().toPoint())
-                for item in self.scene().items(scene_pos):
-                    if isinstance(item, EditableRectItem) and item.isVisible():
-                        bbox = item.detection.get("xyxy")
-                        if bbox:
-                            self._det_scene.highlight_item_by_bbox(bbox, item.class_name)
-                            self.bbox_clicked.emit(item.class_name, list(bbox))
-                            event.accept()
-                            return
-                self._det_scene.clear_highlight()
-            
+                if self._handle_view_press(event):
+                    return
             elif self._mode == EditorMode.CREATE_BOX:
-                self._rubber_band_origin = event.position().toPoint()
-                if not self._rubber_band:
-                    self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
-                self._rubber_band.setGeometry(QRect(self._rubber_band_origin, QSize(0, 0)))
-                self._rubber_band.show()
-                event.accept()
-                return
+                if self._handle_create_box_press(event):
+                    return
             elif self._mode == EditorMode.EDIT_KEYPOINTS:
-                scene_pos = self.mapToScene(event.position().toPoint())
-                hit_keypoint = any(
-                    isinstance(item, EditablePointItem)
-                    for item in self.scene().items(scene_pos)
-                )
-                if not hit_keypoint:
-                    self._det_scene.clearSelection()
-                    if hasattr(self._det_scene, "clear_selected_slice_group"):
-                        self._det_scene.clear_selected_slice_group()
-                    event.accept()
+                if self._handle_edit_keypoints_press(event):
                     return
             elif self._mode == EditorMode.CREATE_KEYPOINT:
-                scene_pos = self.mapToScene(event.position().toPoint())
-                logger.debug("CREATE_KEYPOINT click at=%s", scene_pos)
-
-                # Hit-test against the detection's xyxy bbox (the full slice area),
-                # rather than the group's boundingRect() (the tiny union of 8px dots).
-                # This allows clicking anywhere on the pie slice to create a keypoint.
-                target_group = None
-                for item in self._det_scene._rect_items:
-                    if not isinstance(item, PieSliceGroup) or not item.isVisible():
-                        continue
-                    # Primary: use the detection xyxy bbox
-                    xyxy = item.detection.get("xyxy")
-                    if xyxy and len(xyxy) == 4:
-                        x1, y1, x2, y2 = xyxy
-                        hit_rect = QRectF(x1, y1, x2 - x1, y2 - y1)
-                    else:
-                        # Fallback: use the scene bounding rect (union of children)
-                        hit_rect = item.sceneBoundingRect()
-                    if hit_rect.contains(scene_pos):
-                        target_group = item
-                        break
-
-                if target_group is not None:
-                    if target_group.is_complete():
-                        self.status_message.emit("Slice already has 5 keypoints.", 4000)
-                        event.accept()
-                        return
-                    next_idx = target_group.next_keypoint_index()
-                    if next_idx is not None:
-                        local_pos = target_group.mapFromScene(scene_pos)
-                        pt = EditablePointItem(local_pos.x(), local_pos.y(), next_idx, target_group)
-                        # New points should be in EDIT_KEYPOINTS mode so they are
-                        # immediately movable after being placed.
-                        pt.set_editor_mode(EditorMode.EDIT_KEYPOINTS)
-                        target_group.point_items.append(pt)
-                        target_group.refresh_keypoint_geometry()
-                        target_group.apply_visual_state()
-
-                        scene = self.scene()
-                        if hasattr(scene, 'keypoint_created'):
-                            scene.keypoint_created.emit(target_group, pt)
-                    else:
-                        logger.debug("CREATE_KEYPOINT: no available keypoint slots")
-                        self.status_message.emit("Slice already has 5 keypoints.", 4000)
-                else:
-                    logger.debug("CREATE_KEYPOINT: no target_group hit")
-                    self.status_message.emit("Click inside a slice to add a keypoint.", 4000)
-                event.accept()
-                return
+                if self._handle_create_keypoint_press(event):
+                    return
             elif self._mode == EditorMode.CREATE_SLICE:
                 scene_pos = self.mapToScene(event.position().toPoint())
                 logger.debug("CREATE_SLICE click at=%s", scene_pos)

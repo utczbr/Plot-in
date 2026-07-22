@@ -23,18 +23,10 @@ repos:
     rev: 6.3.0
     hooks:
       - id: pydocstyle
-        args: 
+        args:
           - --convention=google
           - --add-ignore=D100,D104  # Allow missing module/package docstrings
         files: ^src/
-
-  - repo: local
-    hooks:
-      - id: check-docstring-adrs
-        name: Verify ADR References in Docstrings
-        entry: python scripts/check_docstring_adrs.py
-        language: python
-        files: \.py$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.7.1

@@ -64,12 +64,16 @@ class HybridStrategy(PipelineStrategy):
         diagnostics = getattr(std_result, 'diagnostics', {}) or {}
         r2 = None
         cal_quality_info = diagnostics.get('calibration_quality')
-        if isinstance(cal_quality_info, dict):
-            r2 = cal_quality_info.get('r_squared')
-        elif isinstance(cal_quality_info, (int, float)):
-            r2 = cal_quality_info
-
-        cal_quality = derive_calibration_quality(r2)
+        if isinstance(cal_quality_info, str):
+            cal_quality = cal_quality_info
+        else:
+            if isinstance(cal_quality_info, dict):
+                r2 = cal_quality_info.get('r_squared')
+            elif isinstance(cal_quality_info, (int, float)):
+                r2 = cal_quality_info
+            elif 'worst_r2' in diagnostics:
+                r2 = diagnostics.get('worst_r2')
+            cal_quality = derive_calibration_quality(r2)
         diagnostics['strategy_id'] = self.STRATEGY_ID
         diagnostics['standard_calibration_quality'] = cal_quality
 

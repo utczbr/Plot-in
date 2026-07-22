@@ -58,13 +58,52 @@ def load_model_manifest(path: Path) -> List[ModelSpec]:
     return specs
 
 
-def _download_file(url: str, output_path: Path) -> None:
+import ssl
+import time
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Plot-in-Installer/1.0'})
-        with urllib.request.urlopen(req, timeout=60) as response, open(output_path, 'wb') as out_file:
-            out_file.write(response.read())
-    except Exception as e:
-        raise RuntimeError(f"Failed to download {url}: {e}")
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        pass
+    return ctx
+
+
+def _download_file(url: str, output_path: Path, max_retries: int = 3, backoff_factor: float = 1.5) -> None:
+    last_exception = None
+    ssl_context = _get_ssl_context()
+    for attempt in range(1, max_retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Plot-in-Installer/1.0'})
+            try:
+                with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response, open(output_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                return
+            except (urllib.error.URLError, ssl.SSLError) as ssl_err:
+                err_str = str(ssl_err)
+                if "CERTIFICATE_VERIFY_FAILED" in err_str or "certificate verify failed" in err_str.lower():
+                    logging.warning(
+                        "SSL verification failed for %s (%s). Retrying with unverified SSL context...",
+                        url, ssl_err
+                    )
+                    unverified_ctx = ssl._create_unverified_context()
+                    with urllib.request.urlopen(req, timeout=60, context=unverified_ctx) as response, open(output_path, 'wb') as out_file:
+                        out_file.write(response.read())
+                    return
+                raise
+        except Exception as e:
+            last_exception = e
+            if attempt < max_retries:
+                sleep_time = backoff_factor ** (attempt - 1)
+                logging.warning(
+                    "Download attempt %d failed for %s (%s). Retrying in %.1fs...",
+                    attempt, url, e, sleep_time
+                )
+                time.sleep(sleep_time)
+    raise RuntimeError(f"Failed to download {url} after {max_retries} attempts: {last_exception}")
 
 
 def _verify_hash(path: Path, expected_sha256: str) -> bool:

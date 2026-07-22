@@ -1031,11 +1031,40 @@ class ChartAnalysisPipeline(BasePipeline):
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(sanitize_for_json(result), f, indent=2, ensure_ascii=False)
             
-        # Export edited detections to a separate file if manually corrected
-        if result.get('review_status') == 'reviewed':
+        # Export edited detections to a separate file if manually corrected or reviewed
+        if result.get('review_status') in ('reviewed', 'corrected'):
             edited_path = output_dir / f"{stem}_edited_detections.json"
             with open(edited_path, 'w', encoding='utf-8') as f:
                 json.dump(sanitize_for_json(result.get('detections', {})), f, indent=2, ensure_ascii=False)
+
+        # Export protocol corrections sidecar if protocol edits exist
+        protocol_rows = result.get('protocol_rows', [])
+        has_corrections = any(
+            isinstance(r, dict) and (r.get('review_status') == 'corrected' or r.get('_original') is not None)
+            for r in protocol_rows
+        )
+        if has_corrections or result.get('review_status') == 'corrected':
+            corrections_path = output_dir / f"{stem}_protocol_corrections.json"
+            corrections_payload = {
+                "schema_version": "1.0",
+                "image_file": str(result.get("image_file", "")),
+                "chart_type": str(result.get("chart_type", "")),
+                "review_status": result.get("review_status", "corrected"),
+                "rows": [
+                    {
+                        "row_index": idx,
+                        "field_corrections": {
+                            k: r.get(k) for k in r.keys() if not k.startswith('_')
+                        },
+                        "original": r.get("_original"),
+                        "review_status": r.get("review_status", "uncorrected")
+                    }
+                    for idx, r in enumerate(protocol_rows)
+                    if isinstance(r, dict) and (r.get("review_status") == "corrected" or r.get("_original") is not None)
+                ]
+            }
+            with open(corrections_path, 'w', encoding='utf-8') as f:
+                json.dump(sanitize_for_json(corrections_payload), f, indent=2, ensure_ascii=False)
             
         # Save Annotated Image
         if annotated:

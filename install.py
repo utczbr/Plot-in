@@ -44,7 +44,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--purpose", choices=["user", "developer"], default="user")
     parser.add_argument("--install-scope", choices=["local", "user", "global"], default="local")
     parser.add_argument("--interface-mode", choices=["gui", "cli"], default="gui")
-    parser.add_argument("--ocr-backend", choices=["EasyOCR", "Paddle"], default="EasyOCR")
+    parser.add_argument("--ocr-backend", choices=["EasyOCR", "Paddle"], default="Paddle")
     parser.add_argument("--ocr-languages", default="en,pt", help="Comma-separated language codes")
     parser.add_argument("--predownload-ocr-models", action="store_true")
     parser.add_argument("--include-test-tools", action="store_true")
@@ -210,7 +210,7 @@ def _try_manifest_download(models_dir: Path) -> bool:
         logging.error("Failed to load model manifest: %s", exc)
         return False
 
-    print("  Downloading models individually from Google Drive (manifest fallback)...")
+    print("  Downloading models individually via HTTPS (manifest fallback)...")
     summary = verify_or_download_models(
         InstallOptions(),
         specs,

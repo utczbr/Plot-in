@@ -332,12 +332,12 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
                     warnings.append(f"{axis_id} calibration quality low: R²={r2:.3f}")
 
             # Derive calibration_quality for router / downstream consumers.
-            if worst_r2 is None or worst_r2 < 0.15 or low_calibration:
-                calibration_quality = "uncalibrated"
-            elif worst_r2 < self.CRITICAL_R2:
+            if worst_r2 is not None:
+                diagnostics["worst_r2"] = worst_r2
+            from calibration.conformal import derive_calibration_quality
+            calibration_quality = derive_calibration_quality(worst_r2)
+            if low_calibration and calibration_quality == "high":
                 calibration_quality = "approximate"
-            else:
-                calibration_quality = "high"
             diagnostics["calibration_quality"] = calibration_quality
         except Exception as exc:
             errors.append(f"Calibration failed: {exc}")
@@ -570,7 +570,13 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
     def _attach_cp_intervals(self, elements: List[Dict]) -> List[Dict]:
         """§2.4: Attach Conformal Prediction uncertainty intervals."""
         if self._conformal_predictor is None:
-            self._conformal_predictor = ConformalPredictor(Path("models/cp_quantiles.json"))
+            models_root = getattr(self, "models_dir", None) or Path("src/models")
+            if isinstance(models_root, str):
+                models_root = Path(models_root)
+            cp_path = models_root / "cp_quantiles.json"
+            if not cp_path.exists():
+                cp_path = models_root / "conformal_quantiles.json"
+            self._conformal_predictor = ConformalPredictor(cp_path)
             
         cp = self._conformal_predictor
         if not cp.loaded:

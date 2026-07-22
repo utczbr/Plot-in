@@ -1,10 +1,5 @@
 """
-Base handler with backward compatibility for existing handlers and new hierarchical architecture.
-
-This module now serves as a compatibility adapter, re-exporting symbols from:
-- handlers.types
-- handlers.base
-- handlers.legacy
+Base handler pass-through module re-exporting symbols from handlers.types and handlers.base.
 """
 
 from __future__ import annotations
@@ -17,17 +12,14 @@ from handlers.types import (
     HandlerContext,
 )
 
-# Re-export New Architecture
+# Re-export base classes
 from handlers.base import (
     BaseHandler,
     CartesianChartHandler,
     CartesianExtractionHandler,
     GridChartHandler,
-    PolarChartHandler
+    PolarChartHandler,
 )
-
-# Re-export Legacy Architecture
-from handlers.legacy import BaseChartHandler
 
 __all__ = [
     'ChartCoordinateSystem',
@@ -39,5 +31,4 @@ __all__ = [
     'CartesianExtractionHandler',
     'GridChartHandler',
     'PolarChartHandler',
-    'BaseChartHandler'
 ]

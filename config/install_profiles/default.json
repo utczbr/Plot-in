@@ -6,14 +6,14 @@
   "interface_mode": "gui",
   "runtime": {
     "models_dir": "src/models",
-    "ocr_backend": "EasyOCR",
+    "ocr_backend": "Paddle",
     "ocr_languages": [
       "en",
       "pt"
     ]
   },
   "advanced_settings": {
-    "ocr_engine": "EasyOCR",
+    "ocr_engine": "Paddle",
     "ocr_accuracy": "Precise",
     "pipeline_mode": "standard",
     "spatial_method": "LYLLA",

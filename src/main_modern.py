@@ -1136,7 +1136,7 @@ class ModernChartAnalysisApp(QMainWindow):
     
     def on_settings_changed(self, new_settings):
         # Check if OCR settings that require re-initialization have changed
-        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        default_ocr = 'Paddle'
         old_ocr_engine = self.advanced_settings.get('ocr_engine', default_ocr) if self.advanced_settings else default_ocr
         new_ocr_engine = new_settings.get('ocr_engine', default_ocr)
         old_ocr_settings = self.advanced_settings.get('ocr_settings', {}) if self.advanced_settings else {}
@@ -1157,7 +1157,7 @@ class ModernChartAnalysisApp(QMainWindow):
 
     def _configure_ocr_startup_state(self, settings):
         """Set OCR readiness state without forcing EasyOCR model preload."""
-        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        default_ocr = 'Paddle'
         ocr_engine_name = (settings or {}).get('ocr_engine', default_ocr)
         if ocr_engine_name != 'EasyOCR':
             self.ocr_ready = True
@@ -1174,17 +1174,7 @@ class ModernChartAnalysisApp(QMainWindow):
         # Lazy-load EasyOCR only when user runs analysis.
         self.ocr_ready = False
         self.run_batch_btn.setEnabled(True)
-        download_enabled = (settings or {}).get("ocr_settings", {}).get(
-            "easyocr_download_enabled",
-            sys.platform != "darwin",
-        )
-        if download_enabled:
-            self.update_status("ℹ️ EasyOCR selected. Model will load on first analysis run.")
-        else:
-            self.update_status(
-                "ℹ️ EasyOCR selected (download disabled). "
-                "If weights are missing, switch to Paddle or pre-download EasyOCR models."
-            )
+        self.update_status("ℹ️ EasyOCR selected. Model will load on first analysis run.")
 
     def _start_ocr_loading(self, settings):
         """Start async loading of OCR engine."""
@@ -2676,7 +2666,7 @@ Click to configure advanced options."""
         required = [Path(MODELS_CONFIG.classification)]
         required.extend(Path(model_name) for model_name in MODELS_CONFIG.detection.values())
 
-        ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "EasyOCR")
+        ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "Paddle")
         if ocr_engine in {"Paddle", "Paddle_docs"}:
             required.extend([
                 Path("OCR/PP-OCRv5_server_det.onnx"),
@@ -3533,153 +3523,8 @@ Click to configure advanced options."""
             bar_label_texts = set(assigned_bar_labels.get('texts', []))
             bar_label_bboxes = set(tuple(bbox) for bbox in assigned_bar_labels.get('bboxes', []))
 
-            section_records: Dict[str, List[Tuple[Dict[str, Any], str]]] = {
-                "chart_title": [],
-                "axis_title": [],
-                "scale_label": [],
-                "tick_label": [],
-                "legend": [],
-                "data_label": [],
-                "color_bar_label": [],
-                "color_bar_title": [],
-                "other": [],
-                "layout_text": [],
-            }
-
-            # Dynamic section renaming based on chart type
-            default_titles = {
-                "chart_title": "Chart Title",
-                "axis_title": "Axis Titles",
-                "scale_label": "Scale Labels",
-                "tick_label": "Tick Labels",
-                "legend": "Legend",
-                "data_label": "Data Labels",
-                "color_bar_label": "Color Bar Labels",
-                "color_bar_title": "Color Bar Titles",
-                "other": "Other Text",
-                "layout_text": "Layout Text (DocLayout)"
-            }
-            for sec_key, sec_title in default_titles.items():
-                if sec_key in self.ocr_section_widgets:
-                    self.ocr_section_widgets[sec_key]["group"].setTitle(sec_title)
-
-            if chart_type == "heatmap":
-                if "scale_label" in self.ocr_section_widgets:
-                    self.ocr_section_widgets["scale_label"]["group"].setTitle("Row Labels")
-                if "tick_label" in self.ocr_section_widgets:
-                    self.ocr_section_widgets["tick_label"]["group"].setTitle("Column / Tick Labels")
-            elif chart_type == "pie":
-                if "legend" in self.ocr_section_widgets:
-                    self.ocr_section_widgets["legend"]["group"].setTitle("Slice Labels")
-
-            def _extend_section(section_key: str, source_class: str, items: Any):
-                if isinstance(items, dict):
-                    items = [items]
-                if not isinstance(items, list):
-                    return
-                for item in items:
-                    if isinstance(item, dict):
-                        section_records[section_key].append((item, source_class))
-
-            # Direct detector classes.
-            direct_mapping = {
-                "chart_title": "chart_title",
-                "axis_title": "axis_title",
-                "legend": "legend",
-                "data_label": "data_label",
-                "color_bar_label": "color_bar_label",
-                "color_bar_title": "color_bar_title",
-                "other": "other",
-            }
-            for detection_key, section_key in direct_mapping.items():
-                _extend_section(section_key, detection_key, detections.get(detection_key, []))
-
-            # Prefer classifier outputs for scale/tick labels when available.
-            label_classification = metadata.get("label_classification", {})
-            if isinstance(label_classification, dict):
-                _extend_section(
-                    "scale_label",
-                    "axis_labels",
-                    label_classification.get("scale_labels", label_classification.get("scale_label", [])),
-                )
-                _extend_section(
-                    "tick_label",
-                    "axis_labels",
-                    label_classification.get("tick_labels", label_classification.get("tick_label", [])),
-                )
-                _extend_section(
-                    "axis_title",
-                    "axis_title",
-                    label_classification.get("axis_titles", label_classification.get("axis_title", [])),
-                )
-
-            has_classified_scale_tick = bool(section_records["scale_label"] or section_records["tick_label"])
-
-            # Fallback: split raw axis_labels into numeric (scale) and non-numeric (tick)
-            # only when classifier outputs are unavailable.
-            raw_axis_labels = detections.get("axis_labels", [])
-            if isinstance(raw_axis_labels, list) and not has_classified_scale_tick:
-                for item in raw_axis_labels:
-                    if not isinstance(item, dict):
-                        continue
-                    text = str(item.get("text", "")).strip()
-                    cleaned_value = item.get("cleaned_value")
-
-                    looks_numeric = cleaned_value is not None
-                    if not looks_numeric and text:
-                        candidate = (
-                            text.replace(",", ".")
-                            .replace("%", "")
-                            .replace("$", "")
-                            .replace("€", "")
-                            .strip()
-                        )
-                        try:
-                            float(candidate)
-                            looks_numeric = True
-                        except ValueError:
-                            looks_numeric = False
-
-                    target_section = "scale_label" if looks_numeric else "tick_label"
-                    _extend_section(target_section, "axis_labels", [item])
-
-            # Fallback: use extracted element tick labels for bar-like and box charts.
-            if not section_records["tick_label"] and chart_type in {"bar", "histogram", "box"}:
-                element_key = "bars" if chart_type != "box" else "elements"
-                for element in self.current_analysis_result.get(element_key, []):
-                    if isinstance(element, dict):
-                        tick_label = element.get("tick_label")
-                        if isinstance(tick_label, dict):
-                            _extend_section("tick_label", "tick_label", [tick_label])
-
-            # Pie charts: extract legend labels from handler elements
-            if chart_type == "pie":
-                for element in self.current_analysis_result.get("elements", []):
-                    if isinstance(element, dict):
-                        label = element.get("label")
-                        if label and label != "Unknown":
-                            synthetic = {"text": label, "xyxy": element.get("bbox", [])}
-                            _extend_section("legend", "pie_legend", [synthetic])
-
-            # Heatmap: extract unique row/col labels from elements as tick labels
-            if chart_type == "heatmap" and not section_records["tick_label"]:
-                seen_labels = set()
-                for element in self.current_analysis_result.get("elements", []):
-                    if not isinstance(element, dict):
-                        continue
-                    for label_key in ("row_label", "col_label"):
-                        label_text = element.get(label_key, "")
-                        if label_text and label_text not in seen_labels:
-                            seen_labels.add(label_text)
-                            synthetic = {"text": label_text}
-                            _extend_section("tick_label", label_key, [synthetic])
-
-            # DocLayout text regions
-            layout_regions = detections.get("layout_text_regions", [])
-            if isinstance(layout_regions, list):
-                for region in layout_regions:
-                    if isinstance(region, dict) and region.get("text"):
-                        _extend_section("layout_text", region.get("class_name", "text"), [region])
+            from visual.ocr_tab_builder import categorize_ocr_records
+            section_records = categorize_ocr_records(self.current_analysis_result)
 
             widgets_created = 0
             for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "color_bar_label", "color_bar_title", "other", "layout_text"):
@@ -5314,10 +5159,9 @@ Click to configure advanced options."""
             self.vertical_splitter.setSizes(sizes)
 
 
-if __name__ == "__main__":
+def main():
     import sys
     import logging
-    from pathlib import Path
 
     # Configure logging to file
     _state_root = resolve_state_root()
@@ -5411,3 +5255,7 @@ if __name__ == "__main__":
         sys.exit(app.exec())
     except SystemExit:
         window.cleanup_resources()
+
+
+if __name__ == "__main__":
+    main()

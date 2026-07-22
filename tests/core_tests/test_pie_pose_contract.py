@@ -20,9 +20,14 @@ def test_class_map_pie_pose_has_slice_class():
     assert CLASS_MAP_PIE == CLASS_MAP_PIE_POSE
 
 
+import pytest
+
+GENERATOR_PATH = Path(__file__).resolve().parents[2] / "src" / "train" / "gerador_charts" / "generator.py"
+
+
+@pytest.mark.skipif(not GENERATOR_PATH.exists(), reason="gerador_charts generator.py is untracked in git")
 def test_generator_pie_pose_map_is_single_class_contract():
-    generator_path = Path(__file__).resolve().parents[2] / "src" / "train" / "gerador_charts" / "generator.py"
-    content = generator_path.read_text(encoding="utf-8")
+    content = GENERATOR_PATH.read_text(encoding="utf-8")
     match = re.search(r'"CLASS_MAP_PIE_POSE"\s*:\s*{([^}]*)}', content, flags=re.MULTILINE)
     assert match is not None
 
@@ -30,9 +35,9 @@ def test_generator_pie_pose_map_is_single_class_contract():
     assert entries == [("0", "slice_boundary")]
 
 
+@pytest.mark.skipif(not GENERATOR_PATH.exists(), reason="gerador_charts generator.py is untracked in git")
 def test_generator_pie_pose_keypoint_order_contract():
-    generator_path = Path(__file__).resolve().parents[2] / "src" / "train" / "gerador_charts" / "generator.py"
-    content = generator_path.read_text(encoding="utf-8")
+    content = GENERATOR_PATH.read_text(encoding="utf-8")
 
     func_match = re.search(
         r"def extract_pie_pose_annotations_fixed\((?:.|\n)*?return keypoint_annotations",

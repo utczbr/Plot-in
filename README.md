@@ -2,8 +2,8 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Build Status](https://github.com/utcz/Plot-in/actions/workflows/tests.yml/badge.svg)](https://github.com/utcz/Plot-in/actions)
-[![Config Guard](https://github.com/utcz/Plot-in/actions/workflows/config-path-guard.yml/badge.svg)](https://github.com/utcz/Plot-in/actions)
+[![Build Status](https://github.com/utczbr/Plot-in/actions/workflows/tests.yml/badge.svg)](https://github.com/utczbr/Plot-in/actions)
+[![Config Guard](https://github.com/utczbr/Plot-in/actions/workflows/config-path-guard.yml/badge.svg)](https://github.com/utczbr/Plot-in/actions)
 
 > **Automated Chart-to-Data Extraction & Protocol Validation Engine for Scientific Publications**
 

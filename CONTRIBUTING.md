@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Last verified: **February 23, 2026**.
+Last verified: **July 2026**.
 
 ## Goals
 Contributions should preserve runtime stability, protocol output integrity, and documentation accuracy.
@@ -23,6 +23,7 @@ Recommended local checks:
 ```bash
 black src tests
 isort src tests
+PYTHONPATH=src:shared pytest tests/ -v
 ```
 
 ## Runtime Contract Areas (High-Risk)
@@ -34,33 +35,41 @@ If your PR touches any of these, include explicit contract notes in the PR descr
 
 ## Required Test Matrix By Change Type
 
+### Full Suite (All Components)
+```bash
+PYTHONPATH=src:shared pytest tests/ -v
+```
+
 ### Input/PDF/ingestion changes
 ```bash
-python3 -m pytest tests/core_tests/test_input_resolver.py
+PYTHONPATH=src:shared pytest tests/core_tests/test_input_resolver.py
 ```
 
 ### Chart routing/handler support changes
 ```bash
-python3 -m pytest tests/core_tests/test_orchestrator_registry.py
-python3 -m pytest tests/handlers_tests/test_area_handler.py
+PYTHONPATH=src:shared pytest tests/core_tests/test_orchestrator_registry.py
+PYTHONPATH=src:shared pytest tests/handlers_tests/test_area_handler.py
 ```
 
-### Protocol row or CSV changes
+### Protocol row, CSV, or sidecar changes
 ```bash
-python3 -m pytest tests/core_tests/test_protocol_row_builder.py
-python3 -m pytest tests/core_tests/test_export_manager_protocol.py
+PYTHONPATH=src:shared pytest tests/core_tests/test_protocol_row_builder.py
+PYTHONPATH=src:shared pytest tests/core_tests/test_export_manager_protocol.py
+PYTHONPATH=src:shared pytest tests/pipelines_tests/test_protocol_corrections_sidecar.py
 ```
 
 ### Validation metric or gate changes
 ```bash
-python3 -m pytest tests/evaluation_tests/test_protocol_validation.py
-python3 -m pytest tests/evaluation_tests/test_accuracy_comparator_metrics.py
+PYTHONPATH=src:shared pytest tests/evaluation_tests/test_protocol_validation.py
+PYTHONPATH=src:shared pytest tests/evaluation_tests/test_accuracy_comparator_metrics.py
 ```
 
 ## CI Awareness
 Current workflows:
-- `.github/workflows/evaluation-tests.yml`
-- `.github/workflows/installer-build.yml`
+- `.github/workflows/tests.yml` (Full Pytest suite execution)
+- `.github/workflows/config-path-guard.yml` (Personal path leak prevention guard)
+- `.github/workflows/evaluation-tests.yml` (Protocol validation metrics)
+- `.github/workflows/installer-build.yml` (Cross-platform installer compilation)
 
 If your change introduces a new mandatory quality gate, update workflow coverage in the same PR.
 

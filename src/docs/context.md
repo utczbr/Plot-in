@@ -1,15 +1,16 @@
 # Context - Chart Analysis Runtime Documentation (Verified)
 
-Last verified: **April 5, 2026**.
+Last verified: **July 2026**.
 
 ## Purpose
 This document is the runtime truth for the chart-analysis pipeline. It is scoped to implemented behavior and tested contracts, not proposal content.
 
 ## Source Of Truth
 - Runtime entry points:
-  - `src/analysis.py`
+  - `src/analysis.py` (`plotin` CLI)
   - `src/core/analysis_manager.py`
-  - `src/main_modern.py`
+  - `src/main_modern.py` (`plotin-gui`)
+  - `pyproject.toml` (PEP 517 package configuration & console scripts)
 - Pipeline/orchestration:
   - `src/pipelines/chart_pipeline.py`
   - `src/ChartAnalysisOrchestrator.py`
@@ -117,7 +118,7 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
   - `axis_labels` detections
   - Optional doclayout detections (`layout_text_regions`)
 - Core stage:
-  - Platform-aware OCR engine selection dictates engine (PaddleOCR is the default strictly on macOS; EasyOCR on Linux/Windows).
+  - PaddleOCR is configured as the active default OCR engine across all operating systems (`install.py`, `main_modern.py`, `advanced_settings.json`). EasyOCR is available as an optional backend.
   - `_process_ocr` merges axis labels with non-duplicate doclayout text regions.
   - Uses `TextLayoutService.merge_with_axis_labels` with IoU dedupe.
 - Outputs:
@@ -252,11 +253,11 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
 
 ## Confirmed Open Gaps (Documentation Must Not Overstate)
 
-### Infrastructure (Unchanged)
-1. Packaging metadata still missing (`pyproject.toml`/`setup.py` absent at repo root).
-2. Installer manifest still points to Google Drive URLs (`installer/model_manifest.json`), not HuggingFace.
-3. Validation harness includes CCC/Kappa; ICC/survey pipeline is not implemented.
-4. Protocol-row editing is supported in GUI/runtime payloads, but a canonical persisted corrected-backend artifact remains to be formalized.
+### Infrastructure (Resolved & Active)
+1. PEP 517 packaging metadata complete (`pyproject.toml` at repo root with console scripts `plotin` and `plotin-gui`).
+2. Installer model manifest resolves all ONNX weights from Hugging Face Hub (`huggingface.co`), with automatic download retries and macOS SSL certificate fallback handling (`installer/models.py`).
+3. Protocol-row editing is supported in GUI/runtime payloads, with canonical persisted `{stem}_protocol_corrections.json` sidecar export implemented in `src/pipelines/chart_pipeline.py`.
+4. Validation harness includes CCC/Kappa; ICC/survey pipeline is non-required/future work.
 
 ### Strategy Layer (Structurally Wired, Functionally Inert Beyond Standard)
 5. `src/strategies/` package is wired into `ChartAnalysisPipeline.run()` stage 6 via `StrategyRouter`. Default `pipeline_mode='standard'` routes all extractions through `StandardStrategy` (wrapping `ChartAnalysisOrchestrator`). Other modes (`vlm`, `hybrid`, `chart_to_table`, `auto`) exist as code but are functionally inert today:

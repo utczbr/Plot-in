@@ -1,6 +1,6 @@
 # Chart Analysis System: Runtime Reference
 
-Last verified against repository code and tests: **April 5, 2026**.
+Last verified against repository code and tests: **July 2026**.
 
 ## Audience
 This README is for engineers and agent contributors working on runtime behavior, contracts, and protocol outputs.
@@ -8,15 +8,16 @@ This README is for engineers and agent contributors working on runtime behavior,
 ## Current Snapshot
 - Supported chart types (runtime registry): `bar`, `line`, `scatter`, `box`, `histogram`, `heatmap`, `pie`, `area`
 - Input modes: image file, PDF file, image directory, PDF directory, mixed directory
-- Core flow: `analysis.py` / GUI -> `ChartAnalysisPipeline` -> `ChartAnalysisOrchestrator` -> chart handlers -> extractors
+- Core flow: `analysis.py` (`plotin` CLI) / GUI (`plotin-gui`) -> `ChartAnalysisPipeline` -> `ChartAnalysisOrchestrator` -> chart handlers -> extractors
 - Handler hierarchy: `CartesianExtractionHandler` (bar, line, scatter, box, histogram, area), `GridChartHandler` (heatmap), `PolarChartHandler` (pie)
 - Strategic roadmap: `src/Critic.md` — SOTA transition strategy with prioritized extractor upgrades
 - Protocol flow: pipeline result -> protocol row builder -> protocol CSV export -> protocol validation harness
 
 ## Entrypoints
-- CLI: `src/analysis.py`
-- GUI: `src/main_modern.py`
+- CLI: `src/analysis.py` (console script: `plotin`)
+- GUI: `src/main_modern.py` (console script: `plotin-gui`)
 - GUI batch/single analysis service: `src/core/analysis_manager.py`
+- Package Spec: `pyproject.toml` (PEP 517 build & dependency configuration)
 
 ## Input Resolution And PDF Extraction
 
@@ -56,7 +57,7 @@ This README is for engineers and agent contributors working on runtime behavior,
 | 3. Element detection | chart type + model + class map | runs model with per-type output parser (`bbox`/`pose`) | detections by class key | missing model -> empty detections; histogram fallback chain attempts lower confidence and bar model | `tests/pipelines_tests/test_chart_pipeline.py` |
 | 4. Text layout detection | image + optional doclayout model | optional doclayout text-region detection | `layout_text_regions` | model unavailable or disabled -> empty list | `services/text_layout_service.py` |
 | 5. Orientation | chart elements + chart type | orientation detection service (variance/aspect/spatial fallback) | `Orientation` enum | non-cartesian-like types default vertical in pipeline routing path | `services/orientation_detection_service.py` |
-| 6. OCR | axis labels + doclayout regions | batched OCR (Paddle default on macOS, EasyOCR others); dedupe doclayout overlap with axis labels | text/confidence annotated into detections | OCR exceptions logged; run continues | `chart_pipeline.py`, OCR engine factory |
+| 6. OCR | axis labels + doclayout regions | batched OCR (PaddleOCR default across platforms; EasyOCR optional); dedupe doclayout overlap with axis labels | text/confidence annotated into detections | OCR exceptions logged; run continues | `chart_pipeline.py`, OCR engine factory |
 | 7. Handler orchestration | `HandlerContext` | chart-type handler executes extraction contract | `ExtractionResult` | handler errors return structured error result; pipeline returns `None` on fatal | orchestrator + handler tests |
 | 8. Result formatting/persistence | extraction result + detections | serialize to `PipelineResult`, attach provenance, save JSON/annotation | `*_analysis.json`, optional `*_annotated.png` | annotation write failure logged without stopping result | `chart_pipeline.py` |
 

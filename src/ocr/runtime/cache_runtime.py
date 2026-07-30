@@ -21,19 +21,19 @@ class ZeroCopyHashCache:
         self._cache = OrderedDict()  # hash -> cached_result
         self._lock = threading.RLock()  # Thread-safe operations
     
-    def get_by_hash(self, array: np.ndarray):
+    def get_by_hash(self, array: np.ndarray, context: str = ""):
         """
-        Retrieve cached result by computing hash of array content
+        Retrieve cached result by computing hash of array content + context
         """
-        array_hash = self._compute_hash(array)
+        array_hash = self._compute_hash(array, context)
         with self._lock:
             return self._cache.get(array_hash)
     
-    def put(self, array: np.ndarray, result: Any):
+    def put(self, array: np.ndarray, result: Any, context: str = ""):
         """
-        Store result in cache using hash of array content as key
+        Store result in cache using hash of array content + context as key
         """
-        array_hash = self._compute_hash(array)
+        array_hash = self._compute_hash(array, context)
         with self._lock:
             # If already exists, move to end (most recent)
             if array_hash in self._cache:
@@ -44,14 +44,13 @@ class ZeroCopyHashCache:
             if len(self._cache) > self.max_size:
                 self._cache.popitem(last=False)
     
-    def _compute_hash(self, array: np.ndarray) -> str:
+    def _compute_hash(self, array: np.ndarray, context: str = "") -> str:
         """
-        Compute a hash of the array content using SHA-256
-        This is a zero-copy operation since we're hashing the buffer directly
+        Compute a hash of the array content and context using SHA-256
         """
-        # Convert numpy array to bytes for hashing
-        # This preserves the exact content for comparison purposes
         array_bytes = array.tobytes()
+        if context:
+            array_bytes += context.encode('utf-8')
         return hashlib.sha256(array_bytes).hexdigest()
     
     def clear(self):
@@ -92,7 +91,7 @@ class HashDeduplicator:
         hash_to_original_indices = {}
         
         for idx, (crop, context) in enumerate(crops_with_context):
-            crop_hash = HashDeduplicator._compute_content_hash(crop)
+            crop_hash = HashDeduplicator._compute_content_hash(crop, context)
             
             if crop_hash not in seen_hashes:
                 # First occurrence of this content
@@ -107,11 +106,13 @@ class HashDeduplicator:
         return unique_crops, hash_to_original_indices
     
     @staticmethod
-    def _compute_content_hash(array: np.ndarray) -> str:
+    def _compute_content_hash(array: np.ndarray, context: str = "") -> str:
         """
         Compute content hash for deduplication purposes
         """
         array_bytes = array.tobytes()
+        if context:
+            array_bytes += context.encode('utf-8')
         return hashlib.sha256(array_bytes).hexdigest()
 
 

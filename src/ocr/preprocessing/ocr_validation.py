@@ -27,7 +27,7 @@ class OCRValidator:
         self._correction_trans = str.maketrans(self.char_corrections)
         
         # Pre-compiled regex patterns
-        self.numeric_pattern = re.compile(r'^-?\\d+\\.?\\d*[eE]?[-+]?\\d*%?$')
+        self.numeric_pattern = re.compile(r'^-?\d+\.?\d*[eE]?[-+]?\d*%?$')
 
     def validate_numeric(
         self,
@@ -46,7 +46,7 @@ class OCRValidator:
         original_text = text
         
         # Remove common junk - single pass
-        text = text.replace(',', '').replace(' ', '').replace('\\n', '')
+        text = text.replace(',', '').replace(' ', '').replace('\n', '')
         
         # Fast character correction using translation table
         corrected = text.translate(self._correction_trans)
@@ -86,7 +86,7 @@ class OCRValidator:
     def _fuzzy_parse(self, text: str) -> Optional[float]:
         """Fuzzy parsing by extracting digits - optimized regex"""
         # Extract digit sequences
-        digit_parts = re.findall(r'\\d+', text)
+        digit_parts = re.findall(r'\d+', text)
         if not digit_parts:
             return None
         

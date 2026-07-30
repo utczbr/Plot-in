@@ -6,34 +6,34 @@ to human-readable class names for different chart types.
 """
 from typing import Dict
 
-# Chart type classification model
+# Chart type classification model (YOLO26s-cls)
 CLASS_MAP_CLASSIFICATION: Dict[int, str] = {
-    0: 'chart', 1: 'bar', 2: 'line', 3: 'scatter', 4: 'box',
-    5: 'pie', 6: 'area', 7: 'histogram', 8: 'heatmap'
+    0: 'area', 1: 'bar', 2: 'box', 3: 'heatmap',
+    4: 'histogram', 5: 'line', 6: 'pie', 7: 'scatter'
 }
 
 # Bar chart detection model
 CLASS_MAP_BAR: Dict[int, str] = {
-    0: 'chart', 1: 'bar', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'bar', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Box plot detection model
 CLASS_MAP_BOX: Dict[int, str] = {
-    0: 'chart', 1: 'box', 2: 'chart_title', 3: 'significance_marker', 4: 'range_indicator',
-    5: 'legend', 6: 'axis_title', 7: 'median_line', 8: 'axis_labels', 9: 'outlier'
+    0: 'chart', 1: 'box', 2: 'axis_title', 3: 'significance_marker', 4: 'range_indicator',
+    5: 'legend', 6: 'chart_title', 7: 'median_line', 8: 'axis_labels', 9: 'outlier'
 }
 
 # Line chart detection model
 CLASS_MAP_LINE: Dict[int, str] = {
-    0: 'chart', 1: 'data_point', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'data_point', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Scatter chart detection model (same structure as line)
 CLASS_MAP_SCATTER: Dict[int, str] = {
-    0: 'chart', 1: 'data_point', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
-    5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
+    0: 'chart', 1: 'data_point', 2: 'axis_title', 3: 'significance_marker', 4: 'error_bar',
+    5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
 # Histogram detection model

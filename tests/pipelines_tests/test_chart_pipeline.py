@@ -40,14 +40,11 @@ class TestChartPipeline(unittest.TestCase):
         # Setup Mocks
         mock_imread.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
         
-        # Mock Classification
+        # Mock Classification (bar at 0.89 conf skips heatmap rescue — above 0.70 threshold)
         mock_inference.side_effect = [
             [
-                {'cls': 0, 'conf': 0.9},  # generic "chart"
                 {'cls': 1, 'conf': 0.89}, # specific "bar"
             ],
-            [], # Heatmap rescue macro
-            [], # Heatmap rescue lattice
             [{'cls': 0, 'conf': 0.9, 'xyxy': [10, 10, 50, 50]}] # Detection: Bar
         ]
         
@@ -80,8 +77,7 @@ class TestChartPipeline(unittest.TestCase):
         mock_model = MagicMock()
         self.mock_models.get_model.return_value = mock_model
         mock_inference.return_value = [
-            {'cls': 0, 'conf': 0.98},  # generic "chart"
-            {'cls': 7, 'conf': 0.97},  # histogram
+            {'cls': 4, 'conf': 0.97},  # histogram
         ]
 
         chart_type = self.pipeline._classify_chart_types(np.zeros((10, 10, 3), dtype=np.uint8))[0]

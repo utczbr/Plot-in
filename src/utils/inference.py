@@ -225,10 +225,45 @@ def _postprocess_pose_output(
     return detections
 
 
+def _postprocess_classification_output(
+    output: np.ndarray,
+    conf_threshold: float,
+    class_map: dict,
+    image_shape: tuple = (0, 0),
+) -> list:
+    """Post-process classification model output (e.g. YOLO26s-cls shape [1, C])."""
+    scores = np.squeeze(output)
+    if scores.ndim != 1:
+        logging.warning("Classification output must flatten to a 1D vector.")
+        return []
+
+    # If scores are raw logits (not in range [0, 1] or don't sum to ~1), apply softmax
+    if np.any(scores < 0) or np.any(scores > 1.0) or not np.isclose(float(np.sum(scores)), 1.0, atol=1e-2):
+        exp_scores = np.exp(scores - np.max(scores))
+        probs = exp_scores / np.sum(exp_scores)
+    else:
+        probs = scores
+
+    h, w = image_shape[:2] if len(image_shape) >= 2 else (0, 0)
+    detections = []
+    for cls_id in range(len(probs)):
+        prob = float(probs[cls_id])
+        if prob >= conf_threshold:
+            detections.append({
+                'cls': int(cls_id),
+                'conf': prob,
+                'xyxy': [0, 0, w, h],
+            })
+    return detections
+
+
 def _infer_model_output_type(output: np.ndarray, class_map: dict, requested: str) -> str:
     """Infer output type when requested='auto'."""
-    if requested in ('bbox', 'pose', 'yolo_nms'):
+    if requested in ('bbox', 'pose', 'yolo_nms', 'classification'):
         return requested
+
+    if output.ndim == 2:
+        return 'classification'
 
     if output.ndim == 3 and output.shape[2] == 6:
         return 'yolo_nms'
@@ -303,7 +338,14 @@ def run_inference(
         outputs = session.run(None, {input_name: input_img})
 
         output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
-        if output_type == 'yolo_nms':
+        if output_type == 'classification':
+            return _postprocess_classification_output(
+                output=outputs[0],
+                conf_threshold=conf_threshold,
+                class_map=class_map,
+                image_shape=img.shape[:2],
+            )
+        elif output_type == 'yolo_nms':
             return _postprocess_yolo_nms_output(
                 output=outputs[0],
                 conf_threshold=conf_threshold,
@@ -350,7 +392,7 @@ def run_inference_on_image(
         input_size: Model input size (width, height)
         nms_threshold: Non-Maximum Suppression threshold. Higher values (e.g., 0.7) 
                        allow more overlapping boxes, useful for grouped elements like box plots.
-        model_output_type: "bbox", "pose", or "auto" detection output parser.
+        model_output_type: "bbox", "pose", "classification", or "auto" detection output parser.
         expected_keypoints: Expected keypoint count for pose models.
     """
     if not 0.0 <= conf_threshold <= 1.0:
@@ -368,7 +410,14 @@ def run_inference_on_image(
         outputs = session.run(None, {input_name: input_img})
 
         output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
-        if output_type == 'yolo_nms':
+        if output_type == 'classification':
+            return _postprocess_classification_output(
+                output=outputs[0],
+                conf_threshold=conf_threshold,
+                class_map=class_map,
+                image_shape=img.shape[:2],
+            )
+        elif output_type == 'yolo_nms':
             return _postprocess_yolo_nms_output(
                 output=outputs[0],
                 conf_threshold=conf_threshold,

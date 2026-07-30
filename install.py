@@ -231,7 +231,7 @@ def _try_manifest_download(models_dir: Path) -> bool:
 
 def _check_and_download_models(models_dir: Path) -> None:
     required_models = [
-        "classification.onnx",
+        "classifier.onnx",
         "detect_bar.onnx",
         "detect_box.onnx",
         "heatmap_macro_detect.onnx",

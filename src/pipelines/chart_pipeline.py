@@ -159,6 +159,32 @@ class ChartAnalysisPipeline(BasePipeline):
         all_bars = []
         merged_detections = {}
 
+        # ── Handle 'unknown' classification early ─────────────────────────
+        # When the classifier confidence is below the threshold, the chart
+        # type is set to 'unknown'.  In that case there is no suitable
+        # detection model to run, so we skip the extraction loop and return
+        # a lightweight result that the GUI can display with a clear
+        # "Unknown — please classify manually" indicator.
+        if chart_types == ['unknown']:
+            self.logger.info(
+                "Chart type is 'unknown' (low classifier confidence). "
+                "Skipping detection / extraction."
+            )
+            return {
+                'image_file': image_path.name,
+                'original_image_path': str(image_path.resolve()),
+                'chart_type': 'unknown',
+                'orientation': 'vertical',
+                'elements': [],
+                'calibration': {},
+                'baselines': [],
+                'metadata': {
+                    'classification_result': 'unknown',
+                    'skip_reason': 'Low classifier confidence',
+                },
+                'detections': {},
+            }
+
         for ct in chart_types:
             chart_type = normalize_chart_type(ct)
             
@@ -338,12 +364,15 @@ class ChartAnalysisPipeline(BasePipeline):
     def _classify_chart_types(self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2) -> List[str]:
         """Determines the types of the chart.
 
-        Primary classification is done by the YOLO classification model.  When
-        'heatmap' is absent from its top-k output we run a lightweight secondary
-        probe with the heatmap detection model: if ≥3 ``cell`` boxes are found
-        with confidence ≥ 0.25 the image is almost certainly a heatmap (bar/
-        histogram/line charts never produce ``cell`` detections) and we prepend
-        'heatmap' as the primary type.
+        Primary classification is done by the YOLO26s-cls classification model
+        (``classifier.onnx``), which outputs softmax probabilities for 8
+        specific chart classes.  When 'heatmap' is absent from its top-k output
+        **and** the top prediction confidence is below 0.70, we run a
+        lightweight secondary probe with the heatmap detection model.
+
+        The rescue probe is skipped at higher confidences because the dedicated
+        classifier does not suffer from the bar/heatmap confusion that the
+        old detection-based model had.
         """
         model = self.models_manager.get_model('classification')
         if not model:
@@ -356,19 +385,24 @@ class ChartAnalysisPipeline(BasePipeline):
                 keys=('classification_confidence',),
                 default=0.25,
             )
-            dets = run_inference_on_image(model, img, conf_threshold, CLASS_MAP_CLASSIFICATION)
+            dets = run_inference_on_image(
+                model,
+                img,
+                conf_threshold,
+                CLASS_MAP_CLASSIFICATION,
+                input_size=(224, 224),
+                model_output_type='classification',
+            )
             if dets:
                 types = []
                 top_conf = None
-                # Prefer the best *specific* chart classes. The generic 'chart' class is ambiguous.
                 for det in sorted(dets, key=lambda x: x['conf'], reverse=True):
                     candidate = CLASS_MAP_CLASSIFICATION.get(det['cls'], 'bar')
-                    if candidate != 'chart':
-                        if top_conf is None:
-                            top_conf = float(det['conf'])
-                        types.append(normalize_chart_type(candidate))
-                        if len(types) >= top_k:
-                            break
+                    if top_conf is None:
+                        top_conf = float(det['conf'])
+                    types.append(normalize_chart_type(candidate))
+                    if len(types) >= top_k:
+                        break
                 if types:
                     if top_conf is not None and top_conf < 0.5:
                         # Below-confidence classifications are too unreliable to
@@ -381,23 +415,25 @@ class ChartAnalysisPipeline(BasePipeline):
                         )
                         return ['unknown']
                     # ── Heatmap rescue ────────────────────────────────────────────
-                    # The classification model occasionally confuses heatmaps with
-                    # bar charts because both are rectangular.  ``cell`` detections
-                    # from the heatmap detection model are a strong discriminant:
-                    # no other chart type produces them.
-                    if 'heatmap' not in types:
+                    # Only run the rescue probe when the classifier is uncertain
+                    # (top_conf < 0.70).  The YOLO26s-cls classifier is a
+                    # dedicated classification model that reliably distinguishes
+                    # heatmaps from bars; at high confidence the rescue probe
+                    # causes false positives (bar charts contain rectangular
+                    # regions that the heatmap lattice model detects as "cells").
+                    if 'heatmap' not in types and (top_conf is not None and top_conf < 0.70):
                         types = self._heatmap_rescue(img, types, advanced_settings)
                     return types
-                self.logger.warning("Classification only produced generic 'chart'; defaulting to 'bar'.")
+                self.logger.warning("Classification produced no results; defaulting to 'bar'.")
         except Exception as e:
             self.logger.error(f"Classification error: {e}")
 
         return ['bar']
 
-    # Minimum number of `cell` detections required to override classification.
-    _HEATMAP_RESCUE_MIN_CELLS: int = 3
-    # Detection confidence threshold used by the rescue probe (kept low so we
-    # do not miss faint cells in low-contrast heatmaps).
+    # Minimum confidence for the heatmap macro model's ``chart`` detection to
+    # trigger a rescue override (when no ``color_bar_region`` is found).
+    _HEATMAP_RESCUE_CHART_CONF: float = 0.50
+    # Detection confidence threshold used by the rescue probe.
     _HEATMAP_RESCUE_CONF: float = 0.40
 
     def _heatmap_rescue(
@@ -406,18 +442,22 @@ class ChartAnalysisPipeline(BasePipeline):
         current_types: List[str],
         advanced_settings: Optional[Dict],
     ) -> List[str]:
-        """Run a cascaded Macro→Lattice heatmap probe.
+        """Run a heatmap probe using the Macro detection model.
 
-        First runs the Macro model to obtain a chart ROI, then runs the
-        Lattice model on the crop to count cell detections.  Falls back
-        to full-image Lattice inference when the Macro model is missing
-        or fails to detect a chart region.
+        The ``heatmap_macro_detect.onnx`` model detects high-level heatmap
+        structures: ``chart`` (the grid region), ``color_bar_region``, and
+        ``legend``.  These are far more discriminating than lattice ``cell``
+        detections, which false-positive on bar chart rectangles.
 
-        Returns *current_types* unchanged when the probe finds fewer than
-        ``_HEATMAP_RESCUE_MIN_CELLS`` cell detections.
+        Override logic:
+        - If a ``color_bar_region`` is detected → override (strong signal;
+          no other chart type has a colour bar).
+        - Else if a ``chart`` region is detected with confidence ≥ 0.50 →
+          override (the macro model is specifically trained on heatmaps).
+        - Otherwise → keep *current_types* unchanged.
         """
-        lattice_model = self.models_manager.get_model('heatmap_lattice')
-        if not lattice_model:
+        macro_model = self.models_manager.get_model('heatmap_macro')
+        if not macro_model:
             return current_types
 
         try:
@@ -434,43 +474,32 @@ class ChartAnalysisPipeline(BasePipeline):
                     except (ValueError, TypeError):
                         pass
 
-            # Phase 1: Try to get a chart ROI from the Macro model
-            chart_roi = None
-            macro_model = self.models_manager.get_model('heatmap_macro')
-            if macro_model:
-                try:
-                    macro_dets = run_inference_on_image(
-                        macro_model, img, conf, CLASS_MAP_HEATMAP_MACRO,
-                        nms_threshold=0.45,
-                    )
-                    for d in macro_dets:
-                        if CLASS_MAP_HEATMAP_MACRO.get(d.get('cls', -1)) == 'chart':
-                            chart_roi = d['xyxy']
-                            break
-                except Exception as exc:
-                    self.logger.debug("Heatmap rescue Macro probe failed: %s", exc)
-
-            # Phase 2: Run Lattice on crop (or full image)
-            if chart_roi is not None:
-                probe_dets = self._run_expert_on_roi(
-                    lattice_model, img, chart_roi,
-                    CLASS_MAP_HEATMAP_LATTICE, conf, 0.45,
-                )
-            else:
-                probe_dets = run_inference_on_image(
-                    lattice_model, img, conf, CLASS_MAP_HEATMAP_LATTICE,
-                    nms_threshold=0.45,
-                )
-
-            cell_count = sum(
-                1 for d in probe_dets
-                if CLASS_MAP_HEATMAP_LATTICE.get(d.get('cls', -1)) == 'cell'
+            macro_dets = run_inference_on_image(
+                macro_model, img, conf, CLASS_MAP_HEATMAP_MACRO,
+                nms_threshold=0.45,
             )
-            if cell_count >= self._HEATMAP_RESCUE_MIN_CELLS:
+
+            has_colorbar = False
+            best_chart_conf = 0.0
+            for d in macro_dets:
+                cls_name = CLASS_MAP_HEATMAP_MACRO.get(d.get('cls', -1))
+                det_conf_val = float(d.get('conf', 0.0))
+                if cls_name == 'color_bar_region':
+                    has_colorbar = True
+                elif cls_name == 'chart' and det_conf_val > best_chart_conf:
+                    best_chart_conf = det_conf_val
+
+            should_rescue = has_colorbar or best_chart_conf >= self._HEATMAP_RESCUE_CHART_CONF
+
+            if should_rescue:
+                reason = (
+                    f"color_bar_region detected"
+                    if has_colorbar
+                    else f"chart region conf={best_chart_conf:.2f}"
+                )
                 self.logger.info(
-                    "Heatmap rescue: found %d cell detections (roi_cropped=%s) "
-                    "— overriding '%s' → 'heatmap'.",
-                    cell_count, chart_roi is not None,
+                    "Heatmap rescue (macro): %s — overriding '%s' → 'heatmap'.",
+                    reason,
                     current_types[0] if current_types else '?',
                 )
                 rescued = ['heatmap'] + [t for t in current_types if t != 'heatmap']
@@ -573,20 +602,35 @@ class ChartAnalysisPipeline(BasePipeline):
                 organized['unknown'].append(det)
 
         def _reclassify_top_boxes(organized: dict, img_width: int) -> dict:
-            """Reclassify top-positioned boxes based on spatial heuristics."""
-            candidates = organized.get('chart_title', []) + organized.get('legend', [])
+            """Reclassify top-positioned title/legend candidates based on spatial heuristics.
+
+            Trained model predictions are preserved unless spatial dimensions
+            strongly indicate a mismatch (e.g., a legend box spanning >85% of
+            image width is a title, or a tall narrow title box on the side is a legend).
+            """
+            titles = organized.get('chart_title', [])
+            legends = organized.get('legend', [])
             new_titles, new_legends = [], []
-            for det in candidates:
+
+            for det in titles:
                 x1, y1, x2, y2 = det['xyxy']
-                box_width = x2 - x1
-                box_height = y2 - y1
-                # Heuristic: legend boxes are taller-relative and narrower than full-width titles
-                if box_width > 0.85 * img_width:
-                    new_titles.append(det)
-                elif box_height > 2.5 * (box_width / max(box_width, 1)) or (y2-y1) > 40:
+                w = x2 - x1
+                h = y2 - y1
+                # If a title box is extremely tall and narrow (e.g. side legend misclassified as title)
+                if h > 3.0 * w and w < 0.2 * img_width:
                     new_legends.append(det)
                 else:
                     new_titles.append(det)
+
+            for det in legends:
+                x1, y1, x2, y2 = det['xyxy']
+                w = x2 - x1
+                # If a legend box spans almost the full width, it is almost certainly a title
+                if w > 0.85 * img_width:
+                    new_titles.append(det)
+                else:
+                    new_legends.append(det)
+
             organized['chart_title'] = new_titles
             organized['legend'] = new_legends
             return organized
@@ -936,14 +980,33 @@ class ChartAnalysisPipeline(BasePipeline):
         crops = []
         for region in all_regions:
             x1, y1, x2, y2 = [int(c) for c in region['xyxy']]
-            
-            # Slightly increase the box before extracting text to avoid clipping
-            PADDING = 2
-            x1, y1 = max(0, x1 - PADDING), max(0, y1 - PADDING)
-            x2, y2 = min(w, x2 + PADDING), min(h, y2 + PADDING)
-            
-            crop = img[y1:y2, x1:x2]
+            w_box = max(1, x2 - x1)
+            h_box = max(1, y2 - y1)
             label_type = region.get('ocr_source', 'axis_label')
+
+            if label_type in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_labels'):
+                if h_box > w_box:
+                    # Vertical text: 20% horizontal padding, 5% vertical padding (per side)
+                    pad_x = int(round(w_box * 0.20))
+                    pad_y = int(round(h_box * 0.05))
+                else:
+                    # Horizontal text: 5% horizontal padding, 20% vertical padding (per side)
+                    pad_x = int(round(w_box * 0.05))
+                    pad_y = int(round(h_box * 0.20))
+            else:
+                pad_x = 5
+                pad_y = 5
+
+            x1_pad, y1_pad = max(0, x1 - pad_x), max(0, y1 - pad_y)
+            x2_pad, y2_pad = min(w, x2 + pad_x), min(h, y2 + pad_y)
+
+            crop = img[y1_pad:y2_pad, x1_pad:x2_pad]
+
+            # Rotate vertical text lines (height > 1.2 * width) 90° counter-clockwise
+            # so horizontal OCR models can read vertical axis titles accurately
+            if crop.size > 0 and crop.shape[0] > 1.2 * crop.shape[1]:
+                crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
             crops.append((crop, label_type))
 
         try:

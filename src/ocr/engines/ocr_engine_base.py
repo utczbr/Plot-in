@@ -38,9 +38,23 @@ class EasyOCREngine:
                                             paragraph=False)
             
             if result and len(result) > 0:
-                # Extract text and confidence from the first result
-                bbox, text, confidence = result[0]
-                return text.strip(), float(confidence) if confidence is not None else 0.0
+                texts = []
+                confs = []
+                # Sort word blocks left-to-right by x-coordinate
+                sorted_res = sorted(
+                    result,
+                    key=lambda item: item[0][0][0] if (isinstance(item[0], (list, tuple)) and len(item[0]) > 0 and isinstance(item[0][0], (list, tuple))) else 0
+                )
+                for item in sorted_res:
+                    if len(item) >= 2:
+                        txt = str(item[1]).strip()
+                        if txt:
+                            texts.append(txt)
+                            if len(item) >= 3 and item[2] is not None:
+                                confs.append(float(item[2]))
+                full_text = " ".join(texts)
+                avg_conf = float(sum(confs) / len(confs)) if confs else 0.0
+                return full_text, avg_conf
             else:
                 return "", 0.0
         except Exception as e:
@@ -75,15 +89,15 @@ class EasyOCREngine:
         return results
 
 
-class PaddleOCREngine:
+class PaddleOCRBaseEngine:
     """
-    Thin wrapper for PaddleOCR engine
+    Base wrapper for PaddleOCR engine sessions
     """
     
     def __init__(self, 
                  det_session: Any, 
                  rec_session: Any, 
-                 character_dict: Dict[str, str], 
+                 character_dict: Any, 
                  cls_session: Optional[Any] = None, 
                  use_gpu: bool = False):
         """
@@ -97,26 +111,14 @@ class PaddleOCREngine:
     
     def recognize(self, image: np.ndarray, context: str = "default", ctc_decode: bool = True) -> Tuple[str, float]:
         """
-        Recognize text in a single image
+        Recognize text in a single image crop
         Returns (text, confidence)
         """
+        if self.rec_session is None:
+            raise NotImplementedError("PaddleOCR rec_session is not initialized.")
+            
         try:
-            # This is a simplified approach - in a real implementation, 
-            # you might need to call the detection and recognition models separately
-            # Here we assume the image is already a text crop, so we go straight to recognition
-            from PIL import Image
-            
-            # Convert numpy array to PIL Image
-            if len(image.shape) == 3:
-                pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            else:
-                pil_image = Image.fromarray(image)
-                
-            # For text recognition with PaddleOCR models
-            # This would typically involve running the recognition model directly on the image
-            # The exact implementation depends on how your Paddle models are structured
-            result = self._run_recognition_model(pil_image)
-            
+            result = self._run_recognition_model(image)
             if result and len(result) > 0:
                 text, confidence = result[0]
                 return text.strip(), float(confidence) if confidence is not None else 0.0
@@ -137,19 +139,54 @@ class PaddleOCREngine:
             results.append((text, conf))
         return results
     
-    def _run_recognition_model(self, image):
+    def _run_recognition_model(self, image: np.ndarray):
         """
-        Internal method to run the PaddleOCR recognition model
-        This is a placeholder that should be implemented based on your specific Paddle model
+        Internal method to run recognition on rec_session if present
         """
-        # Placeholder implementation - in a real system you'd call your Paddle model here
-        # This might involve preprocessing the image to match model requirements
-        # and running inference on the recognition session
-        try:
-            # Example: convert image to format required by your model
-            # Run inference using self.rec_session
-            # Return results in the format [(text, confidence), ...]
-            return [("placeholder_text", 0.9)]  # Placeholder return
-        except Exception as e:
-            logging.warning(f"PaddleOCR model execution failed: {e}")
-            return []
+        if self.rec_session is None:
+            raise NotImplementedError("rec_session is required for PaddleOCR recognition")
+            
+        # Try to run rec_session if it is an ONNX Runtime InferenceSession
+        if hasattr(self.rec_session, 'run'):
+            input_name = self.rec_session.get_inputs()[0].name
+            output_name = self.rec_session.get_outputs()[0].name
+            
+            # Preprocess to 48px height RGB
+            if len(image.shape) == 2:
+                img = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            else:
+                img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                
+            h, w = img.shape[:2]
+            ratio = 48.0 / max(1, h)
+            target_w = max(32, int(w * ratio))
+            resized = cv2.resize(img, (target_w, 48), interpolation=cv2.INTER_LINEAR)
+            
+            blob = (resized.astype(np.float32) / 255.0 - 0.5) / 0.5
+            blob = blob.transpose(2, 0, 1)
+            blob = np.expand_dims(blob, axis=0).astype(np.float32)
+            
+            preds = self.rec_session.run([output_name], {input_name: blob})[0]
+            indices = np.argmax(preds[0], axis=1)
+            probs = np.max(preds[0], axis=1)
+            
+            # CTC decode
+            chars = []
+            confidences = []
+            prev_idx = 0
+            dict_list = self.character_dict if isinstance(self.character_dict, (list, tuple)) else []
+            
+            for idx, prob in zip(indices, probs):
+                if idx != 0 and idx != prev_idx:
+                    if dict_list and idx < len(dict_list):
+                        chars.append(dict_list[idx])
+                    else:
+                        chars.append(str(idx))
+                    confidences.append(prob)
+                prev_idx = idx
+                
+            text = "".join(chars)
+            avg_conf = float(np.mean(confidences)) if confidences else 0.0
+            return [(text, avg_conf)]
+            
+        raise NotImplementedError("Custom recognition runner not configured for this rec_session type")

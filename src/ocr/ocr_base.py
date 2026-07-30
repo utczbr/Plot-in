@@ -52,15 +52,24 @@ class BaseOCREngineInternal(ABC):
     """Abstract base for OCR engine implementations."""
     
     @abstractmethod
-    def recognize(self, image: np.ndarray, context: str, **kwargs) -> Tuple[str, float]:
+    def recognize(self, image: np.ndarray, context: str = "default", **kwargs) -> Tuple[str, float]:
         """Perform OCR on preprocessed image."""
         pass
     
-    @abstractmethod
-    def recognize_batch(self, images: List[np.ndarray], contexts: List[str],
+    def recognize_batch(self, images: List[np.ndarray], contexts: Optional[List[str]] = None,
                        **kwargs) -> List[Tuple[str, float]]:
         """Batch OCR processing."""
-        pass
+        if contexts is None:
+            contexts = ["default"] * len(images)
+        return [self.recognize(img, ctx, **kwargs) for img, ctx in zip(images, contexts)]
+
+    def process_batch(self, crops_with_context: List[Tuple[np.ndarray, str]]) -> List[Dict[str, Any]]:
+        """Bridge process_batch interface for compatibility."""
+        results = []
+        for crop, ctx in crops_with_context:
+            text, conf = self.recognize(crop, ctx)
+            results.append({'text': text, 'confidence': conf})
+        return results
 
 
 class BaseOCRLegacy(ABC):
@@ -80,3 +89,10 @@ class BaseOCRLegacy(ABC):
             List of OCR results as {'text': str, 'confidence': float} corresponding to each crop
         """
         pass
+
+    def recognize(self, image: np.ndarray, context: str = "default", **kwargs) -> Tuple[str, float]:
+        """Bridge recognize interface for compatibility."""
+        res = self.process_batch([(image, context)])
+        if res and len(res) > 0:
+            return res[0].get('text', ''), float(res[0].get('confidence', 0.0))
+        return "", 0.0

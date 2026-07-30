@@ -19,8 +19,6 @@ class OCRValidator:
             'Z': '2',
             'S': '5', 's': '5',
             'B': '8',
-            '$': '5',
-            '%': '9',
         }
         
         # Pre-compile regex patterns for efficiency
@@ -75,8 +73,8 @@ class OCRValidator:
         # Remove excessive whitespace
         corrected = re.sub(r'\s+', ' ', corrected).strip()
         
-        # Remove invalid characters at start/end that are common OCR errors
-        corrected = re.sub(r'^[^\w\s\-\_\.]+|[^\w\s\-\_\.]+$', '', corrected).strip()
+        # Remove invalid characters at start/end that are common OCR errors (preserving currency and percent)
+        corrected = re.sub(r'^[^\w\s\-\_\.\$\%\€\£]+|[^\w\s\-\_\.\$\%\€\£]+$', '', corrected).strip()
         
         return corrected
 

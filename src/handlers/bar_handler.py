@@ -73,4 +73,68 @@ class BarHandler(CartesianExtractionHandler):
         # NEW: Call legend associator on extracted values
         bars = extraction_result.get('bars', [])
         from extractors.legend_associator import LegendAssociator
-        return LegendAssociator.associate(bars, detections)
+        bars = LegendAssociator.associate(bars, detections)
+
+        # ── Error bar association ─────────────────────────────────────
+        # When error_bar detections are present (either from the model or
+        # manually drawn by the user), associate each error bar with the
+        # nearest aligned bar using the validated proximity/alignment
+        # logic from ErrorBarValidator.
+        error_bar_dets = detections.get('error_bar', [])
+        if error_bar_dets and bars:
+            from extractors.error_bar_validator import ErrorBarValidator
+            validator = ErrorBarValidator()
+            orient_str = orientation_enum.value  # 'vertical' or 'horizontal'
+
+            # Build temporary list with 'xyxy' key for bars that use 'bbox'
+            bars_for_validator = []
+            for bar in bars:
+                bar_copy = dict(bar)
+                if 'xyxy' not in bar_copy and 'bbox' in bar_copy:
+                    bar_copy['xyxy'] = bar_copy['bbox']
+                bars_for_validator.append(bar_copy)
+
+            enriched = validator.associate_and_validate(
+                bars_for_validator, error_bar_dets, orient_str,
+            )
+
+            # Merge validated error bar data back into bars
+            for i, enriched_bar in enumerate(enriched):
+                eb_data = enriched_bar.get('error_bar_validated')
+                if eb_data and eb_data.get('is_valid'):
+                    # Compute margin from the error bar bbox and the
+                    # calibration model when possible.
+                    margin = None
+                    try:
+                        eb_bbox = eb_data['bbox']
+                        if orient_str == 'vertical':
+                            eb_span_px = abs(eb_bbox[3] - eb_bbox[1])
+                        else:
+                            eb_span_px = abs(eb_bbox[2] - eb_bbox[0])
+                        # half-span represents ± margin in pixel space
+                        half_span_px = eb_span_px / 2.0
+                        if cal_model is not None:
+                            # Convert pixel span to data units using the
+                            # calibration model (difference, not absolute)
+                            ref_px = baseline_coord or 0.0
+                            val_at_ref = cal_model(ref_px)
+                            val_at_span = cal_model(ref_px + half_span_px)
+                            margin = abs(val_at_span - val_at_ref)
+                    except Exception:
+                        self.logger.debug(
+                            "Could not calibrate error bar margin for bar %d",
+                            i, exc_info=True,
+                        )
+
+                    bars[i]['error_bar'] = {
+                        'bbox': eb_data['bbox'],
+                        'margin': margin,
+                        'confidence': eb_data.get('confidence', 0.0),
+                    }
+                    self.logger.info(
+                        "Bar %d: error bar associated (margin=%s, confidence=%.2f)",
+                        i, margin, eb_data.get('confidence', 0.0),
+                    )
+
+        return bars
+

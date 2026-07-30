@@ -129,7 +129,7 @@ class EnhancedPreprocessingMixin:
         return cv2.addWeighted(image, 1.0 - strength/10.0, sharpened, strength/10.0, 0)
 
 
-class EasyOCRPreprocessing:
+class EasyOCRPreprocessing(PreprocessingStrategy, EnhancedPreprocessingMixin):
     """
     Preprocessing strategies designed for EasyOCR engine
     """
@@ -233,97 +233,81 @@ class EasyOCRPreprocessing:
         return variants
 
 
-class PaddleOCRPreprocessing:
+class PaddleOCRPreprocessing(PreprocessingStrategy, EnhancedPreprocessingMixin):
     """
     Preprocessing strategies designed for PaddleOCR engine
     """
     
     def preprocess_for_speed(self, image: np.ndarray, context: str = "default") -> np.ndarray:
         """
-        Fast preprocessing for PaddleOCR: minimal processing to preserve text details
+        Fast preprocessing for PaddleOCR preserving aspect ratio
         """
-        # Convert to grayscale if needed
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image.copy()
         
-        # Resize to 2x the original size using INTER_LINEAR for balanced quality/speed
         height, width = gray.shape
-        target_height = max(32, height * 2)  # PaddleOCR works well with height of 32+
-        target_width = max(100, width * 2)   # Ensure minimum width
+        scale_factor = max(2.0, 32.0 / max(1, height), 100.0 / max(1, width))
+        target_height = int(round(height * scale_factor))
+        target_width = int(round(width * scale_factor))
         
         resized = cv2.resize(gray, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
-        
         return resized
 
     def preprocess_balanced(self, image: np.ndarray, context: str = "default") -> np.ndarray:
         """
-        Balanced preprocessing for PaddleOCR: moderate enhancement
+        Balanced preprocessing for PaddleOCR preserving aspect ratio
         """
-        # Convert to grayscale if needed
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image.copy()
         
-        # Context-aware scaling
         height, width = gray.shape
         min_size = min(width, height)
         
         if min_size < 20:
-            scale_factor = 4
+            scale_factor = 4.0
         elif min_size < 50:
-            scale_factor = 3
+            scale_factor = 3.0
         else:
-            scale_factor = 2
+            scale_factor = 2.0
             
-        target_height = max(32, height * scale_factor)
-        target_width = max(100, width * scale_factor)
+        scale_factor = max(scale_factor, 32.0 / max(1, height), 100.0 / max(1, width))
+        target_height = int(round(height * scale_factor))
+        target_width = int(round(width * scale_factor))
         
-        resized = cv2.resize(gray, (target_width, target_height), 
-                            interpolation=cv2.INTER_LINEAR)
+        resized = cv2.resize(gray, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
         
-        # Apply light CLAHE for contrast enhancement
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
         enhanced = clahe.apply(resized)
-        
         return enhanced
 
     def preprocess_for_accuracy(self, image: np.ndarray, context: str = "default") -> List[np.ndarray]:
         """
-        Accurate preprocessing for PaddleOCR: multiple enhancement variants
+        Accurate preprocessing for PaddleOCR preserving aspect ratio
         """
         variants = []
-        
-        # Convert to grayscale if needed
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image.copy()
         
         height, width = gray.shape
-        target_height = max(48, height * 3)  # Higher resolution for accurate mode
-        target_width = max(150, width * 3)
+        scale_factor = max(3.0, 48.0 / max(1, height), 150.0 / max(1, width))
+        target_height = int(round(height * scale_factor))
+        target_width = int(round(width * scale_factor))
         
-        resized = cv2.resize(gray, (target_width, target_height), 
-                            interpolation=cv2.INTER_CUBIC)
-        
-        # Variant 1: Original resized
+        resized = cv2.resize(gray, (target_width, target_height), interpolation=cv2.INTER_CUBIC)
         variants.append(resized)
         
-        # Variant 2: CLAHE enhanced
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         clahe_enhanced = clahe.apply(resized)
         variants.append(clahe_enhanced)
         
-        # Variant 3: Bilateral filter + contrast adjustment
         bilateral = cv2.bilateralFilter(resized, 9, 75, 75)
-        # Apply contrast enhancement
-        alpha = 1.2  # Contrast control (1.0-3.0)
-        beta = 0     # Brightness control (0-100)
-        contrast_enhanced = cv2.convertScaleAbs(bilateral, alpha=alpha, beta=beta)
-        variants.append(contrast_enhanced)
+        variants.append(bilateral)
         
         # Variant 4: Morphological enhancement
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))

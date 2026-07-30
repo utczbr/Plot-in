@@ -37,7 +37,7 @@ def normalize_chart_type(value: Any, default: str = ChartType.BAR.value) -> str:
         return default
 
     normalized = str(value).strip().lower()
-    if normalized in ("", "chart", "unknown"):
+    if normalized in ("", "chart"):
         return default
 
     supported = {ct.value for ct in ChartType}

@@ -115,9 +115,22 @@ class OptimizedOCREngine:
             else:
                 result = self.reader.readtext(image, detail=1, paragraph=False)  # Changed to detail=1 to get confidence
             if result and len(result) > 0:
-                # Extract text and confidence from the first result
-                bbox, text, confidence = result[0]
-                return str(text), float(confidence) if confidence is not None else 0.0
+                texts = []
+                confs = []
+                sorted_res = sorted(
+                    result,
+                    key=lambda item: item[0][0][0] if (isinstance(item[0], (list, tuple)) and len(item[0]) > 0 and isinstance(item[0][0], (list, tuple))) else 0
+                )
+                for item in sorted_res:
+                    if len(item) >= 2:
+                        txt = str(item[1]).strip()
+                        if txt:
+                            texts.append(txt)
+                            if len(item) >= 3 and item[2] is not None:
+                                confs.append(float(item[2]))
+                full_text = " ".join(texts)
+                avg_conf = float(sum(confs) / len(confs)) if confs else 0.0
+                return full_text, avg_conf
             else:
                 return "", 0.0
         except Exception as e:

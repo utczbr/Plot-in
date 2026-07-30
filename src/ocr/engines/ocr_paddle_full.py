@@ -235,10 +235,13 @@ class PaddleOCRFullPipeline(BaseOCREngine):
                         raise TypeError("Unsupported YAML format for dictionary.")
             else:
                 with open(dict_path, 'r', encoding='utf-8') as f:
-                    characters = [line.strip() for line in f if line.strip()]
+                    characters = [line.rstrip('\r\n') for line in f if line.rstrip('\r\n') != '']
             
             if not isinstance(characters, list):
                  raise TypeError(f"Character dictionary loaded from {dict_path} is not a list.")
+
+            # Normalize ideographic spaces (\u3000) to standard ASCII spaces (' ')
+            characters = [(' ' if c in ('\u3000', ' ') else c) for c in characters]
 
             # Ensure blank token exists
             if 'blank' not in characters:
@@ -398,7 +401,7 @@ class PaddleOCRFullPipeline(BaseOCREngine):
             padded[:, :resize_w, :] = img
             img = padded
         else:
-            img = img[:, :img_w, :]
+            img = cv2.resize(img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
         
         # Normalize to [-1, 1]
         img = img.astype(np.float32) / 255.0

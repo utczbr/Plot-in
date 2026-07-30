@@ -151,11 +151,7 @@ class EditableRectItem(QGraphicsRectItem):
         self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
 
         # Tooltip
-        conf = detection.get("conf", "")
-        conf_str = f" ({conf:.0%})" if isinstance(conf, (int, float)) else ""
-        text = detection.get("text", "")
-        text_str = f": {text}" if text else ""
-        self.setToolTip(f"{class_name}{conf_str}{text_str}")
+        self._update_tooltip()
 
         # Start non-interactive (VIEW mode)
         self.setAcceptHoverEvents(True)
@@ -170,6 +166,21 @@ class EditableRectItem(QGraphicsRectItem):
         self._drag_start_pos = QPointF()
         self._drag_start_rect = QRectF()
         self._drag_start_item_pos = QPointF()
+
+    def _update_tooltip(self) -> None:
+        conf = self.detection.get("conf", self.detection.get("ocr_confidence", ""))
+        conf_str = f" ({conf:.0%})" if isinstance(conf, (int, float)) else ""
+        text = self.detection.get("text", "")
+        text_str = f": {text}" if text else ""
+        self.setToolTip(f"{self.class_name}{conf_str}{text_str}")
+
+    def update_text_and_tooltip(self, text: str, conf: Optional[float] = None) -> None:
+        """Update detection text in memory and refresh item tooltip on canvas."""
+        self.detection["text"] = text
+        if conf is not None:
+            self.detection["ocr_confidence"] = float(conf)
+            self.detection["conf"] = float(conf)
+        self._update_tooltip()
         
     def set_editor_mode(self, mode: EditorMode) -> None:
         self._mode = mode
@@ -1183,13 +1194,13 @@ class DetectionScene(QGraphicsScene):
 
         z = 1.0
         for class_name, items in detections.items():
-            if not isinstance(items, list):
+            if not isinstance(items, list) or class_name == "layout_text_regions":
                 continue
 
             for det in items:
                 bbox = det.get("xyxy")
                 if not bbox:
-                    continue  # Skip non-bbox detections (e.g. layout_text_regions metadata)
+                    continue  # Skip non-bbox detections
 
                 palette = self._colors.get(class_name, self._colors.get("other"))
                 if class_name == "slice" and "keypoints" in det:

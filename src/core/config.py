@@ -106,7 +106,7 @@ class ModelsConfig:
     ocr: Dict[str, str]
 
 MODELS_CONFIG = ModelsConfig(
-    classification='classification.onnx',
+    classification='classifier.onnx',
     detection={
         'bar': 'detect_bar.onnx',
         'box': 'detect_box.onnx',

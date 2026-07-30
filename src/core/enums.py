@@ -9,3 +9,4 @@ class ChartType(Enum):
     AREA = "area"
     HISTOGRAM = "histogram"
     HEATMAP = "heatmap"
+    UNKNOWN = "unknown"

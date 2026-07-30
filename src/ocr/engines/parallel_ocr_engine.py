@@ -93,20 +93,20 @@ class ParallelOCREngine:
     def _process_batch_parallel(self, tasks: List[OCRTask]) -> List[OCRResult]:
         """Parallel batch processing with future management"""
         futures_map = {
-            self._executor.submit(self._process_single_vectorized, task): task
-            for task in tasks
+            self._executor.submit(self._process_single_vectorized, task): (idx, task)
+            for idx, task in enumerate(tasks)
         }
         
         results = [None] * len(tasks)
         
         for future in as_completed(futures_map, timeout=60):
-            task = futures_map[future]
+            idx, task = futures_map[future]
             try:
                 result = future.result()
-                results[task.detection_id % len(tasks)] = result
+                results[idx] = result
             except Exception as e:
                 logging.error(f"Task {task.detection_id} failed: {e}")
-                results[task.detection_id % len(tasks)] = OCRResult(
+                results[idx] = OCRResult(
                     task.detection_id, "", 0.0, None, 0.0
                 )
         

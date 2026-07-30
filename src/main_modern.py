@@ -211,7 +211,7 @@ class MultiSelectTableWidget(QTableWidget):
         if event.matches(QKeySequence.StandardKey.Paste):
             self._paste_selection()
             return
-        if event.key() == Qt.Key.Key_Delete:
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._delete_selection()
             return
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
@@ -2006,6 +2006,128 @@ Click to configure advanced options."""
                         self.data_table.scrollToItem(item)
                     break
 
+    def _get_active_ocr_engine(self):
+        """Lazy-instantiate or return the active OCR engine instance for canvas re-OCR."""
+        if hasattr(self, '_active_ocr_engine') and self._active_ocr_engine is not None:
+            return self._active_ocr_engine
+
+        try:
+            from ocr.ocr_factory import OCREngineFactory
+            settings = self.advanced_settings or {}
+            ocr_backend = settings.get('ocr_engine', 'Paddle')
+            models_dir_path = Path(self.models_dir_edit.text()) if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else Path('src/models')
+
+            if ocr_backend == 'Paddle':
+                engine_mode = 'paddle_onnx'
+                self._active_ocr_engine = OCREngineFactory.create_engine(
+                    engine_mode,
+                    self.easyocr_reader,
+                    det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
+                    rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
+                    dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
+                    cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx')
+                )
+            elif ocr_backend == 'EasyOCR':
+                ocr_accuracy = settings.get('ocr_accuracy', 'Optimized')
+                accuracy_to_mode = {'Fast': 'fast', 'Optimized': 'optimized', 'Precise': 'precise'}
+                engine_mode = accuracy_to_mode.get(ocr_accuracy, 'optimized')
+                self._active_ocr_engine = OCREngineFactory.create_engine(engine_mode, self.easyocr_reader)
+            else:
+                self._active_ocr_engine = OCREngineFactory.create_engine(ocr_backend, self.easyocr_reader)
+            return self._active_ocr_engine
+        except Exception as exc:
+            logging.warning("Could not create active OCR engine for re-OCR: %s", exc)
+            return None
+
+    def _re_ocr_detection_item(self, item):
+        """Re-run OCR extraction on a modified detection item's new bounding box."""
+        if not item or not hasattr(item, 'detection') or not isinstance(item.detection, dict):
+            return
+
+        class_name = item.class_name
+        TEXT_CLASSES = {
+            'axis_title', 'chart_title', 'legend', 'tick_label',
+            'axis_labels', 'data_label', 'color_bar_label', 'color_bar_title', 'other'
+        }
+        if class_name not in TEXT_CLASSES:
+            return
+
+        import cv2
+        import numpy as np
+
+        if self.original_pil_image is None:
+            if hasattr(self, 'current_image_path') and self.current_image_path and Path(self.current_image_path).exists():
+                img_bgr = cv2.imread(str(self.current_image_path))
+            else:
+                return
+        else:
+            img_bgr = cv2.cvtColor(np.array(self.original_pil_image), cv2.COLOR_RGB2BGR)
+
+        if img_bgr is None:
+            return
+
+        h_img, w_img = img_bgr.shape[:2]
+        xyxy = item.detection.get('xyxy', [0, 0, 0, 0])
+        x1, y1, x2, y2 = [int(c) for c in xyxy]
+        w_box = max(1, x2 - x1)
+        h_box = max(1, y2 - y1)
+
+        # Proportional padding matching pipeline logic
+        if class_name in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_labels'):
+            if h_box > w_box:
+                pad_x = int(round(w_box * 0.20))
+                pad_y = int(round(h_box * 0.05))
+            else:
+                pad_x = int(round(w_box * 0.05))
+                pad_y = int(round(h_box * 0.20))
+        else:
+            pad_x = 5
+            pad_y = 5
+
+        x1_pad, y1_pad = max(0, x1 - pad_x), max(0, y1 - pad_y)
+        x2_pad, y2_pad = min(w_img, x2 + pad_x), min(h_img, y2 + pad_y)
+
+        crop = img_bgr[y1_pad:y2_pad, x1_pad:x2_pad]
+        if crop.size == 0:
+            return
+
+        # 90° counter-clockwise rotation if vertical
+        if crop.shape[0] > 1.2 * crop.shape[1]:
+            crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+        ocr_engine = self._get_active_ocr_engine()
+        if not ocr_engine:
+            return
+
+        try:
+            if hasattr(ocr_engine, 'process_batch'):
+                res_list = ocr_engine.process_batch([(crop, class_name)])
+                if res_list and len(res_list) > 0:
+                    res = res_list[0]
+                    if isinstance(res, dict):
+                        text = res.get('text', '')
+                        conf = res.get('confidence', 0.0)
+                    else:
+                        text = getattr(res, 'text', str(res))
+                        conf = getattr(res, 'confidence', 0.8)
+                else:
+                    text, conf = "", 0.0
+            elif hasattr(ocr_engine, 'recognize'):
+                text, conf = ocr_engine.recognize(crop, class_name)
+            else:
+                return
+
+            text = str(text).strip()
+            if hasattr(item, 'update_text_and_tooltip'):
+                item.update_text_and_tooltip(text, float(conf))
+            else:
+                item.detection['text'] = text
+                item.detection['ocr_confidence'] = float(conf)
+
+            logging.info("Re-OCR updated item [%s]: '%s' (conf=%.2f)", class_name, text, conf)
+        except Exception as exc:
+            logging.warning("Re-OCR failed for [%s]: %s", class_name, exc)
+
     def _on_scene_item_edited(self, item, old_xyxy, is_resize):
         """Handle move/resize completion from the canvas."""
         if not self._editor_state:
@@ -2016,14 +2138,14 @@ Click to configure advanced options."""
             # the item by its new coords — the dict is the lookup key in DetectionScene.
             item.detection["xyxy"] = list(new_xyxy)
 
+            # Re-run OCR on the newly cropped image area and update canvas tooltip/text
+            self._re_ocr_detection_item(item)
+
             from visual.detection_editor_state import MoveCommand, ResizeCommand
             cmd_cls = ResizeCommand if is_resize else MoveCommand
             self._editor_state.push(cmd_cls(item, old_xyxy, new_xyxy))
 
             # Only update the highlight — do NOT call _update_scene_display() here.
-            # That function reloads all items from current_analysis_result['detections']
-            # (still holding pre-edit bboxes), which would destroy the scene items that
-            # the undo-stack commands now reference.
             self._refresh_scene_highlight(new_xyxy, item.class_name)
 
     def _on_scene_item_deleted(self, item):
@@ -2044,6 +2166,8 @@ Click to configure advanced options."""
         colors_map = getattr(self._det_scene, '_colors', {})
         old_class = item.class_name
         self._editor_state.push(ChangeClassCommand(item, old_class, new_class, colors_map))
+        # Re-run OCR with the new class rules
+        self._re_ocr_detection_item(item)
         # ChangeClassCommand.redo() updated class_name and colors in-place.
         # Only refresh the highlight.
         self._refresh_scene_highlight(item.current_xyxy(), new_class)
@@ -2061,6 +2185,8 @@ Click to configure advanced options."""
             class_name=class_name,
             detection=new_det,
         )
+        # Re-run OCR on the newly drawn box area
+        self._re_ocr_detection_item(new_item)
         # Correct signature: (scene, item)
         self._editor_state.push(CreateCommand(self._det_scene, new_item))
         # Immediately highlight the newly created box
@@ -2820,7 +2946,22 @@ Click to configure advanced options."""
             has_pdfs = True
 
         if has_pdfs:
-            self._start_pdf_resolve_worker(path)
+            reply = QMessageBox.question(
+                self,
+                "PDF Extraction",
+                "PDF file(s) detected in the input path.\nWould you like to extract chart images from the PDF(s)?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._start_pdf_resolve_worker(path)
+            else:
+                from core.input_resolver import resolve_input_assets
+                render_dir = self._get_render_dir(path)
+                assets = resolve_input_assets(
+                    input_path=path, render_dir=render_dir, input_type='image',
+                )
+                self._finish_populate_file_list(assets)
         else:
             # Fast path: image-only, no threading needed
             from core.input_resolver import resolve_input_assets

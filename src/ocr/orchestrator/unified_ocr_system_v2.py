@@ -12,7 +12,7 @@ from typing import List, Tuple, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..preprocessing.preprocessing_base import EasyOCRPreprocessing, PaddleOCRPreprocessing  # engine-agnostic preprocessors
-from ..engines.ocr_engine_base import EasyOCREngine, PaddleOCREngine  # thin wrappers for backends
+from ..engines.ocr_engine_base import EasyOCREngine, PaddleOCRBaseEngine  # thin wrappers for backends
 from ..runtime.cache_runtime import ZeroCopyHashCache, HashDeduplicator  # zero-copy LRU + dedup
 
 # ---------- Core types (align with your core.ocr_base) ----------
@@ -67,13 +67,16 @@ class UnifiedOCRSystemV2:
             self.ocr_engine = EasyOCREngine(engine_instance, use_gpu=config.enable_gpu)
         else:
             self.preprocessor = PaddleOCRPreprocessing()
-            self.ocr_engine = PaddleOCREngine(
-                det_session=engine_instance.get('det_session'),
-                rec_session=engine_instance.get('rec_session'),
-                character_dict=engine_instance.get('character_dict'),
-                cls_session=engine_instance.get('cls_session'),
-                use_gpu=config.enable_gpu
-            )
+            if isinstance(engine_instance, dict):
+                self.ocr_engine = PaddleOCRBaseEngine(
+                    det_session=engine_instance.get('det_session'),
+                    rec_session=engine_instance.get('rec_session'),
+                    character_dict=engine_instance.get('character_dict'),
+                    cls_session=engine_instance.get('cls_session'),
+                    use_gpu=config.enable_gpu
+                )
+            else:
+                self.ocr_engine = engine_instance
 
         # Optional fallback
         self.fallback_engine = None
@@ -107,7 +110,7 @@ class UnifiedOCRSystemV2:
         for crop_hash, (crop, ctx, idxs) in mapping.items():
             cached = None
             if self.cache is not None:
-                cached = self.cache.get_by_hash(crop)
+                cached = self.cache.get_by_hash(crop, context=ctx)
             if cached is not None:
                 for i in idxs:
                     results[i] = cached
@@ -134,7 +137,7 @@ class UnifiedOCRSystemV2:
 
             if self.cache is not None:
                 # Cache by content hash key; store the OCRResult
-                self.cache.put(crop, res)
+                self.cache.put(crop, res, context=ctx)
             for i in idxs:
                 results[i] = res
 
@@ -165,7 +168,7 @@ class UnifiedOCRSystemV2:
                 if s_i > best_score:
                     best_text, best_conf, best_score, best_tag = t_i, c_i, s_i, f"accurate_v{i}"
 
-            text, conf, preproc_tag = best_text, best_conf, best_score, best_tag
+            text, conf, preproc_tag = best_text, best_conf, best_tag
 
             # Selective fallback when confidence is too low in ACCURATE mode
             if self.config.enable_fallback and self.fallback_engine is not None and best_score < self.config.fallback_threshold:

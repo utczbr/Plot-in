@@ -21,7 +21,7 @@ def _patch_model_config(monkeypatch):
     monkeypatch.setattr(
         "core.model_manager.MODELS_CONFIG",
         SimpleNamespace(
-            classification="classification.onnx",
+            classification="classifier.onnx",
             detection={"bar": "detect_bar.onnx"},
         ),
     )
@@ -32,7 +32,7 @@ def test_model_manager_atomic_load_failure(monkeypatch, tmp_path):
     manager.reset_models()
     _patch_model_config(monkeypatch)
 
-    _touch(tmp_path / "classification.onnx")
+    _touch(tmp_path / "classifier.onnx")
     _touch(tmp_path / "detect_bar.onnx")
 
     def fake_inference_session(path, providers=None):
@@ -59,7 +59,7 @@ def test_model_manager_reset_and_retry(monkeypatch, tmp_path):
     manager.reset_models()
     _patch_model_config(monkeypatch)
 
-    _touch(tmp_path / "classification.onnx")
+    _touch(tmp_path / "classifier.onnx")
     _touch(tmp_path / "detect_bar.onnx")
 
     fail_once = {"enabled": True}
@@ -91,7 +91,7 @@ def test_model_manager_keeps_previous_models_on_failed_reload(monkeypatch, tmp_p
     dir_a = tmp_path / "set_a"
     dir_b = tmp_path / "set_b"
     for root in (dir_a, dir_b):
-        _touch(root / "classification.onnx")
+        _touch(root / "classifier.onnx")
         _touch(root / "detect_bar.onnx")
 
     def success_session(path, providers=None):

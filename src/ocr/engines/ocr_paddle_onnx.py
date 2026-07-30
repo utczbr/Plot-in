@@ -195,10 +195,13 @@ class PaddleOCREngine(BaseOCREngine):
                         raise TypeError("Unsupported YAML format for dictionary.")
             else:
                 with open(dict_path, 'r', encoding='utf-8') as f:
-                    characters = [line.strip() for line in f if line.strip()]
+                    characters = [line.rstrip('\r\n') for line in f if line.rstrip('\r\n') != '']
             
             if not isinstance(characters, list):
                  raise TypeError(f"Character dictionary loaded from {dict_path} is not a list.")
+
+            # Normalize ideographic spaces (\u3000) to standard ASCII spaces (' ')
+            characters = [(' ' if c in ('\u3000', ' ') else c) for c in characters]
 
             # Add blank token for CTC decoding if not present
             # CTC uses blank token to represent no-character state
@@ -337,8 +340,8 @@ class PaddleOCREngine(BaseOCREngine):
             padded[:, :resize_w, :] = img
             img = padded
         else:
-            # Crop to target width
-            img = img[:, :img_w, :]
+            # Scale to fit max width instead of cropping text
+            img = cv2.resize(img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
         
         # Normalize to [-1, 1] range
         # Formula: (pixel / 255.0 - 0.5) / 0.5

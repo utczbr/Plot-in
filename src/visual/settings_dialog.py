@@ -184,6 +184,13 @@ class SettingsDialog(QDialog):
         )
         engine_layout.addWidget(self.use_doclayout_check, 5, 0, 1, 2)
 
+        self.use_doclayout_regions_check = QCheckBox("Use DocLayout YOLO for figure region proposals")
+        self.use_doclayout_regions_check.setChecked(self.settings.get('use_doclayout_regions', True))
+        self.use_doclayout_regions_check.setToolTip(
+            "Use doclayout_yolo.onnx figure bounding boxes to refine chart region proposals."
+        )
+        engine_layout.addWidget(self.use_doclayout_regions_check, 6, 0, 1, 2)
+
         scroll_layout.addWidget(engine_group)
         
         # OCR Whitelists
@@ -1073,6 +1080,7 @@ class SettingsDialog(QDialog):
         self.settings['ocr_settings']['retry_on_suspicious'] = self.retry_suspicious_check.isChecked()
         self.settings['ocr_settings']['aggressive_preprocessing'] = self.aggressive_preprocess_check.isChecked()
         self.settings['use_doclayout_text'] = self.use_doclayout_check.isChecked()
+        self.settings['use_doclayout_regions'] = self.use_doclayout_regions_check.isChecked()
         self.settings['ocr_settings']['scale_factor'] = self.scale_factor_spin.value()
         self.settings['ocr_settings']['easyocr_contrast_ths'] = self.contrast_ths_spin.value()
         self.settings['ocr_settings']['tesseract_psm'] = self.tesseract_psm_spin.value()

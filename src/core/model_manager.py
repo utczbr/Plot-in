@@ -149,7 +149,7 @@ class ModelManager:
     # Models that are optional: missing or failing to load will log a warning
     # instead of raising RuntimeError, and their session is stored as None.
     _OPTIONAL_MODELS = frozenset({
-        'doclayout',
+        'doclayout', 'chart_detector',
         'heatmap_macro', 'heatmap_colorbar', 'heatmap_lattice', 'heatmap_text',
     })
 
@@ -177,6 +177,8 @@ class ModelManager:
 
             # Flatten dictionary for loading
             model_files = {'classification': MODELS_CONFIG.classification}
+            if hasattr(MODELS_CONFIG, 'chart_detector'):
+                model_files['chart_detector'] = MODELS_CONFIG.chart_detector
             model_files.update(MODELS_CONFIG.detection)
 
             providers = self._get_providers()
@@ -184,6 +186,12 @@ class ModelManager:
             for model_name, filename in model_files.items():
                 is_optional = model_name in self._OPTIONAL_MODELS
                 model_path = models_dir_path / filename
+                if not model_path.exists():
+                    alt_filename = filename.replace('_yolo.onnx', '.onnx') if '_yolo.onnx' in filename else (filename[:-5] + '_yolo.onnx' if filename.endswith('.onnx') else filename)
+                    alt_path = models_dir_path / alt_filename
+                    if alt_path.exists():
+                        model_path = alt_path
+
                 if not model_path.exists():
                     msg = f"Model file not found: {model_path}"
                     if is_optional:

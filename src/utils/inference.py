@@ -402,6 +402,16 @@ def run_inference_on_image(
     try:
         logging.debug(f"Processing image in memory. Dimensions: {img.shape}")
 
+        # Auto-detect fixed spatial dimensions from ONNX model input tensor shape if present
+        try:
+            model_inputs = session.get_inputs()
+            if model_inputs and hasattr(model_inputs[0], 'shape') and len(model_inputs[0].shape) == 4:
+                m_h, m_w = model_inputs[0].shape[2], model_inputs[0].shape[3]
+                if isinstance(m_h, int) and isinstance(m_w, int) and m_h > 0 and m_w > 0:
+                    input_size = (m_h, m_w)
+        except Exception:
+            pass
+
         input_img, ratio, pad = preprocess_with_letterbox(img, new_shape=input_size)
         input_img = input_img.transpose(2, 0, 1).astype(np.float32) / 255.0
         input_img = np.expand_dims(input_img, 0)

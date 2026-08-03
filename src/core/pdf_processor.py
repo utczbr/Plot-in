@@ -19,15 +19,21 @@ import logging
 import fitz  # PyMuPDF
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Optional, Generator
+from typing import List, Tuple, Optional, Generator, Any
 from contextlib import contextmanager
 import cv2
 import os
 import json
+import threading
 from datetime import datetime
 
 # --- Configuração de logging específica ---
 logger = logging.getLogger(__name__)
+
+
+class PDFAccessError(Exception):
+    """Raised for PDFs that opened but cannot be read (auth required, etc.)."""
+
 
 # --- Context Managers para Gerenciamento de Recursos ---
 
@@ -43,12 +49,15 @@ def open_pdf_document(pdf_path: Path):
         fitz.Document: Documento PDF aberto
         
     Raises:
+        PDFAccessError: Se o PDF exigir senha
         Exception: Se não conseguir abrir o PDF
     """
     doc = None
     try:
         logger.info(f"📖 Abrindo PDF: {pdf_path.name}")
         doc = fitz.open(str(pdf_path))
+        if doc.needs_pass:
+            raise PDFAccessError(f"'{pdf_path.name}' is password-protected and requires a user password.")
         yield doc
     except RuntimeError as e:
         logger.error(f"❌ Erro de tempo de execução ao abrir PDF (pode estar corrompido) {pdf_path.name}: {e}")
@@ -127,6 +136,25 @@ def extract_charts_from_pdf_optimized(
     return extracted_charts
 
 
+def _render_page_as_image_array(page: fitz.Page, dpi: int = 200) -> Optional[np.ndarray]:
+    """Render a page straight into a BGR numpy array — no disk round-trip."""
+    try:
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        if pix.n == 3:
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        elif pix.n == 4:
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+        else:
+            bgr = arr
+        return bgr.copy()
+    except Exception as exc:
+        logger.error(f"In-memory render failed: {exc}")
+        return None
+
+
 def _render_page_as_image(
     page: fitz.Page,
     page_num: int,
@@ -162,12 +190,6 @@ def _render_page_as_image(
         w, h = pixmap.width, pixmap.height
         del pixmap
 
-        # `Pixmap.save()` does not return a boolean status. It raises on failure,
-        # but it can theoretically leave a truncated/empty file behind (disk full, 
-        # interrupted write, permissions), which later fails with a confusing 
-        # "cannot identify image file" error when something tries to open it. 
-        # Verify the file is actually a non-trivial, real file on disk before 
-        # handing it back as usable.
         if not file_path.exists() or file_path.stat().st_size == 0:
             logger.error(
                 f"❌ Full-page render for page {page_num + 1} did not produce a "
@@ -198,6 +220,7 @@ def _extract_images_from_page_optimized(
     min_width: int,
     min_height: int,
     render_dpi: int = 200,
+    model_manager: Optional[Any] = None,
 ) -> List[dict]:
     """
     Extract chart images from a single PDF page.
@@ -207,8 +230,8 @@ def _extract_images_from_page_optimized(
          (works for scanned figures or pre-rasterised exports).
       2. If no embedded images are found — or all are too small / not
          chart-like — fall back to rendering the full page at *render_dpi*.
-         This captures vector-drawn charts (matplotlib, R, LaTeX, Word…)
-         which are by far the most common format in scientific literature.
+         If model_manager is provided and doclayout model is present,
+         slices the page into individual figure bounding box crops.
     """
     page_charts: List[dict] = []
 
@@ -252,6 +275,7 @@ def _extract_images_from_page_optimized(
                         'image_index':       img_index + 1,
                         'file_path':         file_path,
                         'high_res_path':     file_path,   # kept for API compat
+                        'image_buffer':      cv_image,
                         'dimensions':        (w, h),
                         'pdf_rect':          rect,
                         'extraction_method': 'embedded_image',
@@ -267,44 +291,141 @@ def _extract_images_from_page_optimized(
         logger.error(f"❌ Error listing images on page {page_num + 1}: {exc}")
 
     # ------------------------------------------------------------------
-    # Strategy 2: full-page render fallback
+    # Strategy 2: full-page render fallback / figure region cropping
     # Triggered when embedded-image extraction found nothing useful.
-    # This is the normal path for vector-drawn scientific charts.
     # ------------------------------------------------------------------
     if not page_charts:
         logger.debug(
             f"Page {page_num + 1}: no usable embedded images — "
-            "falling back to full-page render"
+            "falling back to page render and figure region proposal"
         )
-        chart = _render_page_as_image(
-            page, page_num, pdf_stem, output_dir, dpi=render_dpi
-        )
-        if chart:
-            # Post-render size & chart-likelihood check
-            try:
-                cv_img = cv2.imread(str(chart['file_path']))
-                if cv_img is not None:
-                    h, w = cv_img.shape[:2]
-                    if w < min_width or h < min_height:
-                        logger.debug(
-                            f"  Full-page render too small ({w}x{h}), discarding"
+        cv_img = _render_page_as_image_array(page, dpi=render_dpi)
+        if cv_img is not None:
+            h, w = cv_img.shape[:2]
+
+            figure_crops = []
+            extraction_method = "doclayout_figure_crop"
+            if model_manager is not None:
+                try:
+                    doclayout_model = model_manager.get_model('doclayout')
+                    if doclayout_model is not None:
+                        from utils.inference import run_inference_on_image
+                        from core.class_maps import CLASS_MAP_DOCLAYOUT
+                        layout_dets = run_inference_on_image(
+                            doclayout_model, cv_img, 0.25, CLASS_MAP_DOCLAYOUT,
+                            input_size=(1024, 1024), model_output_type='bbox',
                         )
-                        chart['file_path'].unlink(missing_ok=True)
-                        chart = None
-                    elif not _is_likely_chart_image(cv_img, w, h):
-                        logger.debug(
-                            "  Full-page render not chart-like (probably text-only page), discarding"
-                        )
-                        chart['file_path'].unlink(missing_ok=True)
-                        chart = None
-            except Exception as exc:
-                logger.warning(
-                    f"Could not validate full-page render for page {page_num + 1}: {exc}"
+                        for d in layout_dets:
+                            if d.get('cls') in (3, 5):  # 3: figure, 5: table
+                                bbox = d.get('bbox')
+                                if bbox and len(bbox) == 4:
+                                    x1, y1, x2, y2 = bbox
+                                    crop_w, crop_h = x2 - x1, y2 - y1
+                                    if crop_w >= min_width and crop_h >= min_height:
+                                        crop_img = cv_img[y1:y2, x1:x2]
+                                        if crop_img.size > 0:
+                                            figure_crops.append((bbox, crop_img))
+                except Exception as exc:
+                    logger.debug("DocLayout figure cropping pass skipped: %s", exc)
+
+            # Fallback: pure CV2 contour/bounding-box slicer when doclayout model is unavailable or returned 0 crops
+            if not figure_crops:
+                try:
+                    figure_crops = _find_chart_regions_cv2(cv_img, min_width, min_height)
+                    if figure_crops:
+                        extraction_method = "cv2_layout_figure_crop"
+                except Exception as exc:
+                    logger.debug("CV2 layout figure cropping fallback skipped: %s", exc)
+
+            if figure_crops:
+                logger.info(f"✅ Page {page_num + 1}: {len(figure_crops)} figure crop(s) extracted via {extraction_method}")
+                for c_idx, (bbox, crop_img) in enumerate(figure_crops):
+                    cw, ch = crop_img.shape[1], crop_img.shape[0]
+                    filename = f"{pdf_stem}_page{page_num + 1:02d}_fig{c_idx + 1:02d}.png"
+                    file_path = output_dir / filename
+                    cv2.imwrite(str(file_path), crop_img)
+                    page_charts.append({
+                        'page_num': page_num + 1,
+                        'image_index': c_idx + 1,
+                        'file_path': file_path,
+                        'high_res_path': file_path,
+                        'image_buffer': crop_img,
+                        'dimensions': (cw, ch),
+                        'pdf_rect': fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3]),
+                        'extraction_method': extraction_method,
+                    })
+            elif w >= min_width and h >= min_height and _is_likely_chart_image(cv_img, w, h):
+                filename = f"{pdf_stem}_page{page_num + 1:02d}_fullpage.png"
+                file_path = output_dir / filename
+                cv2.imwrite(str(file_path), cv_img)
+                page_charts.append({
+                    'page_num': page_num + 1,
+                    'image_index': 1,
+                    'file_path': file_path,
+                    'high_res_path': file_path,
+                    'image_buffer': cv_img,
+                    'dimensions': (w, h),
+                    'pdf_rect': page.rect,
+                    'extraction_method': 'full_page_render',
+                })
+            else:
+                logger.debug(
+                    f"Page {page_num + 1}: page render ({w}x{h}) discarded (too small or not chart-like)"
                 )
-            if chart:
-                page_charts.append(chart)
 
     return page_charts
+
+
+def _find_chart_regions_cv2(
+    cv_img: np.ndarray,
+    min_width: int = 300,
+    min_height: int = 200,
+) -> List[Tuple[Tuple[int, int, int, int], np.ndarray]]:
+    """
+    Zero-dependency computer vision fallback to locate rectangular chart/plot regions
+    on a rendered PDF page canvas using contour analysis.
+    """
+    if cv_img is None or cv_img.size == 0:
+        return []
+
+    h, w = cv_img.shape[:2]
+    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY) if len(cv_img.shape) == 3 else cv_img.copy()
+
+    # Apply morphological gradient to highlight outer plot borders and grid lines
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
+
+    # Threshold and dilate to connect contiguous chart components
+    _, thresh = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    dilated = cv2.dilate(thresh, dilate_kernel, iterations=2)
+
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+    page_area = float(w * h)
+
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw < min_width or bh < min_height:
+            continue
+        box_area = float(bw * bh)
+        if box_area / page_area > 0.92:
+            continue
+
+        pad_x = min(10, x)
+        pad_y = min(10, y)
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y)
+        x2 = min(w, x + bw + pad_x)
+        y2 = min(h, y + bh + pad_y)
+
+        crop_img = cv_img[y1:y2, x1:x2]
+        if crop_img.size > 0 and (0.2 < (bw / float(bh)) < 5.0):
+            candidates.append(((x1, y1, x2, y2), crop_img))
+
+    candidates.sort(key=lambda item: (item[0][1], item[0][0]))
+    return candidates
 
 
 def _is_likely_chart_image(
@@ -454,14 +575,18 @@ def process_pdf_charts_optimized(
     high_res_dpi: int = 200,
     min_chart_width: int = 300,
     min_chart_height: int = 200,
+    cancel_event: Optional[Any] = None,
+    model_manager: Optional[Any] = None,
 ) -> List[dict]:
     """
     Pipeline completo para extrair gráficos de um PDF e salvá-los como PNGs.
 
     Extraction strategy (applied per page):
       1. Embedded raster images  — works for scanned / pre-rasterised figures.
-      2. Full-page render        — fallback that captures vector charts
+      2. Page render fallback    — fallback that captures vector charts
          (matplotlib, R, LaTeX, Word exports). Rendered at *high_res_dpi*.
+         If model_manager is provided and doclayout is present, slices the
+         page into individual figure bounding box crops.
 
     Returns a list of chart-info dicts.  Each dict always carries
     'high_res_path' pointing to the final PNG so that input_resolver.py
@@ -483,6 +608,9 @@ def process_pdf_charts_optimized(
         logger.info(f"📄 {doc.page_count} page(s)")
 
         for page_num in range(doc.page_count):
+            if cancel_event is not None and cancel_event.is_set():
+                logger.warning("PDF processing cancelled at page %d/%d", page_num + 1, doc.page_count)
+                break
             try:
                 page = doc[page_num]
                 page_charts = _extract_images_from_page_optimized(
@@ -493,6 +621,7 @@ def process_pdf_charts_optimized(
                     min_chart_width,
                     min_chart_height,
                     render_dpi=high_res_dpi,
+                    model_manager=model_manager,
                 )
 
                 if page_charts:
@@ -557,11 +686,7 @@ def _save_processing_metadata(processed_charts: List[dict], output_dir: Path, pd
 
 
 def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: str, figure_class_id: int = 3):
-    """Extract charts using DocLayout-YOLO with proper error handling."""
-    if not Path(model_path).exists():
-        logger.error(f"❌ Model not found: {model_path}")
-        return []
-
+    """Deprecated legacy compatibility function."""
     try:
         from doclayout_yolo import YOLOv10
     except (ImportError, ModuleNotFoundError) as exc:
@@ -569,75 +694,8 @@ def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: 
             "DocLayout extraction unavailable (missing optional dependency 'doclayout_yolo'): %s",
             exc,
         )
-        return []
-    
-    try:
-        model = YOLOv10(model_path)
-    except Exception as e:
-        logger.error(f"❌ Failed to load model: {e}")
-        return []
-    
-    extracted = []
-    
-    try:
-        with fitz.open(str(pdf_path)) as doc:
-            for page_num in range(doc.page_count):
-                try:
-                    page = doc[page_num]
-                    pix = page.get_pixmap(dpi=150)
-                    img = cv2.imdecode(np.frombuffer(pix.tobytes(), np.uint8), cv2.IMREAD_COLOR)
-                    
-                    if img is None:
-                        logger.warning(f"Failed to decode page {page_num+1}")
-                        continue
-                    
-                    det_res = model.predict(img, imgsz=1024, conf=0.2)
-                    
-                    if not det_res or len(det_res) == 0:
-                        continue
-                    
-                    for det in det_res[0].boxes:
-                        if int(det.cls) == figure_class_id:
-                            x1, y1, x2, y2 = map(int, det.xyxy[0])
-                            
-                            # Validate bbox
-                            if x2 <= x1 or y2 <= y1:
-                                continue
-                            
-                            chart_img = img[y1:y2, x1:x2]
-                            
-                            if chart_img.size == 0:
-                                continue
-                            
-                            filename = f"{pdf_path.stem}_page{page_num+1:02d}_chart_{len(extracted)+1:02d}.png"
-                            path = output_dir / filename
-                            
-                            output_dir.mkdir(parents=True, exist_ok=True)
-                            cv2.imwrite(str(path), chart_img)
-                            
-                            extracted.append({
-                                'file_path': path,
-                                'page_num': page_num+1,
-                                'bbox': [x1, y1, x2, y2],
-                                'confidence': float(det.conf)
-                            })
-                            
-                            logger.info(f"✅ Extracted chart from page {page_num+1}: {filename}")
-                            
-                except Exception as e:
-                    logger.error(f"❌ Error processing page {page_num+1}: {e}")
-                    continue
-        
-        if not extracted:
-            logger.warning(f"⚠️ No charts detected with class ID {figure_class_id}. "
-                           f"Verify the model's class mappings.")
-            
-        return extracted
-        
-    except Exception as e:
-        logger.error(f"❌ Error processing PDF: {e}")
-        return []
-
+    logger.warning("extract_charts_with_doclayout is deprecated; use process_pdf_charts_optimized.")
+    return []
 
 
 # --- Função Principal para Testes ---

@@ -453,9 +453,38 @@ def _normalize_result_payload_for_gui(
         image_dimensions.setdefault("width", int(width))
         image_dimensions.setdefault("height", int(height))
     normalized["image_dimensions"] = image_dimensions
-    normalized["data_tab_model"] = build_data_tab_model(normalized)
-
     return normalized
+
+
+class ResolveWorker(QThread):
+    finished_signal = pyqtSignal(list)
+    status_signal = pyqtSignal(str)
+
+    def __init__(self, path, rdir, failure_callback=None, parent=None):
+        super().__init__(parent)
+        self.path = path
+        self.rdir = rdir
+        self.failure_callback = failure_callback
+        self._cancel_event = threading.Event()
+
+    def cancel(self):
+        self._cancel_event.set()
+
+    def run(self):
+        try:
+            from core.input_resolver import resolve_input_assets
+            result = resolve_input_assets(
+                input_path=self.path,
+                render_dir=self.rdir,
+                progress_callback=lambda msg: self.status_signal.emit(msg),
+                cancel_event=self._cancel_event,
+                failure_callback=self.failure_callback,
+            )
+            self.finished_signal.emit(result)
+        except Exception as exc:
+            logging.getLogger(__name__).error("PDF resolve worker unhandled error: %s", exc)
+            self.finished_signal.emit([])
+
 
 class OCRLoaderThread(QThread):
     """
@@ -2789,8 +2818,13 @@ Click to configure advanced options."""
         self.update_status(f"Input loaded. {len(self.image_files)} chart(s) found.")
 
     def _required_model_relative_paths(self) -> List[Path]:
+        from core.model_manager import ModelManager
+        optional_keys = ModelManager._OPTIONAL_MODELS
+
         required = [Path(MODELS_CONFIG.classification)]
-        required.extend(Path(model_name) for model_name in MODELS_CONFIG.detection.values())
+        for name, filename in MODELS_CONFIG.detection.items():
+            if name not in optional_keys:
+                required.append(Path(filename))
 
         ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "Paddle")
         if ocr_engine in {"Paddle", "Paddle_docs"}:
@@ -2972,8 +3006,6 @@ Click to configure advanced options."""
             self._finish_populate_file_list(assets)
 
     def _start_pdf_resolve_worker(self, input_path: Path):
-        from core.input_resolver import resolve_input_assets
-
         render_dir = self._get_render_dir(input_path)
 
         progress = QProgressDialog(
@@ -2982,36 +3014,20 @@ Click to configure advanced options."""
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(500)
 
-        class _ResolveWorker(QThread):
-            finished_signal = pyqtSignal(list)
-            status_signal = pyqtSignal(str)
-
-            def __init__(self, path, rdir, parent=None):
-                super().__init__(parent)
-                self.path = path
-                self.rdir = rdir
-
-            def run(self):
-                try:
-                    result = resolve_input_assets(
-                        input_path=self.path,
-                        render_dir=self.rdir,
-                        progress_callback=lambda msg: self.status_signal.emit(msg),
-                    )
-                    self.finished_signal.emit(result)
-                except Exception as exc:
-                    import logging
-                    logging.getLogger(__name__).error("PDF resolve worker unhandled error: %s", exc)
-                    self.finished_signal.emit([])
-
-        self._resolve_worker = _ResolveWorker(input_path, render_dir, parent=self)
+        self._pdf_failures = []
+        self._resolve_worker = ResolveWorker(
+            path=input_path,
+            rdir=render_dir,
+            failure_callback=lambda p, reason: self._pdf_failures.append((p, reason)),
+            parent=self,
+        )
         self._resolve_worker.status_signal.connect(
             lambda msg: progress.setLabelText(msg),
         )
         self._resolve_worker.finished_signal.connect(
             lambda assets: self._on_resolve_finished(assets, progress),
         )
-        progress.canceled.connect(self._resolve_worker.terminate)
+        progress.canceled.connect(self._resolve_worker.cancel)
         self._resolve_worker.start()
 
     def _on_resolve_finished(self, assets, progress):
@@ -3038,7 +3054,12 @@ Click to configure advanced options."""
         self._unique_stems = self._generate_unique_stems(self.image_files)
 
         if not self.image_files:
-            label = QLabel("No charts found")
+            failures = getattr(self, '_pdf_failures', [])
+            if failures:
+                detail = "\n".join(f"• {p.name}: {reason}" for p, reason in failures)
+            else:
+                detail = "No charts found"
+            label = QLabel(detail)
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
@@ -5195,64 +5216,66 @@ Click to configure advanced options."""
             QMessageBox.warning(self, "No Image", "No image is currently selected.")
             return
 
-        try:
-            self.update_status("🔄 Recalibrating scale...")
-            self._update_results_from_gui()
+        self.update_status("🔄 Recalibrating scale...")
+        self._update_results_from_gui()
+        self._pending_recalibration_previous = dict(self.current_analysis_result)
 
-            previous_result = dict(self.current_analysis_result)
+        provenance = self.current_analysis_result.get("_provenance")
+        if not isinstance(provenance, dict):
+            provenance = None
 
-            analysis_manager = self.context.analysis_manager
-            analysis_manager.set_models(self.context.model_manager)
-            models_dir = self.models_dir_edit.text().strip()
-            if models_dir:
-                self.context.model_manager.load_models(models_dir)
-            analysis_manager.set_advanced_settings(self.advanced_settings)
+        output_dir = self.output_path_edit.text().strip()
+        if not output_dir:
+            output_dir = str(self.project_root / "output")
 
-            provenance = self.current_analysis_result.get("_provenance")
-            if not isinstance(provenance, dict):
-                provenance = None
+        output_stem = getattr(self, "_unique_stems", {}).get(self.current_image_path)
 
-            output_dir = self.output_path_edit.text().strip()
-            if not output_dir:
-                output_dir = str(self.project_root / "output")
+        thread = ModernAnalysisThread(
+            image_path=self.current_image_path,
+            conf=self.conf_slider.value() / 10.0,
+            output_path=output_dir,
+            advanced_settings=self.advanced_settings,
+            models_dir=self.models_dir_edit.text().strip(),
+            context=self.context,
+            provenance=provenance,
+            output_stem=output_stem,
+            chart_type=chart_type,
+            parent=self,
+        )
+        thread.analysis_complete.connect(self._on_recalibration_complete)
+        thread.status_updated.connect(self.update_status)
+        self._recalibration_thread = thread
+        thread.start()
 
-            output_stem = getattr(self, "_unique_stems", {}).get(self.current_image_path)
-            refreshed = analysis_manager.run_single_analysis(
-                self.current_image_path,
-                self.conf_slider.value() / 10.0,
-                output_dir,
-                provenance=provenance,
-            )
-            if refreshed is None or self._is_error_result(refreshed):
-                message = refreshed.get("error") if isinstance(refreshed, dict) else "Reprocessing returned no result."
-                raise RuntimeError(str(message))
+    def _on_recalibration_complete(self, refreshed):
+        previous_result = getattr(self, '_pending_recalibration_previous', {})
+        if refreshed is None or self._is_error_result(refreshed):
+            message = refreshed.get("error") if isinstance(refreshed, dict) else "Reprocessing returned no result."
+            QMessageBox.critical(self, "Recalibration Failed", str(message))
+            self.update_status("❌ Recalibration failed")
+            return
 
-            normalized_refreshed = self._normalize_result_for_gui(refreshed)
-            self._preserve_manual_text_fields(previous_result, normalized_refreshed)
-            normalized_refreshed["data_tab_model"] = build_data_tab_model(normalized_refreshed)
-            self.current_analysis_result = normalized_refreshed
-            self._refresh_protocol_rows_from_result()
+        normalized_refreshed = self._normalize_result_for_gui(refreshed)
+        self._preserve_manual_text_fields(previous_result, normalized_refreshed)
+        normalized_refreshed["data_tab_model"] = build_data_tab_model(normalized_refreshed)
+        self.current_analysis_result = normalized_refreshed
+        self._refresh_protocol_rows_from_result()
 
-            if self.base_image_with_detections:
-                self._close_pil_image_safely(self.base_image_with_detections)
-                self.base_image_with_detections = None
+        if self.base_image_with_detections:
+            self._close_pil_image_safely(self.base_image_with_detections)
+            self.base_image_with_detections = None
 
-            self._update_ui_with_results()
-            self.update_displayed_image()
+        self._update_ui_with_results()
+        self.update_displayed_image()
 
-            r_squared = None
-            scale_info = self.current_analysis_result.get("scale_info", {})
-            if isinstance(scale_info, dict):
-                r_squared = scale_info.get("r_squared")
-            if isinstance(r_squared, (int, float)):
-                self.update_status(f"✅ Recalibrated (R² = {float(r_squared):.4f})")
-            else:
-                self.update_status("✅ Recalibrated")
-
-        except Exception as e:
-            error_msg = f"❌ Recalibration error: {str(e)}"
-            self.update_status(error_msg)
-            QMessageBox.critical(self, "Recalibration Error", error_msg)
+        r_squared = None
+        scale_info = self.current_analysis_result.get("scale_info", {})
+        if isinstance(scale_info, dict):
+            r_squared = scale_info.get("r_squared")
+        if isinstance(r_squared, (int, float)):
+            self.update_status(f"✅ Recalibrated (R² = {float(r_squared):.4f})")
+        else:
+            self.update_status("✅ Recalibrated")
 
     def resizeEvent(self, event):
         """Handle window resize events to adjust splitter sizes dynamically."""

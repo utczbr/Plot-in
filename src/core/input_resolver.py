@@ -28,6 +28,7 @@ class ResolvedAsset(NamedTuple):
     source_document: Optional[str]
     page_index: Optional[int]
     figure_id: Optional[str]
+    image_buffer: Optional[Any] = None
 
 
 def _make_figure_id(pdf_stem: str, page_num: int, img_index: int) -> str:
@@ -41,10 +42,12 @@ def _run_pdf_processor(
     high_res_dpi: int = 300,
     min_chart_width: int = 300,
     min_chart_height: int = 200,
+    cancel_event: Optional[Any] = None,
+    model_manager: Optional[Any] = None,
 ) -> List[dict]:
-    """Lazy-import wrapper around process_pdf_charts_optimized.
+    """Helper wrapping process_pdf_charts_optimized.
 
-    Catches ImportError/ModuleNotFoundError when core.pdf_processor (or one of
+    If process_pdf_charts_optimized (or fitz/numpy/cv2 imported by
     its dependencies) is unavailable, logs a clear message, and returns [].
     This is also the test patch target.
     """
@@ -63,6 +66,8 @@ def _run_pdf_processor(
         high_res_dpi=high_res_dpi,
         min_chart_width=min_chart_width,
         min_chart_height=min_chart_height,
+        cancel_event=cancel_event,
+        model_manager=model_manager,
     )
 
 
@@ -73,6 +78,9 @@ def _expand_pdf(
     min_chart_width: int = 300,
     min_chart_height: int = 200,
     progress_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
+    failure_callback: Optional[Callable[[Path, str], None]] = None,
+    model_manager: Optional[Any] = None,
 ) -> List[ResolvedAsset]:
     """Render all chart images from a PDF into render_dir.
 
@@ -89,10 +97,24 @@ def _expand_pdf(
             high_res_dpi=high_res_dpi,
             min_chart_width=min_chart_width,
             min_chart_height=min_chart_height,
+            cancel_event=cancel_event,
+            model_manager=model_manager,
         )
     except Exception as exc:
-        logger.error("PDF expansion failed for %s: %s", pdf_path, exc)
+        try:
+            from core.pdf_processor import PDFAccessError
+            is_pdf_acc = isinstance(exc, PDFAccessError)
+        except Exception:
+            is_pdf_acc = False
+
+        reason = str(exc) if is_pdf_acc else f"Failed to process: {exc}"
+        logger.error("PDF expansion failed for %s: %s", pdf_path, reason)
+        if failure_callback:
+            failure_callback(pdf_path, reason)
         return []
+
+    if not charts and failure_callback:
+        failure_callback(pdf_path, "Opened successfully but no chart-like content was found.")
 
     for chart in charts:
         high_res_path = chart.get('high_res_path')
@@ -111,6 +133,7 @@ def _expand_pdf(
             source_document=str(pdf_path),
             page_index=page_num,
             figure_id=figure_id,
+            image_buffer=chart.get('image_buffer'),
         ))
 
     logger.info("PDF %s expanded to %d chart(s)", pdf_path.name, len(assets))
@@ -125,6 +148,9 @@ def _resolve_single_file(
     min_chart_width: int,
     min_chart_height: int,
     progress_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
+    failure_callback: Optional[Callable[[Path, str], None]] = None,
+    model_manager: Optional[Any] = None,
 ) -> List[ResolvedAsset]:
     suffix = file_path.suffix.lower()
 
@@ -145,6 +171,8 @@ def _resolve_single_file(
         return _expand_pdf(
             file_path, render_dir, high_res_dpi,
             min_chart_width, min_chart_height, progress_callback,
+            cancel_event=cancel_event, failure_callback=failure_callback,
+            model_manager=model_manager,
         )
 
     logger.warning(
@@ -162,6 +190,8 @@ def _resolve_directory(
     min_chart_width: int,
     min_chart_height: int,
     progress_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
+    failure_callback: Optional[Callable[[Path, str], None]] = None,
 ) -> List[ResolvedAsset]:
     assets: List[ResolvedAsset] = []
 
@@ -191,6 +221,7 @@ def _resolve_directory(
             pdf_assets = _expand_pdf(
                 pdf, render_dir, high_res_dpi,
                 min_chart_width, min_chart_height, progress_callback,
+                cancel_event=cancel_event, failure_callback=failure_callback,
             )
             assets.extend(pdf_assets)
 
@@ -212,6 +243,8 @@ def resolve_input_assets(
     min_chart_width: int = 300,
     min_chart_height: int = 200,
     progress_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
+    failure_callback: Optional[Callable[[Path, str], None]] = None,
 ) -> List[ResolvedAsset]:
     """Resolve an input path into a flat, ordered list of ResolvedAsset objects.
 
@@ -229,6 +262,10 @@ def resolve_input_assets(
         Passed through to process_pdf_charts_optimized for PDF rendering.
     progress_callback:
         Optional callable receiving status strings (for GUI progress display).
+    cancel_event:
+        Optional threading.Event to cancel long-running PDF extraction.
+    failure_callback:
+        Optional callable receiving (file_path, reason) on PDF extraction failures.
 
     Returns
     -------
@@ -245,14 +282,16 @@ def resolve_input_assets(
         return _resolve_single_file(
             input_path, render_dir, input_type,
             high_res_dpi, min_chart_width, min_chart_height,
-            progress_callback,
+            progress_callback, cancel_event=cancel_event,
+            failure_callback=failure_callback,
         )
 
     if input_path.is_dir():
         return _resolve_directory(
             input_path, render_dir, input_type,
             high_res_dpi, min_chart_width, min_chart_height,
-            progress_callback,
+            progress_callback, cancel_event=cancel_event,
+            failure_callback=failure_callback,
         )
 
     logger.error("Input path is neither a file nor a directory: %s", input_path)

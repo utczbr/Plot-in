@@ -104,9 +104,11 @@ class ModelsConfig:
     detection_output_type: Dict[str, str]
     detection_keypoints: Dict[str, int]
     ocr: Dict[str, str]
+    chart_detector: str = 'classification.onnx'
 
 MODELS_CONFIG = ModelsConfig(
     classification='classifier.onnx',
+    chart_detector='classification.onnx',
     detection={
         'bar': 'detect_bar.onnx',
         'box': 'detect_box.onnx',

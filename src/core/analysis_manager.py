@@ -167,7 +167,8 @@ class AnalysisManager:
                             provenance: Optional[Dict[str, Any]] = None,
                             manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                             output_stem: Optional[str] = None,
-                            chart_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                            chart_type: Optional[str] = None,
+                            image_buffer: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         """Run analysis on a single image.
 
         chart_type: when set (e.g. re-extracting after manual bbox edits),
@@ -179,16 +180,21 @@ class AnalysisManager:
         if not pipeline:
             return None
 
-        result = pipeline.run(
-            image_input=Path(image_path),
-            output_dir=output_path,
-            annotated=True, # GUI usually expects annotated
-            advanced_settings=self._prepare_settings_for_pipeline(),
-            provenance=provenance,
-            manual_detections=manual_detections,
-            output_stem=output_stem,
-            chart_type=chart_type,
-        )
+        try:
+            result = pipeline.run(
+                image_input=Path(image_path),
+                output_dir=output_path,
+                annotated=True, # GUI usually expects annotated
+                advanced_settings=self._prepare_settings_for_pipeline(),
+                provenance=provenance,
+                manual_detections=manual_detections,
+                output_stem=output_stem,
+                chart_type=chart_type,
+                image_buffer=image_buffer,
+            )
+        except Exception as e:
+            self.logger.error(f"Single analysis failed for {image_path}: {e}", exc_info=True)
+            return {'error': str(e)}
 
         if result:
             self.data_manager.store_analysis_result(image_path, result)
@@ -213,7 +219,7 @@ class AnalysisManager:
         from core.input_resolver import resolve_input_assets, asset_provenance_dict
 
         render_dir = Path(output_path) / "pdf_renders"
-        assets = resolve_input_assets(input_path=input_dir, render_dir=render_dir)
+        assets = resolve_input_assets(input_path=input_dir, render_dir=render_dir, cancel_event=cancel_event)
         total = len(assets)
         processed = 0
 
@@ -237,6 +243,7 @@ class AnalysisManager:
                     advanced_settings=self._prepare_settings_for_pipeline(),
                     provenance=prov,
                     output_stem=output_stem,
+                    image_buffer=getattr(asset, 'image_buffer', None),
                 )
                 processed += 1
             except Exception as e:

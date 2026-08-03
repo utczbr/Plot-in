@@ -103,7 +103,8 @@ class ChartAnalysisPipeline(BasePipeline):
             provenance: Optional[Dict[str, Any]] = None,
             manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
             output_stem: Optional[str] = None,
-            chart_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+            chart_type: Optional[str] = None,
+            image_buffer: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
         """
         Run the analysis pipeline on a single image.
         
@@ -117,6 +118,7 @@ class ChartAnalysisPipeline(BasePipeline):
             chart_type: Optional already-confirmed chart type. When provided
                 (typically during a manual bbox re-extract), classification is
                 skipped entirely and only this single chart type is used.
+            image_buffer: Optional in-memory BGR numpy array (skips cv2.imread)
             
         Returns:
             Dictionary with analysis results or None on failure
@@ -132,7 +134,10 @@ class ChartAnalysisPipeline(BasePipeline):
             )
         
         # 1. Load Image
-        img = cv2.imread(str(image_path))
+        if image_buffer is not None:
+            img = image_buffer
+        else:
+            img = cv2.imread(str(image_path))
         if img is None:
             self.logger.error(f"Could not read image: {image_path}")
             return None
@@ -165,6 +170,22 @@ class ChartAnalysisPipeline(BasePipeline):
         # detection model to run, so we skip the extraction loop and return
         # a lightweight result that the GUI can display with a clear
         # "Unknown — please classify manually" indicator.
+        if chart_types == ['unknown']:
+            # Fallback layout region recovery: check if image is a full-page canvas containing a chart region
+            try:
+                from core.pdf_processor import _find_chart_regions_cv2
+                crops = _find_chart_regions_cv2(img)
+                if crops:
+                    self.logger.info("Found %d layout chart region(s) on unclassified image; attempting crop recovery...", len(crops))
+                    best_bbox, crop_img = crops[0]
+                    rescue_types = self._classify_chart_types(crop_img, advanced_settings, top_k=2)
+                    if rescue_types and rescue_types != ['unknown']:
+                        self.logger.info("Crop recovery successfully classified region as: %s", rescue_types)
+                        img = crop_img
+                        chart_types = rescue_types
+            except Exception as exc:
+                self.logger.debug("Crop recovery check skipped: %s", exc)
+
         if chart_types == ['unknown']:
             self.logger.info(
                 "Chart type is 'unknown' (low classifier confidence). "
@@ -362,73 +383,18 @@ class ChartAnalysisPipeline(BasePipeline):
         return primary_final_result
 
     def _classify_chart_types(self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2) -> List[str]:
-        """Determines the types of the chart.
-
-        Primary classification is done by the YOLO26s-cls classification model
-        (``classifier.onnx``), which outputs softmax probabilities for 8
-        specific chart classes.  When 'heatmap' is absent from its top-k output
-        **and** the top prediction confidence is below 0.70, we run a
-        lightweight secondary probe with the heatmap detection model.
-
-        The rescue probe is skipped at higher confidences because the dedicated
-        classifier does not suffer from the bar/heatmap confusion that the
-        old detection-based model had.
-        """
-        model = self.models_manager.get_model('classification')
-        if not model:
-            self.logger.error("Classification model missing")
-            return ['bar']  # Default
-
+        """Determines the types of the chart using the weighted multi-model ensemble."""
         try:
-            conf_threshold = self._resolve_float_setting(
-                advanced_settings,
-                keys=('classification_confidence',),
-                default=0.25,
-            )
-            dets = run_inference_on_image(
-                model,
-                img,
-                conf_threshold,
-                CLASS_MAP_CLASSIFICATION,
-                input_size=(224, 224),
-                model_output_type='classification',
-            )
-            if dets:
-                types = []
-                top_conf = None
-                for det in sorted(dets, key=lambda x: x['conf'], reverse=True):
-                    candidate = CLASS_MAP_CLASSIFICATION.get(det['cls'], 'bar')
-                    if top_conf is None:
-                        top_conf = float(det['conf'])
-                    types.append(normalize_chart_type(candidate))
-                    if len(types) >= top_k:
-                        break
-                if types:
-                    if top_conf is not None and top_conf < 0.5:
-                        # Below-confidence classifications are too unreliable to
-                        # act on automatically; flag as 'unknown' so the GUI can
-                        # surface it distinctly and the user can classify/annotate
-                        # manually instead of getting a silently wrong guess.
-                        self.logger.info(
-                            f"Top chart-type confidence {top_conf:.2f} is below the 50%% "
-                            f"threshold; classifying as 'unknown'."
-                        )
-                        return ['unknown']
-                    # ── Heatmap rescue ────────────────────────────────────────────
-                    # Only run the rescue probe when the classifier is uncertain
-                    # (top_conf < 0.70).  The YOLO26s-cls classifier is a
-                    # dedicated classification model that reliably distinguishes
-                    # heatmaps from bars; at high confidence the rescue probe
-                    # causes false positives (bar charts contain rectangular
-                    # regions that the heatmap lattice model detects as "cells").
-                    if 'heatmap' not in types and (top_conf is not None and top_conf < 0.70):
-                        types = self._heatmap_rescue(img, types, advanced_settings)
-                    return types
-                self.logger.warning("Classification produced no results; defaulting to 'bar'.")
-        except Exception as e:
-            self.logger.error(f"Classification error: {e}")
+            from core.ensemble_classifier import WeightedChartClassifier
+            ensemble = WeightedChartClassifier(self.models_manager)
+            types, top_conf = ensemble.classify_image_with_conf(img, advanced_settings=advanced_settings, top_k=top_k)
 
-        return ['bar']
+            if types and types != ['unknown'] and 'heatmap' not in types and (top_conf is not None and top_conf < 0.70):
+                types = self._heatmap_rescue(img, types, advanced_settings, top_conf=top_conf)
+            return types
+        except Exception as e:
+            self.logger.error(f"Classification inference error: {e}", exc_info=True)
+            return ['unknown']
 
     # Minimum confidence for the heatmap macro model's ``chart`` detection to
     # trigger a rescue override (when no ``color_bar_region`` is found).
@@ -441,6 +407,7 @@ class ChartAnalysisPipeline(BasePipeline):
         img: np.ndarray,
         current_types: List[str],
         advanced_settings: Optional[Dict],
+        top_conf: Optional[float] = None,
     ) -> List[str]:
         """Run a heatmap probe using the Macro detection model.
 
@@ -474,6 +441,12 @@ class ChartAnalysisPipeline(BasePipeline):
                     except (ValueError, TypeError):
                         pass
 
+            chart_threshold = self._resolve_float_setting(
+                advanced_settings,
+                keys=('heatmap_rescue_chart_conf',),
+                default=self._HEATMAP_RESCUE_CHART_CONF,
+            )
+
             macro_dets = run_inference_on_image(
                 macro_model, img, conf, CLASS_MAP_HEATMAP_MACRO,
                 nms_threshold=0.45,
@@ -489,21 +462,36 @@ class ChartAnalysisPipeline(BasePipeline):
                 elif cls_name == 'chart' and det_conf_val > best_chart_conf:
                     best_chart_conf = det_conf_val
 
-            should_rescue = has_colorbar or best_chart_conf >= self._HEATMAP_RESCUE_CHART_CONF
+            # Require colorbar presence to rescue to heatmap. Merely detecting a generic
+            # chart frame without a colorbar is insufficient and causes false positives on line/bar charts.
+            if not has_colorbar and best_chart_conf >= chart_threshold:
+                cb_model = self.models_manager.get_model('heatmap_colorbar')
+                if cb_model:
+                    try:
+                        from core.class_maps import CLASS_MAP_HEATMAP_COLORBAR
+                        cb_dets = run_inference_on_image(cb_model, img, conf, CLASS_MAP_HEATMAP_COLORBAR)
+                        if cb_dets:
+                            has_colorbar = True
+                    except Exception:
+                        pass
+
+            should_rescue = has_colorbar
 
             if should_rescue:
-                reason = (
-                    f"color_bar_region detected"
-                    if has_colorbar
-                    else f"chart region conf={best_chart_conf:.2f}"
-                )
                 self.logger.info(
-                    "Heatmap rescue (macro): %s — overriding '%s' → 'heatmap'.",
-                    reason,
-                    current_types[0] if current_types else '?',
+                    "Heatmap rescue override: classifier_top_conf=%.2f (types=%s) -> macro_chart_conf=%.2f, colorbar=%s",
+                    top_conf if top_conf is not None else float('nan'),
+                    current_types,
+                    best_chart_conf,
+                    has_colorbar,
                 )
                 rescued = ['heatmap'] + [t for t in current_types if t != 'heatmap']
                 return rescued[:2]
+            else:
+                self.logger.info(
+                    "Heatmap rescue skipped: colorbar=%s, macro_chart_conf=%.2f (keeping types=%s)",
+                    has_colorbar, best_chart_conf, current_types,
+                )
         except Exception as exc:
             self.logger.warning("Heatmap rescue probe failed: %s", exc)
 

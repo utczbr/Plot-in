@@ -129,7 +129,7 @@ class BaseCalibration(ABC):
         values_list = []
         weights_list = []
 
-        logger.debug(f"🔍 ADAPTIVE THRESHOLD CALIBRATION (axis={axis_type})")
+        logger.debug(f"ADAPTIVE THRESHOLD CALIBRATION (axis={axis_type})")
         logger.debug(f"   ├─ Initial threshold: {confidence_threshold:.2f}")
         logger.debug(f"   ├─ Min points required: {min_points_required}")
         logger.debug(f"   └─ Total labels provided: {len(scale_labels)}")

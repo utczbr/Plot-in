@@ -319,3 +319,71 @@ class TestPdfProcessorImportErrorPath:
             "PDF support unavailable (missing dependency while importing core.pdf_processor)"
             in caplog.text
         )
+
+
+class TestUpfrontClassificationAndDirectoryForwarding:
+    @patch("core.input_resolver._run_pdf_processor")
+    def test_directory_forward_model_manager(self, mock_run_pdf, tmp_path):
+        from core.input_resolver import _resolve_directory
+        render_dir = tmp_path / "renders"
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 test")
+
+        mock_chart = {
+            "high_res_path": tmp_path / "chart1.png",
+            "page_num": 1,
+            "image_index": 1,
+            "image_buffer": None,
+        }
+        (tmp_path / "chart1.png").write_bytes(b"png data")
+        mock_run_pdf.return_value = [mock_chart]
+
+        mock_mm = MagicMock()
+        _resolve_directory(
+            dir_path=tmp_path,
+            render_dir=render_dir,
+            input_type="auto",
+            high_res_dpi=200,
+            min_chart_width=300,
+            min_chart_height=200,
+            model_manager=mock_mm,
+        )
+
+        mock_run_pdf.assert_called_once()
+        assert mock_run_pdf.call_args[1].get("model_manager") == mock_mm
+
+    @patch("core.input_resolver._run_pdf_processor")
+    @patch("core.ensemble_classifier.WeightedChartClassifier")
+    def test_upfront_classification_attaches_confidence(self, mock_classifier_cls, mock_run_pdf, tmp_path):
+        from core.input_resolver import _expand_pdf
+        render_dir = tmp_path / "renders"
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 test")
+
+        chart_path = tmp_path / "chart1.png"
+        chart_path.write_bytes(b"fake png")
+        import numpy as np
+        mock_run_pdf.return_value = [{
+            "high_res_path": chart_path,
+            "page_num": 1,
+            "image_index": 1,
+            "image_buffer": np.zeros((50, 50, 3), dtype=np.uint8),
+        }]
+
+        mock_classifier_inst = MagicMock()
+        mock_classifier_inst.classify_image_with_conf.return_value = (["bar"], 0.45)
+        mock_classifier_cls.return_value = mock_classifier_inst
+
+        mock_mm = MagicMock()
+        assets = _expand_pdf(
+            pdf_path=pdf_file,
+            render_dir=render_dir,
+            model_manager=mock_mm,
+        )
+
+        assert len(assets) == 1
+        conf = assets[0].confidence_info
+        assert conf is not None
+        assert conf["classification"] == 0.45
+        assert conf["is_low_confidence"] is True
+        assert conf["source"] == "preliminary_classification_only"

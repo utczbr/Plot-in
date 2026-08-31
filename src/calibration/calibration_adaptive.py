@@ -63,7 +63,7 @@ class RANSACCalibration(BaseCalibration):
     
     def calibrate(self, scale_labels: List[Dict], axis_type: str) -> Optional[CalibrationResult]:
         """Perform RANSAC calibration with adaptive threshold and detailed debugging."""
-        logger.info(f"📊 RANSAC CALIBRATION ATTEMPT (axis={axis_type}):")
+        logger.info(f"RANSAC CALIBRATION ATTEMPT (axis={axis_type}):")
         logger.info(f"   ├─ Input labels: {len(scale_labels)}")
         logger.info(f"   └─ Min inliers required: {self.min_inliers}")
 

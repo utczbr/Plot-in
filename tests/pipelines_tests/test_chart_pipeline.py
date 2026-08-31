@@ -80,8 +80,8 @@ class TestChartPipeline(unittest.TestCase):
             {'cls': 4, 'conf': 0.97},  # histogram
         ]
 
-        chart_type = self.pipeline._classify_chart_types(np.zeros((10, 10, 3), dtype=np.uint8))[0]
-        self.assertEqual(chart_type, 'histogram')
+        types, conf = self.pipeline._classify_chart_types(np.zeros((10, 10, 3), dtype=np.uint8))
+        self.assertEqual(types[0], 'histogram')
 
     @patch('pipelines.chart_pipeline.MODELS_CONFIG', new=SimpleNamespace(
         detection_output_type={'pie': 'pose'},

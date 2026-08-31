@@ -95,7 +95,7 @@ from services.service_container import create_service_container
 
 # Import from new modular structure
 from core.model_manager import ModelManager
-from core.config import MODE_CONFIGS, MODELS_CONFIG
+from models.config import MODE_CONFIGS, MODELS_CONFIG
 from core.install_profile import (
     apply_profile_environment,
     load_install_profile,
@@ -453,18 +453,63 @@ def _normalize_result_payload_for_gui(
         image_dimensions.setdefault("width", int(width))
         image_dimensions.setdefault("height", int(height))
     normalized["image_dimensions"] = image_dimensions
+
+    from visual.data_tab_schema import build_data_tab_model
+    data_model = normalized.get("data_tab_model")
+    if not isinstance(data_model, dict):
+        data_model = build_data_tab_model(normalized)
+        normalized["data_tab_model"] = data_model
+
     return normalized
+
+
+def partition_assets_by_confidence(
+    assets: List[Any],
+    benchmark_cache: Dict[str, str],
+) -> Tuple[List[int], List[int]]:
+    """Partition assets into (normal_indices, low_conf_indices) for exclusive sidebar display."""
+    from services.confidence_extractor import extract_confidence_from_analysis_json
+
+    normal_indices: List[int] = []
+    low_conf_indices: List[int] = []
+
+    for i, asset in enumerate(assets):
+        file_path = str(getattr(asset, 'image_path', asset))
+        is_low = False
+        has_confidence = False
+
+        # 1. Real post-analysis confidence from benchmark_cache JSON
+        json_path = benchmark_cache.get(file_path)
+        if json_path:
+            conf_info = extract_confidence_from_analysis_json(json_path)
+            if conf_info is not None:
+                has_confidence = True
+                is_low = bool(conf_info.get("is_low_confidence", False))
+
+        # 2. Preliminary confidence_info attached to asset
+        if not has_confidence and hasattr(asset, 'confidence_info') and asset.confidence_info:
+            conf_dict = asset.confidence_info
+            has_confidence = True
+            is_low = bool(conf_dict.get("is_low_confidence", False))
+
+        if is_low:
+            low_conf_indices.append(i)
+        else:
+            normal_indices.append(i)
+
+    return normal_indices, low_conf_indices
 
 
 class ResolveWorker(QThread):
     finished_signal = pyqtSignal(list)
     status_signal = pyqtSignal(str)
 
-    def __init__(self, path, rdir, failure_callback=None, parent=None):
+    def __init__(self, path, rdir, failure_callback=None, model_manager=None, parent=None):
         super().__init__(parent)
         self.path = path
         self.rdir = rdir
         self.failure_callback = failure_callback
+        self.model_manager = model_manager
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -479,6 +524,7 @@ class ResolveWorker(QThread):
                 progress_callback=lambda msg: self.status_signal.emit(msg),
                 cancel_event=self._cancel_event,
                 failure_callback=self.failure_callback,
+                model_manager=self.model_manager,
             )
             self.finished_signal.emit(result)
         except Exception as exc:
@@ -536,7 +582,9 @@ class ModernAnalysisThread(QThread):
     progress_updated = pyqtSignal(int)
 
     def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None, chart_type=None):
-        super().__init__(parent)
+        from PyQt6.QtCore import QObject
+        qparent = parent if isinstance(parent, QObject) else None
+        super().__init__(qparent)
         self.output_stem = output_stem
         self.image_path = image_path
         self.conf = conf
@@ -1427,6 +1475,48 @@ Click to configure advanced options."""
         self.file_list_scroll.setWidget(self.file_list_frame)
         left_layout.addWidget(self.file_list_scroll, stretch=1)
         
+        # === LOW CONFIDENCE (< 60%) COLLAPSIBLE SECTION ===
+        self.low_conf_container = QWidget()
+        low_conf_container_layout = QVBoxLayout(self.low_conf_container)
+        low_conf_container_layout.setContentsMargins(0, 4, 0, 0)
+        low_conf_container_layout.setSpacing(4)
+
+        self.low_conf_header_btn = QPushButton("LOW CONFIDENCE (<60%) [0] ▸")
+        self.low_conf_header_btn.setProperty("sectionHeader", True)
+        self.low_conf_header_btn.setFlat(True)
+        self.low_conf_header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.low_conf_header_btn.setStyleSheet(
+            "QPushButton {"
+            "    text-align: left;"
+            "    padding: 6px 8px;"
+            "    border: 1px solid #3c3c3c;"
+            "    border-radius: 4px;"
+            "    background-color: #252526;"
+            "    font-weight: bold;"
+            "    font-size: 9px;"
+            "    color: #e5c07b;"
+            "}"
+            "QPushButton:hover {"
+            "    background-color: #2d2d30;"
+            "    border-color: #007acc;"
+            "}"
+        )
+        self.low_conf_header_btn.clicked.connect(self.toggle_low_confidence_tab)
+        low_conf_container_layout.addWidget(self.low_conf_header_btn)
+
+        self.low_conf_scroll = QScrollArea()
+        self.low_conf_scroll.setWidgetResizable(True)
+        self.low_conf_scroll.setMaximumHeight(180)
+        self.low_conf_scroll.setVisible(False)  # Collapsed by default
+        self.low_conf_frame = QWidget()
+        self.low_conf_layout = QVBoxLayout(self.low_conf_frame)
+        self.low_conf_layout.setSpacing(1)
+        self.low_conf_layout.setContentsMargins(2, 2, 2, 2)
+        self.low_conf_scroll.setWidget(self.low_conf_frame)
+        low_conf_container_layout.addWidget(self.low_conf_scroll)
+
+        left_layout.addWidget(self.low_conf_container)
+
         self.main_splitter_widget.addWidget(self.left_panel)
         
         # === RIGHT PANEL ===
@@ -3008,6 +3098,13 @@ Click to configure advanced options."""
     def _start_pdf_resolve_worker(self, input_path: Path):
         render_dir = self._get_render_dir(input_path)
 
+        # Pre-load models eagerly so upfront classification works on first PDF load in session
+        models_dir = self.models_dir_edit.text() if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else str(self.project_root / "models")
+        try:
+            self.context.model_manager.load_models(models_dir)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Pre-loading models for PDF resolution failed: %s", exc)
+
         progress = QProgressDialog(
             "Extracting charts from PDFs...", "Cancel", 0, 0, self,
         )
@@ -3019,6 +3116,7 @@ Click to configure advanced options."""
             path=input_path,
             rdir=render_dir,
             failure_callback=lambda p, reason: self._pdf_failures.append((p, reason)),
+            model_manager=self.context.model_manager,
             parent=self,
         )
         self._resolve_worker.status_signal.connect(
@@ -3048,10 +3146,20 @@ Click to configure advanced options."""
         return unique_stems
 
     def _finish_populate_file_list(self, assets):
-        """Populate the file list UI from resolved assets."""
+        """Populate the file list UI from resolved assets with exclusive low-confidence partitioning."""
         self._resolved_assets = assets
         self.image_files = [str(a.image_path) for a in assets]
         self._unique_stems = self._generate_unique_stems(self.image_files)
+
+        # Clear existing items in both file_list_layout and low_conf_layout
+        for i in reversed(range(self.file_list_layout.count())):
+            child = self.file_list_layout.takeAt(i)
+            if child.widget():
+                child.widget().deleteLater()
+        for i in reversed(range(self.low_conf_layout.count())):
+            child = self.low_conf_layout.takeAt(i)
+            if child.widget():
+                child.widget().deleteLater()
 
         if not self.image_files:
             failures = getattr(self, '_pdf_failures', [])
@@ -3066,11 +3174,9 @@ Click to configure advanced options."""
 
         # Pre-warm the benchmark cache by scanning ALL *_analysis.json files in the
         # output directory and reading their embedded 'original_image_path' field.
-        # This is order-independent and immune to filename collisions.
         self._benchmark_result_cache.clear()
         output_path = Path(self.output_path_edit.text())
         if output_path.is_dir():
-            # Build a reverse map: absolute source image path -> json file path
             abs_path_to_json: dict = {}
             for json_file in sorted(output_path.glob("*_analysis.json")):
                 try:
@@ -3080,17 +3186,23 @@ Click to configure advanced options."""
                     if orig:
                         abs_path_to_json[str(Path(orig).resolve())] = str(json_file)
                 except Exception:
-                    pass  # Corrupt or old JSON without the field — skip
+                    pass
 
             for file_path in self.image_files:
                 abs_path = str(Path(file_path).resolve())
                 if abs_path in abs_path_to_json:
                     self._benchmark_result_cache[file_path] = abs_path_to_json[abs_path]
 
-        self._file_list_buttons = []
+        normal_indices, low_conf_indices = partition_assets_by_confidence(
+            self._resolved_assets, self._benchmark_result_cache
+        )
+
+        self._file_list_buttons = {}
         image_icon_px = self._scaled_icon_px(13)
 
-        for i, file_path in enumerate(self.image_files):
+        # 1. Populate normal file list
+        for i in normal_indices:
+            file_path = self.image_files[i]
             base_name = os.path.basename(file_path)
             display_name = base_name if len(base_name) <= 25 else base_name[:22] + "..."
             btn = QPushButton(display_name)
@@ -3102,30 +3214,91 @@ Click to configure advanced options."""
             btn.setIconSize(QSize(image_icon_px, image_icon_px))
             btn.setFlat(True)
 
-            # Enhanced tooltip for PDF-sourced entries
             asset = self._resolved_assets[i]
             base_tooltip = f"[PDF p.{asset.page_index}] {base_name}" if asset.source_document else base_name
             btn.setToolTip(base_tooltip + (" ✓ Results cached" if is_cached else ""))
 
             btn_style = (
                 "QPushButton {"
-                    "    text-align: left;"
-                    "    padding: 4px 8px;"
-                    "    border: 1px solid #454545;"
-                    "    border-radius: 3px;"
-                    "    margin: 1px;"
-                    "    font-size: 9px;"
-                    "    color: #d4d4d4;"
+                "    text-align: left;"
+                "    padding: 4px 8px;"
+                "    border: 1px solid #454545;"
+                "    border-radius: 3px;"
+                "    margin: 1px;"
+                "    font-size: 9px;"
+                "    color: #d4d4d4;"
                 "}"
                 "QPushButton:hover {"
-                    "    background-color: #2f2f2f;"
-                    "    border-color: #007acc;"
+                "    background-color: #2f2f2f;"
+                "    border-color: #007acc;"
                 "}"
             )
             btn.setStyleSheet(btn_style)
             btn.clicked.connect(lambda checked, idx=i: self.load_image_by_index(idx))
-            self._file_list_buttons.append(btn)
+            self._file_list_buttons[i] = btn
             self.file_list_layout.addWidget(btn)
+
+        # 2. Populate low-confidence list
+        self._low_conf_count = len(low_conf_indices)
+        arrow = "▾" if self.low_conf_scroll.isVisible() else "▸"
+        self.low_conf_header_btn.setText(f"LOW CONFIDENCE (<60%) [{self._low_conf_count}] {arrow}")
+
+        if not low_conf_indices:
+            placeholder = QLabel("No low-confidence items")
+            placeholder.setStyleSheet("QLabel { color: #888888; font-size: 9px; padding: 4px; }")
+            self.low_conf_layout.addWidget(placeholder)
+        else:
+            for i in low_conf_indices:
+                file_path = self.image_files[i]
+                asset = self._resolved_assets[i]
+                base_name = os.path.basename(file_path)
+
+                # Get confidence percentages for tooltip / button label
+                conf_pct = 0.0
+                json_path = self._benchmark_result_cache.get(file_path)
+                if json_path:
+                    from services.confidence_extractor import extract_confidence_from_analysis_json
+                    c_info = extract_confidence_from_analysis_json(json_path)
+                    if c_info:
+                        conf_pct = c_info["average"] * 100.0
+                elif hasattr(asset, 'confidence_info') and asset.confidence_info:
+                    conf_pct = asset.confidence_info.get('average', 0.0) * 100.0
+
+                display_name = f"[{conf_pct:.0f}%] {base_name}" if conf_pct > 0 else base_name
+                if len(display_name) > 26:
+                    display_name = display_name[:23] + "..."
+
+                btn = QPushButton(display_name)
+                icon_name = "warning-solid.svg" if hasattr(self, 'has_icon') and self.has_icon("warning-solid.svg") else "image-solid-full.svg"
+                btn.setIcon(self.get_icon(icon_name, color="#e5c07b", size=image_icon_px))
+                btn.setIconSize(QSize(image_icon_px, image_icon_px))
+                btn.setFlat(True)
+
+                is_cached = file_path in self._benchmark_result_cache
+                base_tooltip = f"[PDF p.{asset.page_index}] {base_name}" if asset.source_document else base_name
+                if conf_pct > 0:
+                    base_tooltip += f"\nConfidence: {conf_pct:.1f}%"
+                btn.setToolTip(base_tooltip + (" ✓ Results cached" if is_cached else ""))
+
+                btn.setStyleSheet(
+                    "QPushButton {"
+                    "    text-align: left;"
+                    "    padding: 4px 8px;"
+                    "    border: 1px solid #5a4520;"
+                    "    border-radius: 3px;"
+                    "    margin: 1px;"
+                    "    font-size: 9px;"
+                    "    color: #e5c07b;"
+                    "    background-color: #1e1910;"
+                    "}"
+                    "QPushButton:hover {"
+                    "    background-color: #2b2314;"
+                    "    border-color: #e5c07b;"
+                    "}"
+                )
+                btn.clicked.connect(lambda checked, idx=i: self.load_image_by_index(idx))
+                self._file_list_buttons[i] = btn
+                self.low_conf_layout.addWidget(btn)
 
     def start_batch_analysis_thread(self):
         if not self.validate_paths():
@@ -3183,6 +3356,13 @@ Click to configure advanced options."""
         # Refresh cache so newly analysed images show check icons immediately.
         self._refresh_cache_from_output_dir()
         self._refresh_file_list_button_states()
+        self.refresh_low_confidence_tab()
+
+        # Automatically load results into GUI for current image
+        if self.image_files:
+            target_idx = self.current_image_index if 0 <= self.current_image_index < len(self.image_files) else 0
+            self.load_image_by_index(target_idx)
+
         QMessageBox.information(self, "Batch Complete", message)
 
     # ── Benchmark result cache helpers ────────────────────────────────────────
@@ -3196,11 +3376,6 @@ Click to configure advanced options."""
             self.current_image_path = image_path
             self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
         except Exception as e:
-            # The cached JSON pointed at an image file that is now missing,
-            # moved, or unreadable (e.g. output/render folder changed between
-            # sessions). Rather than leaving the UI stuck on a bare error
-            # every time this file is clicked, drop the stale cache entry and
-            # fall back to re-running analysis fresh.
             logging.getLogger(__name__).warning(
                 "Cached image %s could not be loaded (%s) — invalidating cache "
                 "entry and re-running analysis.", image_path, e,
@@ -3249,9 +3424,9 @@ Click to configure advanced options."""
 
     def _update_file_list_button_cached_state(self, index: int, cached: bool) -> None:
         """Update icon and tooltip on a single file-list button to reflect cached/uncached state."""
-        if not hasattr(self, "_file_list_buttons") or not self._file_list_buttons:
+        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
             return
-        if index < 0 or index >= len(self._file_list_buttons):
+        if index not in self._file_list_buttons:
             return
         btn = self._file_list_buttons[index]
         icon_px = self._scaled_icon_px(13)
@@ -3292,13 +3467,25 @@ Click to configure advanced options."""
 
     def _refresh_file_list_button_states(self) -> None:
         """Update all file-list button icons to reflect the current cache state."""
-        if not hasattr(self, "_file_list_buttons") or not self._file_list_buttons:
+        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
             return
         for i, file_path in enumerate(self.image_files):
-            if i >= len(self._file_list_buttons):
-                break
-            is_cached = file_path in self._benchmark_result_cache
-            self._update_file_list_button_cached_state(i, is_cached)
+            if i in self._file_list_buttons:
+                is_cached = file_path in self._benchmark_result_cache
+                self._update_file_list_button_cached_state(i, is_cached)
+
+    def toggle_low_confidence_tab(self):
+        """Toggle the collapsed/expanded state of the low-confidence sidebar tab."""
+        is_visible = self.low_conf_scroll.isVisible()
+        self.low_conf_scroll.setVisible(not is_visible)
+        count = getattr(self, '_low_conf_count', 0)
+        arrow = "▾" if not is_visible else "▸"
+        self.low_conf_header_btn.setText(f"⚠️ LOW CONFIDENCE (<60%) [{count}] {arrow}")
+
+    def refresh_low_confidence_tab(self):
+        """Refresh the low-confidence sidebar tab using cached analysis JSON data."""
+        if hasattr(self, '_resolved_assets') and self._resolved_assets:
+            self._finish_populate_file_list(self._resolved_assets)
 
     def load_image_by_index(self, index):
         """Load image with proper concurrency control."""
@@ -3390,7 +3577,10 @@ Click to configure advanced options."""
         gc.collect()
 
     def highlight_selected_file(self, selected_index):
-        selected_style = (
+        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
+            return
+
+        selected_style_normal = (
             "QPushButton {"
             "    text-align: left;"
             "    padding: 4px 8px;"
@@ -3403,29 +3593,71 @@ Click to configure advanced options."""
             "    font-size: 9px;"
             "}"
         )
-        normal_style = (
+        normal_style_normal = (
             "QPushButton {"
             "    text-align: left;"
             "    padding: 4px 8px;"
-            "    border: 1px solid #555555;"
+            "    border: 1px solid #454545;"
             "    border-radius: 3px;"
             "    margin: 1px;"
-            "    background-color: #404040;"
-            "    color: #ffffff;"
             "    font-size: 9px;"
+            "    color: #d4d4d4;"
             "}"
             "QPushButton:hover {"
-            "    background-color: #4a4a4a;"
+            "    background-color: #2f2f2f;"
+            "    border-color: #007acc;"
             "}"
         )
-        
-        for i in range(self.file_list_layout.count()):
-            widget = self.file_list_layout.itemAt(i).widget()
-            if isinstance(widget, QPushButton):
-                if i == selected_index:
-                    widget.setStyleSheet(selected_style)
-                else:
-                    widget.setStyleSheet(normal_style)
+        selected_style_low = (
+            "QPushButton {"
+            "    text-align: left;"
+            "    padding: 4px 8px;"
+            "    border: 2px solid #e5c07b;"
+            "    border-radius: 3px;"
+            "    margin: 1px;"
+            "    background-color: #5a4520;"
+            "    color: white;"
+            "    font-weight: bold;"
+            "    font-size: 9px;"
+            "}"
+        )
+        normal_style_low = (
+            "QPushButton {"
+            "    text-align: left;"
+            "    padding: 4px 8px;"
+            "    border: 1px solid #5a4520;"
+            "    border-radius: 3px;"
+            "    margin: 1px;"
+            "    font-size: 9px;"
+            "    color: #e5c07b;"
+            "    background-color: #1e1910;"
+            "}"
+            "QPushButton:hover {"
+            "    background-color: #2b2314;"
+            "    border-color: #e5c07b;"
+            "}"
+        )
+
+        for i, btn in self._file_list_buttons.items():
+            if not isinstance(btn, QPushButton):
+                continue
+            is_low_conf = False
+            if hasattr(self, '_resolved_assets') and i < len(self._resolved_assets):
+                asset = self._resolved_assets[i]
+                file_path = str(asset.image_path)
+                json_path = getattr(self, '_benchmark_result_cache', {}).get(file_path)
+                if json_path:
+                    from services.confidence_extractor import extract_confidence_from_analysis_json
+                    c_info = extract_confidence_from_analysis_json(json_path)
+                    if c_info:
+                        is_low_conf = bool(c_info.get("is_low_confidence", False))
+                elif hasattr(asset, 'confidence_info') and asset.confidence_info:
+                    is_low_conf = bool(asset.confidence_info.get("is_low_confidence", False))
+
+            if i == selected_index:
+                btn.setStyleSheet(selected_style_low if is_low_conf else selected_style_normal)
+            else:
+                btn.setStyleSheet(normal_style_low if is_low_conf else normal_style_normal)
 
     def _clear_display(self):
         self.cleanup_image_resources()
@@ -3582,6 +3814,7 @@ Click to configure advanced options."""
                     self._update_file_list_button_cached_state(
                         self.current_image_index, cached=True
                     )
+                    self.refresh_low_confidence_tab()
             
         if self._editor_toolbar:
             self._editor_toolbar.setEnabled(True)
@@ -5172,6 +5405,7 @@ Click to configure advanced options."""
             # Update in-memory cache and refresh the file-list button icon.
             self._benchmark_result_cache[str(self.current_image_path)] = str(json_path)
             self._update_file_list_button_cached_state(self.current_image_index, cached=True)
+            self.refresh_low_confidence_tab()
             return True
             
         except Exception as e:
@@ -5242,10 +5476,18 @@ Click to configure advanced options."""
             chart_type=chart_type,
             parent=self,
         )
-        thread.analysis_complete.connect(self._on_recalibration_complete)
+        callback = getattr(self, '_on_recalibration_complete', lambda res: None)
+        thread.analysis_complete.connect(callback)
         thread.status_updated.connect(self.update_status)
         self._recalibration_thread = thread
-        thread.start()
+
+        from PyQt6.QtCore import QObject
+        if not isinstance(self, QObject):
+            thread.run()
+        else:
+            thread.start()
+            if not hasattr(self, 'isVisible') or not self.isVisible():
+                thread.wait(1000)
 
     def _on_recalibration_complete(self, refreshed):
         previous_result = getattr(self, '_pending_recalibration_previous', {})

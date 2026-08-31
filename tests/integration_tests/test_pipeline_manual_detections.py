@@ -29,7 +29,7 @@ def test_pipeline_manual_detections_bypass(dummy_pipeline, tmp_path):
 
     # Mock the internal detection and extraction methods
     with patch('pipelines.chart_pipeline.cv2.imread', return_value=np.zeros((100, 100, 3), dtype=np.uint8)), \
-         patch.object(dummy_pipeline, '_classify_chart_types', return_value=['bar']), \
+         patch.object(dummy_pipeline, '_classify_chart_types', return_value=(['bar'], 1.0)), \
          patch.object(dummy_pipeline, '_detect_elements') as mock_detect_elements, \
          patch.object(dummy_pipeline, '_detect_text_layout', return_value={}) as mock_layout, \
          patch.object(dummy_pipeline, '_detect_orientation', return_value=MagicMock(value="UP")) as mock_orientation, \

@@ -112,10 +112,10 @@ class PaddleOCRFullPipeline(BaseOCREngine):
                 )
                 self._doc_ori_input = self.doc_ori_session.get_inputs()[0].name
                 self._doc_ori_output = self.doc_ori_session.get_outputs()[0].name
-                logging.info(f"✓ Stage 1: Document orientation model loaded")
+                logging.info(f"Stage 1: Document orientation model loaded")
             else:
                 self.doc_ori_session = None
-                logging.info(f"✗ Stage 1: Document orientation DISABLED")
+                logging.info(f"Stage 1: Document orientation DISABLED")
             
             # Stage 2: Document Unwarping (UVDoc)
             # Input: [1, 3, H, W] RGB image
@@ -127,10 +127,10 @@ class PaddleOCRFullPipeline(BaseOCREngine):
                 self._unwarp_input = self.unwarp_session.get_inputs()[0].name
                 # UVDoc has multiple outputs: we need the unwarping grid
                 self._unwarp_output = self.unwarp_session.get_outputs()[0].name
-                logging.info(f"✓ Stage 2: Document unwarping model loaded")
+                logging.info(f"Stage 2: Document unwarping model loaded")
             else:
                 self.unwarp_session = None
-                logging.info(f"✗ Stage 2: Document unwarping DISABLED")
+                logging.info(f"Stage 2: Document unwarping DISABLED")
             
             # Stage 3: Text Detection (PP-OCRv5_server_det)
             # Input: [1, 3, H, W] BGR image (normalized, padded to 32x)
@@ -140,7 +140,7 @@ class PaddleOCRFullPipeline(BaseOCREngine):
             )
             self._det_input = self.det_session.get_inputs()[0].name
             self._det_output = self.det_session.get_outputs()[0].name
-            logging.info(f"✓ Stage 3: Text detection model loaded")
+            logging.info(f"Stage 3: Text detection model loaded")
             
             # Stage 4: Text Line Orientation Classification
             # Input: [1, 3, 48, 192] RGB image (normalized)
@@ -151,10 +151,10 @@ class PaddleOCRFullPipeline(BaseOCREngine):
                 )
                 self._textline_ori_input = self.textline_ori_session.get_inputs()[0].name
                 self._textline_ori_output = self.textline_ori_session.get_outputs()[0].name
-                logging.info(f"✓ Stage 4: Text line orientation model loaded")
+                logging.info(f"Stage 4: Text line orientation model loaded")
             else:
                 self.textline_ori_session = None
-                logging.info(f"✗ Stage 4: Text line orientation DISABLED")
+                logging.info(f"Stage 4: Text line orientation DISABLED")
             
             # Stage 5: Text Recognition (PP-OCRv5_server_rec)
             # Input: [batch, 3, 48, W] RGB image (normalized, width varies)
@@ -164,7 +164,7 @@ class PaddleOCRFullPipeline(BaseOCREngine):
             )
             self._rec_input = self.rec_session.get_inputs()[0].name
             self._rec_output = self.rec_session.get_outputs()[0].name
-            logging.info(f"✓ Stage 5: Text recognition model loaded")
+            logging.info(f"Stage 5: Text recognition model loaded")
             
         except Exception as e:
             logging.error(f"Failed to load ONNX models: {e}")

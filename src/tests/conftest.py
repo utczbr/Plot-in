@@ -3,7 +3,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from PyQt6.QtWidgets import QApplication
+try:
+    from PyQt6.QtWidgets import QApplication
+    _HAS_PYQT6 = True
+except ImportError:
+    _HAS_PYQT6 = False
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,7 +19,10 @@ if str(SRC_ROOT) not in sys.path:
 
 @pytest.fixture(scope="session")
 def qapp():
+    if not _HAS_PYQT6:
+        pytest.skip("PyQt6 not installed")
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
     return app
+

@@ -57,13 +57,14 @@ class _FakeAnalysisManager:
     def set_advanced_settings(self, settings):
         self.settings = settings
 
-    def run_single_analysis(self, image_path, conf, output_dir, provenance=None):
+    def run_single_analysis(self, image_path, conf, output_dir, provenance=None, **kwargs):
         self.run_calls.append(
             {
                 "image_path": image_path,
                 "conf": conf,
                 "output_dir": output_dir,
                 "provenance": provenance,
+                "kwargs": kwargs,
             }
         )
         return self.refreshed_result
@@ -112,6 +113,7 @@ def _build_dummy_app(chart_type: str, refreshed_result: dict):
     dummy._close_pil_image_safely = lambda _img: None
     dummy._is_error_result = ModernChartAnalysisApp._is_error_result
     dummy._preserve_manual_text_fields = ModernChartAnalysisApp._preserve_manual_text_fields
+    dummy._on_recalibration_complete = lambda refreshed: ModernChartAnalysisApp._on_recalibration_complete(dummy, refreshed)
 
     statuses = []
     dummy.update_status = lambda msg: statuses.append(msg)

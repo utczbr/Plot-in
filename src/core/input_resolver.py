@@ -29,6 +29,7 @@ class ResolvedAsset(NamedTuple):
     page_index: Optional[int]
     figure_id: Optional[str]
     image_buffer: Optional[Any] = None
+    confidence_info: Optional[Dict[str, Union[float, bool, str]]] = None
 
 
 def _make_figure_id(pdf_stem: str, page_num: int, img_index: int) -> str:
@@ -39,7 +40,7 @@ def _make_figure_id(pdf_stem: str, page_num: int, img_index: int) -> str:
 def _run_pdf_processor(
     pdf_path: Path,
     output_dir: Path,
-    high_res_dpi: int = 300,
+    high_res_dpi: int = 200,
     min_chart_width: int = 300,
     min_chart_height: int = 200,
     cancel_event: Optional[Any] = None,
@@ -74,7 +75,7 @@ def _run_pdf_processor(
 def _expand_pdf(
     pdf_path: Path,
     render_dir: Path,
-    high_res_dpi: int = 300,
+    high_res_dpi: int = 200,
     min_chart_width: int = 300,
     min_chart_height: int = 200,
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -136,6 +137,37 @@ def _expand_pdf(
             image_buffer=chart.get('image_buffer'),
         ))
 
+    # Upfront classification on PDF-extracted assets if model_manager is available
+    if model_manager is not None and assets:
+        try:
+            from core.ensemble_classifier import WeightedChartClassifier
+            from services.confidence_extractor import LOW_CONFIDENCE_THRESHOLD
+            import cv2
+
+            classifier_ensemble = WeightedChartClassifier(model_manager)
+            for idx, asset in enumerate(assets):
+                try:
+                    img_buf = asset.image_buffer
+                    if img_buf is None and asset.image_path.exists():
+                        img_buf = cv2.imread(str(asset.image_path))
+
+                    if img_buf is not None and img_buf.size > 0:
+                        types, top_conf = classifier_ensemble.classify_image_with_conf(img_buf, top_k=1)
+                        conf_val = max(0.0, min(1.0, float(top_conf or 0.0)))
+                        is_low = conf_val < LOW_CONFIDENCE_THRESHOLD
+                        conf_dict = {
+                            'classification': conf_val,
+                            'detection': 0.0,
+                            'average': conf_val,
+                            'is_low_confidence': is_low,
+                            'source': 'preliminary_classification_only',
+                        }
+                        assets[idx] = asset._replace(confidence_info=conf_dict)
+                except Exception as c_exc:
+                    logger.debug("Upfront classification failed for asset %s: %s", asset.figure_id, c_exc)
+        except Exception as exc:
+            logger.debug("Failed to run upfront classification ensemble: %s", exc)
+
     logger.info("PDF %s expanded to %d chart(s)", pdf_path.name, len(assets))
     return assets
 
@@ -144,9 +176,9 @@ def _resolve_single_file(
     file_path: Path,
     render_dir: Path,
     input_type: str,
-    high_res_dpi: int,
-    min_chart_width: int,
-    min_chart_height: int,
+    high_res_dpi: int = 200,
+    min_chart_width: int = 300,
+    min_chart_height: int = 200,
     progress_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
@@ -186,12 +218,13 @@ def _resolve_directory(
     dir_path: Path,
     render_dir: Path,
     input_type: str,
-    high_res_dpi: int,
-    min_chart_width: int,
-    min_chart_height: int,
+    high_res_dpi: int = 200,
+    min_chart_width: int = 300,
+    min_chart_height: int = 200,
     progress_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
+    model_manager: Optional[Any] = None,
 ) -> List[ResolvedAsset]:
     assets: List[ResolvedAsset] = []
 
@@ -222,6 +255,7 @@ def _resolve_directory(
                 pdf, render_dir, high_res_dpi,
                 min_chart_width, min_chart_height, progress_callback,
                 cancel_event=cancel_event, failure_callback=failure_callback,
+                model_manager=model_manager,
             )
             assets.extend(pdf_assets)
 
@@ -239,38 +273,15 @@ def resolve_input_assets(
     input_path: Path,
     render_dir: Path,
     input_type: str = 'auto',
-    high_res_dpi: int = 300,
+    high_res_dpi: int = 200,
     min_chart_width: int = 300,
     min_chart_height: int = 200,
     progress_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
+    model_manager: Optional[Any] = None,
 ) -> List[ResolvedAsset]:
-    """Resolve an input path into a flat, ordered list of ResolvedAsset objects.
-
-    Parameters
-    ----------
-    input_path:
-        May be a single file (image or PDF) or a directory.
-    render_dir:
-        Directory where PDF-rendered PNGs are saved.
-    input_type:
-        'auto'  — detect by file extension (default)
-        'image' — treat every file as an image; skip PDFs
-        'pdf'   — treat every file as a PDF; skip native images
-    high_res_dpi, min_chart_width, min_chart_height:
-        Passed through to process_pdf_charts_optimized for PDF rendering.
-    progress_callback:
-        Optional callable receiving status strings (for GUI progress display).
-    cancel_event:
-        Optional threading.Event to cancel long-running PDF extraction.
-    failure_callback:
-        Optional callable receiving (file_path, reason) on PDF extraction failures.
-
-    Returns
-    -------
-    Sorted list of ResolvedAsset. Empty list if nothing usable was found.
-    """
+    """Resolve an input path into a flat, ordered list of ResolvedAsset objects."""
     input_path = Path(input_path)
     render_dir = Path(render_dir)
 
@@ -284,6 +295,7 @@ def resolve_input_assets(
             high_res_dpi, min_chart_width, min_chart_height,
             progress_callback, cancel_event=cancel_event,
             failure_callback=failure_callback,
+            model_manager=model_manager,
         )
 
     if input_path.is_dir():
@@ -292,10 +304,11 @@ def resolve_input_assets(
             high_res_dpi, min_chart_width, min_chart_height,
             progress_callback, cancel_event=cancel_event,
             failure_callback=failure_callback,
+            model_manager=model_manager,
         )
 
     logger.error("Input path is neither a file nor a directory: %s", input_path)
-    return []
+
 
 
 def asset_provenance_dict(asset: ResolvedAsset) -> Optional[Dict[str, Any]]:

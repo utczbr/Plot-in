@@ -43,27 +43,6 @@
             "size_bytes": 3013837
         },
         {
-            "filename": "detect_line.onnx",
-            "relative_path": "detect_line.onnx",
-            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/detect_line.onnx",
-            "sha256": "c3c07b1cf7b7eeffa2e1b86af8a8d1592c769af5ab6f629296dae35db0471697",
-            "size_bytes": 3015576
-        },
-        {
-            "filename": "detect_box.onnx",
-            "relative_path": "detect_box.onnx",
-            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/detect_box.onnx",
-            "sha256": "f6a4e7b98ca7a1876bddf49c999db9bb1655038a793d41edd216519e55c353ac",
-            "size_bytes": 3015792
-        },
-        {
-            "filename": "detect_heatmap.onnx",
-            "relative_path": "detect_heatmap.onnx",
-            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/detect_heatmap.onnx",
-            "sha256": "175483e6021c746d76597956797612300a22d7e402dcb4e41176dafbd9908d56",
-            "size_bytes": 3015580
-        },
-        {
             "filename": "doclayout_yolo.onnx",
             "relative_path": "doclayout_yolo.onnx",
             "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/doclayout_yolo.onnx",
@@ -181,6 +160,62 @@
             "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/OCR/PP-LCNet_x1_0_doc_ori.onnx",
             "sha256": "da00ff4118e4da0a655c1cbc3513b3325dfc84ec4cf8ea691e81bcb5230fb0e5",
             "size_bytes": 6787559
+        },
+        {
+            "filename": "area_obj_detect.onnx",
+            "relative_path": "area_obj_detect.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/area_obj_detect.onnx",
+            "sha256": "86fd45ae22f8ec678c2272f7b573dc1b713457ecf9834f3c8645f5f01929e280",
+            "size_bytes": 10253115
+        },
+        {
+            "filename": "area_seg.onnx",
+            "relative_path": "area_seg.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/area_seg.onnx",
+            "sha256": "f37671d9a1f18cbf46cf14091d1519b7b28760d544fcc8aa985054949525545f",
+            "size_bytes": 11397659
+        },
+        {
+            "filename": "box_element_detect.onnx",
+            "relative_path": "box_element_detect.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/box_element_detect.onnx",
+            "sha256": "5a1c0224e562c7752917d96953bf2bce6487e8f35376e90a2a96b46c5c6c0651",
+            "size_bytes": 10252708
+        },
+        {
+            "filename": "box_global_detect.onnx",
+            "relative_path": "box_global_detect.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/box_global_detect.onnx",
+            "sha256": "aad448c78b96addfffef76f77677d376124e79cad0f413f91f949e735ed34240",
+            "size_bytes": 10252690
+        },
+        {
+            "filename": "line_markers_detect.onnx",
+            "relative_path": "line_markers_detect.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/line_markers_detect.onnx",
+            "sha256": "37e7b5875305ec2cddb97ac88444ec3185ba333be5f7210e30ebcfe8e2cc9fba",
+            "size_bytes": 10250575
+        },
+        {
+            "filename": "line_obj_detect.onnx",
+            "relative_path": "line_obj_detect.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/line_obj_detect.onnx",
+            "sha256": "9f19db60d6ce6f638059d64a0580b7cbae1e35627b547852f6a6f7f93550c12b",
+            "size_bytes": 10253531
+        },
+        {
+            "filename": "line_seg.onnx",
+            "relative_path": "line_seg.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/line_seg.onnx",
+            "sha256": "6789e68ad0015177fe8321d03868a815ac5a0702ea6f6ed030b0dad528ba64f5",
+            "size_bytes": 11397647
+        },
+        {
+            "filename": "type_detect.onnx",
+            "relative_path": "type_detect.onnx",
+            "url": "https://huggingface.co/utcz/Plot-in_requirements/resolve/main/type_detect.onnx",
+            "sha256": "be41b57470618f0858c83e5d1f85f8d6ff3ab331677fc1873eaf1a76a14184a4",
+            "size_bytes": 9858075
         }
     ]
 }

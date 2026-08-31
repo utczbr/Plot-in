@@ -54,21 +54,21 @@ def open_pdf_document(pdf_path: Path):
     """
     doc = None
     try:
-        logger.info(f"📖 Abrindo PDF: {pdf_path.name}")
+        logger.info(f"Opening PDF: {pdf_path.name}")
         doc = fitz.open(str(pdf_path))
         if doc.needs_pass:
             raise PDFAccessError(f"'{pdf_path.name}' is password-protected and requires a user password.")
         yield doc
     except RuntimeError as e:
-        logger.error(f"❌ Erro de tempo de execução ao abrir PDF (pode estar corrompido) {pdf_path.name}: {e}")
+        logger.error(f"Runtime error opening PDF {pdf_path.name}: {e}")
         raise
     except Exception as e:
-        logger.error(f"❌ Erro inesperado ao abrir PDF {pdf_path.name}: {e}")
+        logger.error(f"Unexpected error opening PDF {pdf_path.name}: {e}")
         raise
     finally:
         if doc:
             doc.close()
-            logger.debug(f"📖 PDF fechado: {pdf_path.name}")
+            logger.debug(f"PDF closed: {pdf_path.name}")
 
 # --- Funções Otimizadas ---
 
@@ -104,12 +104,12 @@ def extract_charts_from_pdf_optimized(
     extracted_charts = []
     
     with open_pdf_document(pdf_path) as doc:
-        logger.info(f"📄 PDF possui {doc.page_count} páginas")
+        logger.info(f"PDF has {doc.page_count} pages")
         
         for page_num in range(doc.page_count):
             try:
                 page = doc[page_num]
-                logger.debug(f"🔍 Analisando página {page_num + 1}/{doc.page_count}")
+                logger.debug(f"Analyzing page {page_num + 1}/{doc.page_count}")
                 
                 # Extrair imagens da página atual
                 page_charts = _extract_images_from_page_optimized(
@@ -124,15 +124,15 @@ def extract_charts_from_pdf_optimized(
                 extracted_charts.extend(page_charts)
                 
                 if page_charts:
-                    logger.info(f"✅ Página {page_num + 1}: {len(page_charts)} gráfico(s) extraído(s)")
+                    logger.info(f"Page {page_num + 1}: {len(page_charts)} chart(s) extracted")
                 else:
-                    logger.debug(f"⏭️ Página {page_num + 1}: Nenhum gráfico encontrado")
+                    logger.debug(f"Page {page_num + 1}: No charts found")
                     
             except Exception as e:
-                logger.error(f"❌ Erro ao processar página {page_num + 1}: {e}")
+                logger.error(f"Error processing page {page_num + 1}: {e}")
                 continue
     
-    logger.info(f"🎉 Extração concluída: {len(extracted_charts)} gráfico(s) extraído(s) de {pdf_path.name}")
+    logger.info(f"Extraction complete: {len(extracted_charts)} chart(s) extracted from {pdf_path.name}")
     return extracted_charts
 
 
@@ -192,12 +192,12 @@ def _render_page_as_image(
 
         if not file_path.exists() or file_path.stat().st_size == 0:
             logger.error(
-                f"❌ Full-page render for page {page_num + 1} did not produce a "
+                f"Full-page render for page {page_num + 1} did not produce a "
                 f"valid file at {file_path}. Skipping this page."
             )
             return None
 
-        logger.info(f"🖼️  Full-page render saved: {filename} ({w}x{h}px @ {dpi} DPI)")
+        logger.info(f"Full-page render saved: {filename} ({w}x{h}px @ {dpi} DPI)")
         return {
             'page_num': page_num + 1,
             'image_index': 1,
@@ -208,7 +208,7 @@ def _render_page_as_image(
             'extraction_method': 'full_page_render',
         }
     except Exception as exc:
-        logger.error(f"❌ Full-page render failed for page {page_num + 1}: {exc}")
+        logger.error(f"Full-page render failed for page {page_num + 1}: {exc}")
         return None
 
 
@@ -227,7 +227,7 @@ def _extract_images_from_page_optimized(
 
     Strategy:
       1. Try to extract raster images embedded directly in the PDF
-         (works for scanned figures or pre-rasterised exports).
+         (works for scanned figures or pre-rasterised figures).
       2. If no embedded images are found — or all are too small / not
          chart-like — fall back to rendering the full page at *render_dpi*.
          If model_manager is provided and doclayout model is present,
@@ -258,37 +258,93 @@ def _extract_images_from_page_optimized(
                     if w < min_width or h < min_height:
                         logger.debug(f"  Image {img_index}: too small ({w}x{h}), skipped")
                         continue
-                    if not _is_likely_chart_image(cv_image, w, h):
-                        logger.debug(f"  Image {img_index}: not chart-like, skipped")
-                        continue
 
                     filename  = f"{pdf_stem}_page{page_num+1:02d}_img{img_index+1:02d}.{image_ext}"
                     file_path = output_dir / filename
-                    with open(file_path, "wb") as fh:
-                        fh.write(image_bytes)
 
                     img_rects = page.get_image_rects(xref)
                     rect = img_rects[0] if img_rects else fitz.Rect(0, 0, w, h)
 
-                    page_charts.append({
-                        'page_num':          page_num + 1,
-                        'image_index':       img_index + 1,
-                        'file_path':         file_path,
-                        'high_res_path':     file_path,   # kept for API compat
-                        'image_buffer':      cv_image,
-                        'dimensions':        (w, h),
-                        'pdf_rect':          rect,
-                        'extraction_method': 'embedded_image',
-                    })
-                    logger.info(f"✅ Embedded image saved: {filename} ({w}x{h}px)")
+                    # High-res canvas render with padding in memory
+                    high_res_filename = f"{pdf_stem}_page{page_num+1:02d}_img{img_index+1:02d}_rendered.png"
+                    high_res_path = output_dir / high_res_filename
+                    rendered_buffer = cv_image
+
+                    if img_rects:
+                        try:
+                            # Render page canvas region with padding (25pt) at render_dpi to capture ticks & labels
+                            pad = 25.0
+                            padded_rect = fitz.Rect(
+                                max(0, rect.x0 - pad),
+                                max(0, rect.y0 - pad),
+                                min(page.rect.width, rect.x1 + pad),
+                                min(page.rect.height, rect.y1 + pad),
+                            )
+                            matrix = fitz.Matrix(render_dpi / 72.0, render_dpi / 72.0)
+                            pixmap = page.get_pixmap(matrix=matrix, clip=padded_rect, alpha=False)
+                            
+                            # Convert pixmap to BGR numpy array for downstream processing
+                            pix_arr = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)
+                            if pixmap.n == 3:
+                                rendered_buffer = cv2.cvtColor(pix_arr, cv2.COLOR_RGB2BGR)
+                            elif pixmap.n == 4:
+                                rendered_buffer = cv2.cvtColor(pix_arr, cv2.COLOR_RGBA2BGR)
+                            else:
+                                rendered_buffer = pix_arr
+                            del pixmap
+                        except Exception as render_exc:
+                            logger.warning(f"Failed to render padded high-res region for image {img_index}: {render_exc}")
+
+                    sub_chart_crops = []
+                    if model_manager is not None:
+                        from utils.inference import decompose_multipanel_figure
+                        sub_chart_crops = decompose_multipanel_figure(rendered_buffer, model_manager, padding=20)
+
+                    if sub_chart_crops:
+                        logger.info(f"Page {page_num + 1} embedded image {img_index + 1}: decompose_multipanel_figure split figure into {len(sub_chart_crops)} sub-chart(s)")
+                        for sub_idx, (sb_bbox, sub_crop, pred_type) in enumerate(sub_chart_crops):
+                            sub_filename = f"{pdf_stem}_page{page_num + 1:02d}_img{img_index + 1:02d}_sub{sub_idx + 1:02d}.png"
+                            sub_file_path = output_dir / sub_filename
+                            cv2.imwrite(str(sub_file_path), sub_crop)
+                            page_charts.append({
+                                'page_num': page_num + 1,
+                                'image_index': img_index + 1,
+                                'file_path': sub_file_path,
+                                'high_res_path': sub_file_path,
+                                'image_buffer': sub_crop,
+                                'dimensions': (sub_crop.shape[1], sub_crop.shape[0]),
+                                'pdf_rect': rect,
+                                'extraction_method': 'embedded_image_type_detect',
+                                'preliminary_type': pred_type,
+                            })
+                    else:
+                        # Only write parent image files to disk if NOT decomposed into sub-charts
+                        with open(file_path, "wb") as fh:
+                            fh.write(image_bytes)
+                        if rendered_buffer is not cv_image:
+                            cv2.imwrite(str(high_res_path), rendered_buffer)
+                        else:
+                            high_res_path = file_path
+
+                        page_charts.append({
+                            'page_num':          page_num + 1,
+                            'image_index':       img_index + 1,
+                            'file_path':         file_path,
+                            'high_res_path':     high_res_path,
+                            'image_buffer':      rendered_buffer,
+                            'dimensions':        (rendered_buffer.shape[1], rendered_buffer.shape[0]),
+                            'pdf_rect':          rect,
+                            'extraction_method': 'embedded_image',
+                        })
+                        logger.info(f"Embedded image processed & rendered: {filename} ({rendered_buffer.shape[1]}x{rendered_buffer.shape[0]}px)")
 
                 except Exception as exc:
                     logger.error(
-                        f"❌ Error extracting embedded image {img_index} "
+                        f"Error extracting embedded image {img_index} "
                         f"from page {page_num + 1}: {exc}"
                     )
     except Exception as exc:
-        logger.error(f"❌ Error listing images on page {page_num + 1}: {exc}")
+        logger.error(f"Error listing images on page {page_num + 1}: {exc}")
 
     # ------------------------------------------------------------------
     # Strategy 2: full-page render fallback / figure region cropping
@@ -316,30 +372,40 @@ def _extract_images_from_page_optimized(
                             input_size=(1024, 1024), model_output_type='bbox',
                         )
                         for d in layout_dets:
-                            if d.get('cls') in (3, 5):  # 3: figure, 5: table
+                            if d.get('cls') == 3:  # 3: figure ONLY (excludes plain_text, title, caption, table)
                                 bbox = d.get('bbox')
                                 if bbox and len(bbox) == 4:
                                     x1, y1, x2, y2 = bbox
                                     crop_w, crop_h = x2 - x1, y2 - y1
-                                    if crop_w >= min_width and crop_h >= min_height:
+                                    eff_min_w = int(min_width * (render_dpi / 300.0))
+                                    eff_min_h = int(min_height * (render_dpi / 300.0))
+                                    if crop_w >= eff_min_w and crop_h >= eff_min_h:
                                         crop_img = cv_img[y1:y2, x1:x2]
                                         if crop_img.size > 0:
                                             figure_crops.append((bbox, crop_img))
                 except Exception as exc:
                     logger.debug("DocLayout figure cropping pass skipped: %s", exc)
 
-            # Fallback: pure CV2 contour/bounding-box slicer when doclayout model is unavailable or returned 0 crops
-            if not figure_crops:
-                try:
-                    figure_crops = _find_chart_regions_cv2(cv_img, min_width, min_height)
-                    if figure_crops:
-                        extraction_method = "cv2_layout_figure_crop"
-                except Exception as exc:
-                    logger.debug("CV2 layout figure cropping fallback skipped: %s", exc)
-
             if figure_crops:
-                logger.info(f"✅ Page {page_num + 1}: {len(figure_crops)} figure crop(s) extracted via {extraction_method}")
-                for c_idx, (bbox, crop_img) in enumerate(figure_crops):
+                logger.info(f"Page {page_num + 1}: {len(figure_crops)} layout figure region(s) proposed via {extraction_method}")
+                flat_chart_crops = []
+                if model_manager is not None:
+                    from utils.inference import decompose_multipanel_figure
+                    for bbox, crop_img in figure_crops:
+                        sub_chart_crops = decompose_multipanel_figure(crop_img, model_manager, padding=20)
+                        if sub_chart_crops:
+                            for (sb_bbox, sub_crop, pred_type) in sub_chart_crops:
+                                page_x1 = bbox[0] + sb_bbox[0]
+                                page_y1 = bbox[1] + sb_bbox[1]
+                                page_x2 = bbox[0] + sb_bbox[2]
+                                page_y2 = bbox[1] + sb_bbox[3]
+                                flat_chart_crops.append(((page_x1, page_y1, page_x2, page_y2), sub_crop, pred_type))
+                        else:
+                            flat_chart_crops.append((bbox, crop_img, None))
+                else:
+                    flat_chart_crops = [(bbox, crop_img, None) for bbox, crop_img in figure_crops]
+
+                for c_idx, (bbox, crop_img, pred_type) in enumerate(flat_chart_crops):
                     cw, ch = crop_img.shape[1], crop_img.shape[0]
                     filename = f"{pdf_stem}_page{page_num + 1:02d}_fig{c_idx + 1:02d}.png"
                     file_path = output_dir / filename
@@ -352,26 +418,9 @@ def _extract_images_from_page_optimized(
                         'image_buffer': crop_img,
                         'dimensions': (cw, ch),
                         'pdf_rect': fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3]),
-                        'extraction_method': extraction_method,
+                        'extraction_method': extraction_method + ('_type_detect' if pred_type else ''),
+                        'preliminary_type': pred_type,
                     })
-            elif w >= min_width and h >= min_height and _is_likely_chart_image(cv_img, w, h):
-                filename = f"{pdf_stem}_page{page_num + 1:02d}_fullpage.png"
-                file_path = output_dir / filename
-                cv2.imwrite(str(file_path), cv_img)
-                page_charts.append({
-                    'page_num': page_num + 1,
-                    'image_index': 1,
-                    'file_path': file_path,
-                    'high_res_path': file_path,
-                    'image_buffer': cv_img,
-                    'dimensions': (w, h),
-                    'pdf_rect': page.rect,
-                    'extraction_method': 'full_page_render',
-                })
-            else:
-                logger.debug(
-                    f"Page {page_num + 1}: page render ({w}x{h}) discarded (too small or not chart-like)"
-                )
 
     return page_charts
 
@@ -428,67 +477,6 @@ def _find_chart_regions_cv2(
     return candidates
 
 
-def _is_likely_chart_image(
-    cv_image: np.ndarray, 
-    width: int, 
-    height: int,
-    config: dict = None
-) -> bool:
-    if config is None:
-        config = {
-            "aspect_ratio_range": (0.3, 4.0),
-            "min_text_components": 3,
-            "text_area_range": (10, 1000),
-            "text_aspect_ratio_range": (0.2, 5.0),
-            "min_lines": 2,
-            "hough_threshold": 50,
-            "hough_min_line_length_ratio": 0.1,
-            "hough_max_line_gap": 10,
-            "canny_thresholds": (50, 150)
-        }
-
-    try:
-        # Criterion 1: Aspect ratio
-        aspect_ratio = width / height
-        if not (config["aspect_ratio_range"][0] < aspect_ratio < config["aspect_ratio_range"][1]):
-            return False
-        
-        # Criterion 2: Check for text presence (charts have labels)
-        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Find connected components (potential text)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-        
-        # Text-like components: small, rectangular
-        text_like_components = 0
-        for i in range(1, num_labels):  # Skip background
-            area = stats[i, cv2.CC_STAT_AREA]
-            width_comp = stats[i, cv2.CC_STAT_WIDTH]
-            height_comp = stats[i, cv2.CC_STAT_HEIGHT]
-            
-            if config["text_area_range"][0] < area < config["text_area_range"][1]:
-                if height_comp > 0 and config["text_aspect_ratio_range"][0] < width_comp/height_comp < config["text_aspect_ratio_range"][1]:
-                    text_like_components += 1
-        
-        if text_like_components < config["min_text_components"]:
-            return False
-        
-        # Criterion 3: Geometric structure (lines/edges)
-        edges = cv2.Canny(gray, config["canny_thresholds"][0], config["canny_thresholds"][1])
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=config["hough_threshold"], 
-                                minLineLength=min(width, height) * config["hough_min_line_length_ratio"], 
-                                maxLineGap=config["hough_max_line_gap"])
-        
-        if lines is None or len(lines) < config["min_lines"]:
-            return False
-        
-        return True
-        
-    except Exception as e:
-        logger.warning(f"Error in chart analysis: {e}. Assuming it's a chart.")
-        return True
-
 
 def rerender_chart_at_high_res_optimized(
     pdf_path: Path, 
@@ -498,19 +486,13 @@ def rerender_chart_at_high_res_optimized(
     dpi: int = 300
 ) -> Optional[Path]:
     """
-    Re-renderiza uma seção específica de um PDF em alta resolução (VERSÃO OTIMIZADA).
-    
-    OTIMIZAÇÕES:
-    - Usa context manager para gerenciamento adequado do PDF
-    - Melhor tratamento de erros
-    - Validação de parâmetros de entrada
-    - Logging detalhado para debug
+    Renderiza um gráfico específico em alta resolução.
     
     Args:
-        pdf_path: Caminho para o arquivo PDF
-        page_num: Número da página (1-indexed)
-        chart_rect: Retângulo da área a renderizar
-        output_path: Caminho onde salvar a imagem renderizada
+        pdf_path: Caminho do PDF
+        page_num: Número da página (1-based)
+        chart_rect: Retângulo do gráfico na página
+        output_path: Onde salvar a imagem renderizada
         dpi: Resolução de renderização
     
     Returns:
@@ -518,20 +500,20 @@ def rerender_chart_at_high_res_optimized(
     """
     # Validar parâmetros
     if not pdf_path.exists():
-        logger.error(f"❌ PDF não encontrado: {pdf_path}")
+        logger.error(f"PDF not found: {pdf_path}")
         return None
     
     if page_num < 1:
-        logger.error(f"❌ Número de página inválido: {page_num} (deve ser ≥ 1)")
+        logger.error(f"Invalid page number: {page_num} (must be >= 1)")
         return None
     
     if dpi < 72 or dpi > 600:
-        logger.warning(f"⚠️ DPI incomum: {dpi}. Recomendado: 150-300")
+        logger.warning(f"Unusual DPI: {dpi}. Recommended: 150-300")
     
     try:
         with open_pdf_document(pdf_path) as doc:
             if page_num > doc.page_count:
-                logger.error(f"❌ Página {page_num} não existe (PDF tem {doc.page_count} páginas)")
+                logger.error(f"Page {page_num} does not exist (PDF has {doc.page_count} pages)")
                 return None
             
             page = doc[page_num - 1]  # Converter para 0-indexed
@@ -540,17 +522,23 @@ def rerender_chart_at_high_res_optimized(
             zoom_factor = dpi / 72.0  # 72 DPI é o padrão
             matrix = fitz.Matrix(zoom_factor, zoom_factor)
             
-            logger.info(f"🖼️ Renderizando página {page_num} em {dpi} DPI (zoom: {zoom_factor:.2f}x)")
+            logger.info(f"Rendering page {page_num} at {dpi} DPI (zoom: {zoom_factor:.2f}x)")
             
-            # Renderizar apenas a área especificada
+            # Renderizar apenas a área especificada com margem de padding (25pt)
             if chart_rect and not chart_rect.is_empty:
-                # Renderizar área específica
-                logger.debug(f"📐 Área específica: {chart_rect}")
-                pixmap = page.get_pixmap(matrix=matrix, clip=chart_rect)
+                pad = 25.0
+                padded_rect = fitz.Rect(
+                    max(0, chart_rect.x0 - pad),
+                    max(0, chart_rect.y0 - pad),
+                    min(page.rect.width, chart_rect.x1 + pad),
+                    min(page.rect.height, chart_rect.y1 + pad),
+                )
+                logger.debug(f"Specific area with padding: {padded_rect}")
+                pixmap = page.get_pixmap(matrix=matrix, clip=padded_rect, alpha=False)
             else:
                 # Renderizar página inteira
-                logger.debug("📐 Renderizando página completa")
-                pixmap = page.get_pixmap(matrix=matrix)
+                logger.debug("Rendering full page")
+                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
             
             # Salvar a imagem
             output_path = Path(output_path)
@@ -560,13 +548,16 @@ def rerender_chart_at_high_res_optimized(
             pixmap.save(str(output_path))
             del pixmap
 
-            logger.info(f"✅ Imagem renderizada salva: {output_path.name} ({pixmap_width}x{pixmap_height}px)")
+            logger.info(f"Rendered image saved: {output_path.name} ({pixmap_width}x{pixmap_height}px)")
             return output_path
             
     except Exception as e:
-        logger.error(f"❌ Erro ao renderizar: {e}")
+        logger.error(f"Error rendering: {e}")
         return None
 
+
+
+_model_inference_lock = threading.Lock()
 
 
 def process_pdf_charts_optimized(
@@ -579,41 +570,44 @@ def process_pdf_charts_optimized(
     model_manager: Optional[Any] = None,
 ) -> List[dict]:
     """
-    Pipeline completo para extrair gráficos de um PDF e salvá-los como PNGs.
-
-    Extraction strategy (applied per page):
-      1. Embedded raster images  — works for scanned / pre-rasterised figures.
-      2. Page render fallback    — fallback that captures vector charts
-         (matplotlib, R, LaTeX, Word exports). Rendered at *high_res_dpi*.
-         If model_manager is provided and doclayout is present, slices the
-         page into individual figure bounding box crops.
-
-    Returns a list of chart-info dicts.  Each dict always carries
-    'high_res_path' pointing to the final PNG so that input_resolver.py
-    can use a single code-path regardless of extraction method.
+    Pipeline completo para extrair gráficos de um PDF com suporte a extração paralela.
     """
     pdf_path   = Path(pdf_path)
     output_dir = Path(output_dir)
 
     if not pdf_path.exists():
-        logger.error(f"❌ PDF not found: {pdf_path}")
+        logger.error(f"PDF not found: {pdf_path}")
         return []
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"🚀 Processing {pdf_path.name} (render DPI={high_res_dpi})")
+    logger.info(f"Processing {pdf_path.name} (render DPI={high_res_dpi})")
+
+    if model_manager is None:
+        try:
+            from core.model_manager import ModelManager
+            models_dir = Path(__file__).parent.parent / "models"
+            model_manager = ModelManager()
+            model_manager.load_models(str(models_dir))
+            logger.info("Auto-instantiated ModelManager with models from %s", models_dir)
+        except Exception as exc:
+            logger.warning("Could not auto-instantiated ModelManager: %s", exc)
 
     processed_charts: List[dict] = []
 
     with open_pdf_document(pdf_path) as doc:
-        logger.info(f"📄 {doc.page_count} page(s)")
+        total_pages = doc.page_count
+        logger.info(f"{total_pages} page(s)")
 
-        for page_num in range(doc.page_count):
-            if cancel_event is not None and cancel_event.is_set():
-                logger.warning("PDF processing cancelled at page %d/%d", page_num + 1, doc.page_count)
-                break
-            try:
-                page = doc[page_num]
-                page_charts = _extract_images_from_page_optimized(
+    if total_pages == 0:
+        return []
+
+    def _process_single_page(page_num: int) -> List[dict]:
+        if cancel_event is not None and cancel_event.is_set():
+            return []
+        try:
+            with open_pdf_document(pdf_path) as thread_doc:
+                page = thread_doc[page_num]
+                return _extract_images_from_page_optimized(
                     page,
                     page_num,
                     pdf_path.stem,
@@ -623,22 +617,41 @@ def process_pdf_charts_optimized(
                     render_dpi=high_res_dpi,
                     model_manager=model_manager,
                 )
+        except Exception as exc:
+            logger.error(f"Error on page {page_num + 1}: {exc}")
+            return []
 
-                if page_charts:
-                    logger.info(
-                        f"✅ Page {page_num + 1}: {len(page_charts)} chart(s) extracted"
-                    )
-                else:
-                    logger.debug(f"⏭️  Page {page_num + 1}: no charts found")
+    if total_pages == 1:
+        processed_charts = _process_single_page(0)
+    else:
+        import os
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                processed_charts.extend(page_charts)
+        max_workers = min(os.cpu_count() or 4, 4, total_pages)
+        futures = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for page_num in range(total_pages):
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.warning("PDF processing cancelled prior to dispatching page %d/%d", page_num + 1, total_pages)
+                    break
+                futures.append(executor.submit(_process_single_page, page_num))
 
-            except Exception as exc:
-                logger.error(f"❌ Error on page {page_num + 1}: {exc}")
-                continue
+            for future in as_completed(futures):
+                if cancel_event is not None and cancel_event.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                try:
+                    p_charts = future.result()
+                    if p_charts:
+                        processed_charts.extend(p_charts)
+                except Exception as exc:
+                    logger.error("Page worker thread raised unhandled exception: %s", exc)
+
+    # Sort deterministically by page_num and image_index
+    processed_charts.sort(key=lambda c: (c.get('page_num', 0), c.get('image_index', 0)))
 
     logger.info(
-        f"🎉 Done: {len(processed_charts)} chart(s) from {pdf_path.name}"
+        f"Done: {len(processed_charts)} chart(s) from {pdf_path.name}"
     )
     _save_processing_metadata(processed_charts, output_dir, pdf_path)
     return processed_charts
@@ -679,10 +692,10 @@ def _save_processing_metadata(processed_charts: List[dict], output_dir: Path, pd
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"📋 Metadados salvos: {metadata_path.name}")
+        logger.info(f"Metadata saved: {metadata_path.name}")
         
     except Exception as e:
-        logger.warning(f"⚠️ Não foi possível salvar metadados: {e}")
+        logger.warning(f"Could not save metadata: {e}")
 
 
 def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: str, figure_class_id: int = 3):
@@ -723,13 +736,13 @@ def main():
     pdf_path = Path(args.pdf_path)
     output_dir = Path(args.output_dir)
     
-    print(f"🚀 Processando PDF OTIMIZADO: {pdf_path.name}")
-    print(f"📁 Saída: {output_dir}")
-    print(f"🖼️ DPI: {args.dpi}")
-    print(f"📏 Dimensões mínimas: {args.min_width}x{args.min_height}")
+    print(f"Processing PDF: {pdf_path.name}")
+    print(f"Output: {output_dir}")
+    print(f"DPI: {args.dpi}")
+    print(f"Min dimensions: {args.min_width}x{args.min_height}")
     
     if not pdf_path.exists():
-        print(f"❌ ERRO: PDF não encontrado: {pdf_path}")
+        print(f"ERROR: PDF not found: {pdf_path}")
         return 1
     
     try:
@@ -742,24 +755,24 @@ def main():
             min_chart_height=args.min_height
         )
         
-        print(f"\n🎉 PROCESSAMENTO CONCLUÍDO!")
-        print(f"✅ {len(results)} gráfico(s) extraído(s) e processado(s)")
-        print(f"📂 Arquivos salvos em: {output_dir}")
+        print(f"\nPROCESSING COMPLETE!")
+        print(f"{len(results)} chart(s) extracted and processed")
+        print(f"Files saved in: {output_dir}")
         
         # Exibir resumo
         for i, chart in enumerate(results, 1):
-            print(f"\n📊 Gráfico {i}:")
-            print(f"   📄 Página: {chart.get('page_num')}")
-            print(f"   📏 Dimensões: {chart.get('dimensions')}")
+            print(f"\nChart {i}:")
+            print(f"   Page: {chart.get('page_num')}")
+            print(f"   Dimensions: {chart.get('dimensions')}")
             if 'high_res_dimensions' in chart:
-                print(f"   🖼️ Alta Res: {chart.get('high_res_dimensions')}")
-            print(f"   💾 Arquivo: {chart.get('file_path', 'N/A')}")
+                print(f"   High Res: {chart.get('high_res_dimensions')}")
+            print(f"   File: {chart.get('file_path', 'N/A')}")
         
         return 0
         
     except Exception as e:
-        print(f"❌ ERRO durante processamento: {e}")
-        logger.exception("Erro detalhado:")
+        print(f"ERROR during processing: {e}")
+        logger.exception("Detailed error:")
         return 1
 
 

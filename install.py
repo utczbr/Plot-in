@@ -230,19 +230,35 @@ def _try_manifest_download(models_dir: Path) -> bool:
 
 
 def _check_and_download_models(models_dir: Path) -> None:
+    def _model_file_exists(rel_path: str) -> bool:
+        p = models_dir / rel_path
+        if p.exists():
+            return True
+        if rel_path == "doclayout_yolo.onnx" and (models_dir / "doclayout.onnx").exists():
+            return True
+        if rel_path == "doclayout.onnx" and (models_dir / "doclayout_yolo.onnx").exists():
+            return True
+        return False
+
     required_models = [
         "classifier.onnx",
         "detect_bar.onnx",
-        "detect_box.onnx",
+        "box_global_detect.onnx",
+        "box_element_detect.onnx",
+        "line_obj_detect.onnx",
+        "line_markers_detect.onnx",
+        "line_seg.onnx",
+        "area_obj_detect.onnx",
+        "area_seg.onnx",
         "heatmap_macro_detect.onnx",
         "heatmap_colorbar_detect.onnx",
         "heatmap_lettice_detect.onnx",
         "heatmap_text_detect.onnx",
         "detect_histogram.onnx",
-        "detect_line.onnx",
         "detect_scatter.onnx",
         "doclayout_yolo.onnx",
         "Pie_pose.onnx",
+        "type_detect.onnx",
         "OCR/PP-LCNet_x1_0_doc_ori.onnx",
         "OCR/PP-LCNet_x1_0_doc_ori.yml",
         "OCR/PP-LCNet_x1_0_textline_ori.onnx",
@@ -256,7 +272,7 @@ def _check_and_download_models(models_dir: Path) -> None:
         "OCR/UVDoc .yml",
     ]
 
-    missing = [m for m in required_models if not (models_dir / m).exists()]
+    missing = [m for m in required_models if not _model_file_exists(m)]
     if not missing:
         logging.info("All required models are present in %s", models_dir)
         return
@@ -277,7 +293,7 @@ def _check_and_download_models(models_dir: Path) -> None:
     # ── 2. Try Hugging Face snapshot_download (with retries) ─────────────
     if online and _try_huggingface_download(models_dir):
         # Re-check — snapshot_download may have fetched everything
-        still_missing = [m for m in required_models if not (models_dir / m).exists()]
+        still_missing = [m for m in required_models if not _model_file_exists(m)]
         if not still_missing:
             print("Models downloaded successfully from Hugging Face.\n")
             return
@@ -286,13 +302,13 @@ def _check_and_download_models(models_dir: Path) -> None:
     # ── 3. Fallback: per-file manifest download (Google Drive) ───────────
     print("  Falling back to per-file manifest download...")
     if _try_manifest_download(models_dir):
-        still_missing = [m for m in required_models if not (models_dir / m).exists()]
+        still_missing = [m for m in required_models if not _model_file_exists(m)]
         if not still_missing:
             print("All models downloaded successfully (manifest fallback).\n")
             return
 
     # ── 4. Report remaining failures ─────────────────────────────────────
-    still_missing = [m for m in required_models if not (models_dir / m).exists()]
+    still_missing = [m for m in required_models if not _model_file_exists(m)]
     if still_missing:
         print(f"\n  WARNING: {len(still_missing)} model(s) could not be downloaded:")
         for m in still_missing:

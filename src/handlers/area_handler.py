@@ -22,14 +22,17 @@ class AreaHandler(CartesianExtractionHandler):
 
     def extract_values(self, img, detections, calibration,
                        baselines, orientation) -> List[Dict]:
-        """Extract area chart values using AreaExtractor."""
-        from extractors.area_extractor import AreaExtractor
+        """Extract area chart values using AreaSegExtractor (or AreaExtractor fallback)."""
+        if detections.get('area_series'):
+            from extractors.area_seg_extractor import AreaSegExtractor
+            extractor = AreaSegExtractor()
+        else:
+            from extractors.area_extractor import AreaExtractor
+            extractor = AreaExtractor()
 
-        extractor = AreaExtractor()
-
-        # Map 'area' key to 'data_point' for the extractor
+        # Map 'area' to 'data_point' if needed for legacy path
         detections_for_extractor = detections.copy()
-        if 'area' in detections:
+        if 'area' in detections and 'data_point' not in detections:
             detections_for_extractor['data_point'] = detections['area']
 
         try:
@@ -42,6 +45,7 @@ class AreaHandler(CartesianExtractionHandler):
             orientation_enum = Orientation.VERTICAL
 
         axis_key = 'y' if orientation_enum == Orientation.VERTICAL else 'x'
+        x_axis_key = 'x' if orientation_enum == Orientation.VERTICAL else 'y'
 
         # Resolve baseline from BaselineResult contract.
         baseline_coord = None
@@ -54,7 +58,7 @@ class AreaHandler(CartesianExtractionHandler):
             if baseline_coord is None:
                 baseline_coord = baseline_lines[0].value
 
-        # Resolve scale model from standardized calibration contract.
+        # Resolve primary (Y) scale model from standardized calibration contract.
         cal_axis = calibration.get(axis_key) or calibration.get('primary')
         scale_model = None
         r_squared = None
@@ -70,19 +74,29 @@ class AreaHandler(CartesianExtractionHandler):
             self.logger.warning(f"Missing calibration for {axis_key} axis in area chart")
             return []
 
+        # Resolve secondary (X) scale model from calibration
+        x_cal_axis = calibration.get(x_axis_key)
+        x_scale_model = None
+        if x_cal_axis is not None:
+            if hasattr(x_cal_axis, 'func'):
+                x_scale_model = x_cal_axis.func
+            elif isinstance(x_cal_axis, dict):
+                x_scale_model = x_cal_axis.get('model_func') or x_cal_axis.get('func')
+
         result = extractor.extract(
             img=img,
             detections=detections_for_extractor,
             scale_model=scale_model,
             baseline_coord=baseline_coord,
             img_dimensions={'r_squared': r_squared},
+            x_scale_model=x_scale_model,
         )
 
         # Transform result to handler format
         extracted = []
         auc_info = result.get('auc', {})
 
-        for point in result['data_points']:
+        for point in result.get('data_points', []):
             x1, y1, x2, y2 = point['xyxy']
 
             if orientation_enum == Orientation.VERTICAL:
@@ -95,17 +109,30 @@ class AreaHandler(CartesianExtractionHandler):
                 'bbox': [x1, y1, x2, y2],
                 'position': pos,
                 'value': point['estimated_value'],
+                'x_value': point.get('x_value'),
+                'series_id': point.get('series_id', 0),
                 'orientation': orientation_enum.value,
                 'confidence': point.get('confidence', 1.0),
             }
 
+            if point.get('data_label'):
+                entry['data_label'] = point['data_label']
             if point.get('error_bar'):
                 entry['error_bar'] = point['error_bar']
 
             extracted.append(entry)
 
-        # Append a series summary entry with AUC and baseline
-        if auc_info.get('total_auc') is not None:
+        # Append series summary entries with AUC
+        if isinstance(auc_info, list):
+            for layer_auc in auc_info:
+                extracted.append({
+                    'type': 'area_series_summary',
+                    'series_id': layer_auc.get('series_id', 0),
+                    'layer_index': layer_auc.get('layer_index', 0),
+                    'auc': layer_auc.get('auc', 0.0),
+                    'confidence': layer_auc.get('confidence', 1.0),
+                })
+        elif isinstance(auc_info, dict) and auc_info.get('total_auc') is not None:
             extracted.append({
                 'type': 'area_series_summary',
                 'auc': auc_info['total_auc'],

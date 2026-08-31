@@ -14,7 +14,7 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 
-from .class_maps import CLASS_MAP_CLASSIFICATION, CLASS_MAP_DOCLAYOUT
+from .class_maps import CLASS_MAP_CLASSIFICATION, CLASS_MAP_TYPE_DETECT, CLASS_MAP_DOCLAYOUT
 from utils.inference import run_inference_on_image
 from core.chart_registry import normalize_chart_type
 
@@ -42,10 +42,10 @@ def compute_box_iou(boxA: Tuple[int, int, int, int], boxB: Tuple[int, int, int, 
 class WeightedChartClassifier:
     """Combines crop classifier, chart detector, and layout parser signals into a weighted score."""
 
-    DEFAULT_W_CLASSIFIER: float = 0.50
-    DEFAULT_W_DETECTION: float = 0.35
+    DEFAULT_W_CLASSIFIER: float = 0.45
+    DEFAULT_W_DETECTION: float = 0.55
     DEFAULT_W_LAYOUT: float = 0.15
-    DEFAULT_FUSION_THRESHOLD: float = 0.45
+    DEFAULT_FUSION_THRESHOLD: float = 0.35
 
     def __init__(self, models_manager: Any, infer_func: Optional[Any] = None):
         self.models_manager = models_manager
@@ -86,6 +86,48 @@ class WeightedChartClassifier:
         w_lay_raw = self._resolve_setting(advanced_settings, ('w_layout',), self.DEFAULT_W_LAYOUT)
         threshold = self._resolve_setting(advanced_settings, ('fusion_threshold',), self.DEFAULT_FUSION_THRESHOLD)
 
+        # Signal 2: Chart Detector (type_detect.onnx / chart_detector)
+        # Evaluated first so the primary chart bounding box can inform crop-level classification
+        det_scores: Dict[str, float] = {}
+        chart_det_model = None
+        try:
+            if hasattr(self.models_manager, '_models') and isinstance(self.models_manager._models, dict):
+                if 'type_detect' in self.models_manager._models and self.models_manager._models['type_detect'] is not None:
+                    chart_det_model = self.models_manager.get_model('type_detect')
+                elif 'chart_detector' in self.models_manager._models and self.models_manager._models['chart_detector'] is not None:
+                    chart_det_model = self.models_manager.get_model('chart_detector')
+        except Exception:
+            chart_det_model = None
+
+        primary_crop: Optional[np.ndarray] = None
+        if chart_det_model is not None:
+            try:
+                det_conf_thresh = self._resolve_setting(advanced_settings, ('detection_confidence',), 0.08)
+                det_results = infer(
+                    chart_det_model, img, det_conf_thresh, CLASS_MAP_TYPE_DETECT,
+                    input_size=(1024, 1024), model_output_type='yolo_nms',
+                )
+                if det_results:
+                    sorted_dets = sorted(det_results, key=lambda x: x.get('conf', 0.0), reverse=True)
+                    for d in sorted_dets:
+                        raw_cls = CLASS_MAP_TYPE_DETECT.get(d.get('cls', -1))
+                        if raw_cls:
+                            norm_type = normalize_chart_type(raw_cls)
+                            conf_val = float(d.get('conf', 0.0))
+                            det_scores[norm_type] = max(det_scores.get(norm_type, 0.0), conf_val)
+
+                    # Extract primary chart crop if available
+                    best_det = sorted_dets[0]
+                    if 'xyxy' in best_det and best_det['xyxy'] is not None:
+                        x1, y1, x2, y2 = [int(round(v)) for v in best_det['xyxy'][:4]]
+                        h_img, w_img = img.shape[:2]
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w_img, x2), min(h_img, y2)
+                        if (x2 - x1) > 20 and (y2 - y1) > 20:
+                            primary_crop = img[y1:y2, x1:x2]
+            except Exception as exc:
+                logger.debug("Chart detector model pass skipped/failed: %s", exc)
+
         # Signal 1: Image Classifier (classifier.onnx)
         cls_scores: Dict[str, float] = {}
         try:
@@ -96,44 +138,41 @@ class WeightedChartClassifier:
 
         if cls_model is not None:
             try:
-                conf_thresh = self._resolve_setting(advanced_settings, ('classification_confidence',), 0.25)
-                dets = infer(
+                conf_thresh = self._resolve_setting(advanced_settings, ('classification_confidence',), 0.05)
+                # Full-image pass
+                dets_full = infer(
                     cls_model, img, conf_thresh, CLASS_MAP_CLASSIFICATION,
                     input_size=(224, 224), model_output_type='classification',
                 )
-                for d in dets:
+                full_scores: Dict[str, float] = {}
+                for d in dets_full:
                     raw_cls = CLASS_MAP_CLASSIFICATION.get(d['cls'])
                     if raw_cls:
                         norm_type = normalize_chart_type(raw_cls)
-                        conf_val = float(d['conf'])
-                        cls_scores[norm_type] = max(cls_scores.get(norm_type, 0.0), conf_val)
+                        full_scores[norm_type] = max(full_scores.get(norm_type, 0.0), float(d['conf']))
+
+                # Crop-level pass (if primary chart ROI was detected)
+                crop_scores: Dict[str, float] = {}
+                if primary_crop is not None:
+                    dets_crop = infer(
+                        cls_model, primary_crop, conf_thresh, CLASS_MAP_CLASSIFICATION,
+                        input_size=(224, 224), model_output_type='classification',
+                    )
+                    for d in dets_crop:
+                        raw_cls = CLASS_MAP_CLASSIFICATION.get(d['cls'])
+                        if raw_cls:
+                            norm_type = normalize_chart_type(raw_cls)
+                            crop_scores[norm_type] = max(crop_scores.get(norm_type, 0.0), float(d['conf']))
+
+                # Blend crop classification with full-image classification if crop is available
+                all_cls_keys = set(full_scores.keys()) | set(crop_scores.keys())
+                for k in all_cls_keys:
+                    if crop_scores:
+                        cls_scores[k] = 0.60 * crop_scores.get(k, 0.0) + 0.40 * full_scores.get(k, 0.0)
+                    else:
+                        cls_scores[k] = full_scores.get(k, 0.0)
             except Exception as exc:
                 logger.error("Image classifier inference failed: %s", exc)
-
-        # Signal 2: Chart Detector (classification.onnx, optional)
-        det_scores: Dict[str, float] = {}
-        chart_det_model = None
-        try:
-            if hasattr(self.models_manager, '_models') and isinstance(self.models_manager._models, dict):
-                if 'chart_detector' in self.models_manager._models and self.models_manager._models['chart_detector'] is not None:
-                    chart_det_model = self.models_manager.get_model('chart_detector')
-        except Exception:
-            chart_det_model = None
-
-        if chart_det_model is not None and chart_det_model is not cls_model:
-            try:
-                det_results = infer(
-                    chart_det_model, img, 0.20, CLASS_MAP_CLASSIFICATION,
-                    input_size=(640, 640), model_output_type='auto',
-                )
-                for d in det_results:
-                    raw_cls = CLASS_MAP_CLASSIFICATION.get(d['cls'])
-                    if raw_cls:
-                        norm_type = normalize_chart_type(raw_cls)
-                        conf_val = float(d.get('conf', 0.0))
-                        det_scores[norm_type] = max(det_scores.get(norm_type, 0.0), conf_val)
-            except Exception as exc:
-                logger.debug("Chart detector model pass skipped/failed: %s", exc)
 
         # Signal 3: DocLayout Layout Detector (doclayout_yolo.onnx, optional)
         layout_overlap: float = 0.0

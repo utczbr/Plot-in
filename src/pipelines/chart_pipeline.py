@@ -10,7 +10,7 @@ from typing import Dict, Optional, Any, List, Union, Tuple
 from .base_pipeline import BasePipeline
 from .types import PipelineResult
 from core.model_manager import ModelManager
-from core.config import MODELS_CONFIG
+from models.config import MODELS_CONFIG
 from core.chart_registry import get_chart_element_key, normalize_chart_type
 from utils import run_inference_on_image, sanitize_for_json
 from services.orientation_detection_service import OrientationDetectionService
@@ -143,20 +143,33 @@ class ChartAnalysisPipeline(BasePipeline):
             return None
             
         # 2. Classification
+        #
+        # ensemble_classification_conf is the fused WeightedChartClassifier
+        # score for the winning hypothesis (0.0-1.0). It is captured here so
+        # it can be persisted into the result metadata for confidence
+        # reporting (see _format_result / the 'unknown' early-return below),
+        # instead of being computed and silently discarded as before.
         if chart_type:
             # A chart type was already confirmed upstream (e.g. re-extracting
             # after manual bbox correction). Skip reclassification and use a
             # single hypothesis so we don't process the same detections twice.
+            # No ensemble ran, so treat classification as fully confirmed
+            # rather than leaving the confidence undefined.
             chart_types = [normalize_chart_type(chart_type)]
+            ensemble_classification_conf = 1.0
         elif manual_detections is not None:
             # Manual detections represent a single, already-confirmed set of
             # boxes. Running them through more than one chart-type hypothesis
             # would process the identical detections multiple times and
             # duplicate every extracted element (see loop below), so we
             # restrict classification to a single top guess in this case.
-            chart_types = self._classify_chart_types(img, advanced_settings, top_k=1)
+            chart_types, ensemble_classification_conf = self._classify_chart_types(
+                img, advanced_settings, top_k=1
+            )
         else:
-            chart_types = self._classify_chart_types(img, advanced_settings, top_k=2)
+            chart_types, ensemble_classification_conf = self._classify_chart_types(
+                img, advanced_settings, top_k=2
+            )
         self.logger.info(f"Classified as: {chart_types}")
         
         primary_final_result = None
@@ -170,22 +183,6 @@ class ChartAnalysisPipeline(BasePipeline):
         # detection model to run, so we skip the extraction loop and return
         # a lightweight result that the GUI can display with a clear
         # "Unknown — please classify manually" indicator.
-        if chart_types == ['unknown']:
-            # Fallback layout region recovery: check if image is a full-page canvas containing a chart region
-            try:
-                from core.pdf_processor import _find_chart_regions_cv2
-                crops = _find_chart_regions_cv2(img)
-                if crops:
-                    self.logger.info("Found %d layout chart region(s) on unclassified image; attempting crop recovery...", len(crops))
-                    best_bbox, crop_img = crops[0]
-                    rescue_types = self._classify_chart_types(crop_img, advanced_settings, top_k=2)
-                    if rescue_types and rescue_types != ['unknown']:
-                        self.logger.info("Crop recovery successfully classified region as: %s", rescue_types)
-                        img = crop_img
-                        chart_types = rescue_types
-            except Exception as exc:
-                self.logger.debug("Crop recovery check skipped: %s", exc)
-
         if chart_types == ['unknown']:
             self.logger.info(
                 "Chart type is 'unknown' (low classifier confidence). "
@@ -202,18 +199,35 @@ class ChartAnalysisPipeline(BasePipeline):
                 'metadata': {
                     'classification_result': 'unknown',
                     'skip_reason': 'Low classifier confidence',
+                    'model_confidences': self._build_confidence_summary(
+                        ensemble_classification_conf, 0.0
+                    ),
                 },
                 'detections': {},
             }
 
         for ct in chart_types:
             chart_type = normalize_chart_type(ct)
-            
+
+            # detection_quality feeds into the persisted model_confidences
+            # metadata (see _build_confidence_summary below). It must be
+            # defined on every branch of this loop, not just the
+            # auto-detection success path, or a later iteration could
+            # silently reuse a stale value from a previous chart_type
+            # hypothesis, or the winning iteration could leave it undefined
+            # entirely (e.g. manual detections, or no detections found on
+            # the final/only hypothesis).
+            detection_quality = 0.0
+
             # 3. Detection
             if manual_detections is not None:
                 import copy
                 detections = copy.deepcopy(manual_detections)
                 self.logger.info(f"Using manual detections for {chart_type}.")
+                # Manual detections were already reviewed/corrected by a
+                # human, so there is no meaningful "low confidence" signal
+                # to derive here — treat as fully confirmed.
+                detection_quality = 1.0
             else:
                 detections = self._detect_elements(img, chart_type, advanced_settings)
                 
@@ -223,9 +237,9 @@ class ChartAnalysisPipeline(BasePipeline):
                     self.logger.info("Falling back to next hypothesis.")
                     continue
             elif manual_detections is None:
-                quality = self._evaluate_detection_quality(chart_type, detections)
-                self.logger.info(f"Detection quality for {chart_type}: {quality:.2f}")
-                if quality < 0.50 and ct != chart_types[-1]:
+                detection_quality = self._evaluate_detection_quality(chart_type, detections)
+                self.logger.info(f"Detection quality for {chart_type}: {detection_quality:.2f}")
+                if detection_quality < 0.50 and ct != chart_types[-1]:
                     self.logger.warning("Detection quality too low. Falling back to next hypothesis.")
                     continue
 
@@ -350,7 +364,11 @@ class ChartAnalysisPipeline(BasePipeline):
                         el['series_type'] = chart_type
                 all_elements.extend(result.elements)
 
-            final_result = self._format_result(result, image_path, detections)
+            final_result = self._format_result(
+                result, image_path, detections,
+                classification_confidence=ensemble_classification_conf,
+                detection_confidence=detection_quality,
+            )
             
             if 'bars' in final_result:
                 all_bars.extend(final_result['bars'])
@@ -382,8 +400,19 @@ class ChartAnalysisPipeline(BasePipeline):
             
         return primary_final_result
 
-    def _classify_chart_types(self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2) -> List[str]:
-        """Determines the types of the chart using the weighted multi-model ensemble."""
+    def _classify_chart_types(
+        self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2
+    ) -> Tuple[List[str], float]:
+        """Determines the types of the chart using the weighted multi-model ensemble.
+
+        Returns:
+            (chart_type_hypotheses, classification_confidence). The
+            confidence is the fused WeightedChartClassifier score (0.0-1.0)
+            for the top hypothesis — the same value the ensemble already
+            uses internally to decide 'unknown' / trigger heatmap rescue —
+            so callers get a confidence number that is consistent with the
+            type decision instead of re-deriving one separately.
+        """
         try:
             from core.ensemble_classifier import WeightedChartClassifier
             ensemble = WeightedChartClassifier(self.models_manager)
@@ -391,10 +420,10 @@ class ChartAnalysisPipeline(BasePipeline):
 
             if types and types != ['unknown'] and 'heatmap' not in types and (top_conf is not None and top_conf < 0.70):
                 types = self._heatmap_rescue(img, types, advanced_settings, top_conf=top_conf)
-            return types
+            return types, float(top_conf) if top_conf is not None else 0.0
         except Exception as e:
             self.logger.error(f"Classification inference error: {e}", exc_info=True)
-            return ['unknown']
+            return ['unknown'], 0.0
 
     # Minimum confidence for the heatmap macro model's ``chart`` detection to
     # trigger a rescue override (when no ``color_bar_region`` is found).
@@ -470,7 +499,7 @@ class ChartAnalysisPipeline(BasePipeline):
                     try:
                         from core.class_maps import CLASS_MAP_HEATMAP_COLORBAR
                         cb_dets = run_inference_on_image(cb_model, img, conf, CLASS_MAP_HEATMAP_COLORBAR)
-                        if cb_dets:
+                        if any(CLASS_MAP_HEATMAP_COLORBAR.get(d.get('cls', -1)) == 'color_bar' for d in cb_dets):
                             has_colorbar = True
                     except Exception:
                         pass
@@ -496,6 +525,29 @@ class ChartAnalysisPipeline(BasePipeline):
             self.logger.warning("Heatmap rescue probe failed: %s", exc)
 
         return current_types
+
+    @staticmethod
+    def _build_confidence_summary(classification_confidence: float, detection_confidence: float) -> Dict[str, float]:
+        """Builds the persisted 'model_confidences' metadata block.
+
+        classification_confidence: fused WeightedChartClassifier score for
+            the winning chart-type hypothesis (see _classify_chart_types).
+        detection_confidence: average per-element detection confidence for
+            the winning hypothesis (see _evaluate_detection_quality), or a
+            fixed 1.0/0.0 sentinel for the manual-detections / unknown-type
+            edge cases respectively (see call sites).
+
+        Both inputs are already clamped to [0.0, 1.0] by their producers;
+        this just guards against unexpected None/out-of-range values from
+        future callers rather than silently propagating bad data.
+        """
+        cls_conf = min(1.0, max(0.0, float(classification_confidence or 0.0)))
+        det_conf = min(1.0, max(0.0, float(detection_confidence or 0.0)))
+        return {
+            'classification': cls_conf,
+            'detection': det_conf,
+            'average': (cls_conf + det_conf) / 2.0,
+        }
 
     def _evaluate_detection_quality(self, chart_type: str, detections: Dict[str, List[Dict]]) -> float:
         """
@@ -526,11 +578,18 @@ class ChartAnalysisPipeline(BasePipeline):
         advanced_settings: Optional[Dict] = None,
     ) -> Dict[str, List[Dict]]:
         """Runs object detection for the specific chart type."""
+        # Cascaded expert models for specialized chart types
+        if chart_type == 'heatmap':
+            return self._detect_heatmap_experts(img, advanced_settings)
+        if chart_type == 'line' and self.models_manager.get_model('line_seg'):
+            return self._detect_line_experts(img, advanced_settings)
+        if chart_type == 'area' and self.models_manager.get_model('area_seg'):
+            return self._detect_area_experts(img, advanced_settings)
+        if chart_type == 'box' and (self.models_manager.get_model('box_global') or self.models_manager.get_model('box_element')):
+            return self._detect_box_experts(img, advanced_settings)
+
         model = self.models_manager.get_model(chart_type)
         if not model:
-            # For heatmap, the model key is no longer 'heatmap' but split into experts
-            if chart_type == 'heatmap':
-                return self._detect_heatmap_experts(img, advanced_settings)
             self.logger.error(f"No detection model for {chart_type}")
             return {}
             
@@ -626,6 +685,234 @@ class ChartAnalysisPipeline(BasePipeline):
         organized = _reclassify_top_boxes(organized, img.shape[1])
                 
         return organized
+
+    def _detect_line_experts(
+        self,
+        img: np.ndarray,
+        advanced_settings: Optional[Dict] = None,
+    ) -> Dict[str, List[Dict]]:
+        """Multi-model expert detection for line charts on full image:
+        Phase 1: line_obj_detect on full image -> chart, axis_title, legend, chart_title, data_label, axis_labels
+        Phase 2: line_seg on full image -> line_series
+        Phase 3: line_markers_detect on full image -> data_marker
+        """
+        line_obj_map = get_class_map('line_obj')
+        organized = {name: [] for name in line_obj_map.values()}
+        organized['line_series'] = []
+        organized['data_marker'] = []
+        organized['data_point'] = []  # Compatibility
+        organized['unknown'] = []
+
+        conf = 0.25
+        nms = 0.45
+        if isinstance(advanced_settings, dict):
+            det_conf = advanced_settings.get('detection_confidence_overrides', {})
+            if isinstance(det_conf, dict) and 'line' in det_conf:
+                try:
+                    conf = float(det_conf['line'])
+                except (TypeError, ValueError):
+                    pass
+
+        # Phase 1: Macro Layout (line_obj)
+        macro_model = self.models_manager.get_model('line_obj')
+        if macro_model:
+            macro_dets = run_inference_on_image(
+                macro_model, img, conf, line_obj_map,
+                nms_threshold=nms, model_output_type='yolo_nms',
+            )
+            for det in macro_dets:
+                cls_name = line_obj_map.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info("Line Macro: %d layout elements found", len(macro_dets))
+
+        # Phase 2: Segmentation (line_seg on full image)
+        seg_model = self.models_manager.get_model('line_seg')
+        if seg_model:
+            seg_map = get_class_map('line_seg')
+            seg_dets = run_inference_on_image(
+                seg_model, img, conf, seg_map,
+                nms_threshold=nms, model_output_type='segmentation',
+            )
+            organized['line_series'] = seg_dets
+            self.logger.info("Line Segmentation: %d series found", len(seg_dets))
+
+        # Phase 3: Marker Detection (line_markers on full image)
+        marker_model = self.models_manager.get_model('line_markers')
+        if marker_model:
+            marker_map = get_class_map('line_markers')
+            marker_dets = run_inference_on_image(
+                marker_model, img, conf, marker_map,
+                nms_threshold=nms, model_output_type='yolo_nms',
+            )
+            organized['data_marker'] = marker_dets
+            self.logger.info("Line Markers: %d markers found", len(marker_dets))
+
+        return organized
+
+    def _detect_area_experts(
+        self,
+        img: np.ndarray,
+        advanced_settings: Optional[Dict] = None,
+    ) -> Dict[str, List[Dict]]:
+        """Multi-model expert detection for area charts on full image:
+        Phase 1: area_obj_detect on full image -> chart, axis_title, legend, chart_title, data_label, axis_labels
+        Phase 2: area_seg on full image -> area_series
+        """
+        area_obj_map = get_class_map('area_obj')
+        organized = {name: [] for name in area_obj_map.values()}
+        organized['area_series'] = []
+        organized['data_point'] = []  # Compatibility
+        organized['unknown'] = []
+
+        conf = 0.25
+        nms = 0.45
+        if isinstance(advanced_settings, dict):
+            det_conf = advanced_settings.get('detection_confidence_overrides', {})
+            if isinstance(det_conf, dict) and 'area' in det_conf:
+                try:
+                    conf = float(det_conf['area'])
+                except (TypeError, ValueError):
+                    pass
+
+        # Phase 1: Macro Layout (area_obj)
+        macro_model = self.models_manager.get_model('area_obj')
+        if macro_model:
+            macro_dets = run_inference_on_image(
+                macro_model, img, conf, area_obj_map,
+                nms_threshold=nms, model_output_type='yolo_nms',
+            )
+            for det in macro_dets:
+                cls_name = area_obj_map.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info("Area Macro: %d layout elements found", len(macro_dets))
+
+        # Phase 2: Segmentation (area_seg on full image)
+        seg_model = self.models_manager.get_model('area_seg')
+        if seg_model:
+            seg_map = get_class_map('area_seg')
+            seg_dets = run_inference_on_image(
+                seg_model, img, conf, seg_map,
+                nms_threshold=nms, model_output_type='segmentation',
+            )
+            organized['area_series'] = seg_dets
+            self.logger.info("Area Segmentation: %d series found", len(seg_dets))
+
+        return organized
+
+    def _detect_box_experts(
+        self,
+        img: np.ndarray,
+        advanced_settings: Optional[Dict] = None,
+    ) -> Dict[str, List[Dict]]:
+        """Multi-model expert detection for box plots on full image:
+        Phase 1: box_global_detect on full image -> chart, axis_title, legend, chart_title, axis_labels
+        Phase 2: box_element_detect on full image -> box, range_indicator, median_line, outlier, significance_marker
+        """
+        box_global_map = get_class_map('box_global')
+        box_element_map = get_class_map('box_element')
+        organized = {name: [] for name in box_global_map.values()}
+        for name in box_element_map.values():
+            organized[name] = []
+        organized['unknown'] = []
+
+        conf = 0.25
+        nms = 0.7
+        if isinstance(advanced_settings, dict):
+            det_conf = advanced_settings.get('detection_confidence_overrides', {})
+            det_nms = advanced_settings.get('detection_nms_overrides', {})
+            if isinstance(det_conf, dict) and 'box' in det_conf:
+                try:
+                    conf = float(det_conf['box'])
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(det_nms, dict) and 'box' in det_nms:
+                try:
+                    nms = float(det_nms['box'])
+                except (TypeError, ValueError):
+                    pass
+
+        # Phase 1: Macro Layout (box_global)
+        global_model = self.models_manager.get_model('box_global')
+        if global_model:
+            global_dets = run_inference_on_image(
+                global_model, img, conf, box_global_map,
+                nms_threshold=nms, model_output_type='yolo_nms',
+            )
+            for det in global_dets:
+                cls_name = box_global_map.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info("Box Global: %d layout elements found", len(global_dets))
+
+        # Phase 2: Box Elements (box_element)
+        element_model = self.models_manager.get_model('box_element')
+        if element_model:
+            element_dets = run_inference_on_image(
+                element_model, img, conf, box_element_map,
+                nms_threshold=nms, model_output_type='yolo_nms',
+            )
+            for det in element_dets:
+                cls_name = box_element_map.get(det['cls'])
+                if cls_name:
+                    organized[cls_name].append(det)
+            self.logger.info("Box Elements: %d elements found", len(element_dets))
+
+        return organized
+
+    @staticmethod
+    def _run_expert_on_roi(
+        session,
+        full_image: np.ndarray,
+        roi: List[int],
+        class_map: Dict,
+        conf_threshold: float,
+        nms_threshold: float,
+        model_output_type: str = "bbox",
+    ) -> List[Dict]:
+        """Run an expert model on a cropped ROI and re-project coordinates.
+
+        Args:
+            session: ONNX InferenceSession for the expert model.
+            full_image: Full input image (H, W, C).
+            roi: ROI bounding box [x1, y1, x2, y2] in full-image coords.
+            class_map: Class ID → name mapping for the expert.
+            conf_threshold: Confidence threshold.
+            nms_threshold: NMS IoU threshold.
+            model_output_type: Model output parser type ("bbox", "yolo_nms", "segmentation", etc.)
+
+        Returns:
+            List of detection dicts with coordinates in full-image space.
+        """
+        h, w = full_image.shape[:2]
+        rx1 = max(0, int(roi[0]))
+        ry1 = max(0, int(roi[1]))
+        rx2 = min(w, int(roi[2]))
+        ry2 = min(h, int(roi[3]))
+
+        if rx2 <= rx1 + 10 or ry2 <= ry1 + 10:
+            # ROI too small — skip
+            return []
+
+        crop = full_image[ry1:ry2, rx1:rx2]
+        dets = run_inference_on_image(
+            session, crop, conf_threshold, class_map,
+            nms_threshold=nms_threshold,
+            model_output_type=model_output_type,
+        )
+
+        # Re-project from crop-local to full-image coordinates
+        for det in dets:
+            x1, y1, x2, y2 = det['xyxy']
+            det['xyxy'] = [
+                x1 + rx1,
+                y1 + ry1,
+                x2 + rx1,
+                y2 + ry1,
+            ]
+
+        return dets
 
     # ── Heatmap Expert Models: Cascaded ROI Pipeline ──────────────────────────
 
@@ -776,56 +1063,6 @@ class ChartAnalysisPipeline(BasePipeline):
             self.logger.warning("heatmap_text model not loaded — no text detections")
 
         return organized
-
-    @staticmethod
-    def _run_expert_on_roi(
-        session,
-        full_image: np.ndarray,
-        roi: List[int],
-        class_map: Dict,
-        conf_threshold: float,
-        nms_threshold: float,
-    ) -> List[Dict]:
-        """Run an expert model on a cropped ROI and re-project coordinates.
-
-        Args:
-            session: ONNX InferenceSession for the expert model.
-            full_image: Full input image (H, W, C).
-            roi: ROI bounding box [x1, y1, x2, y2] in full-image coords.
-            class_map: Class ID → name mapping for the expert.
-            conf_threshold: Confidence threshold.
-            nms_threshold: NMS IoU threshold.
-
-        Returns:
-            List of detection dicts with coordinates in full-image space.
-        """
-        h, w = full_image.shape[:2]
-        rx1 = max(0, int(roi[0]))
-        ry1 = max(0, int(roi[1]))
-        rx2 = min(w, int(roi[2]))
-        ry2 = min(h, int(roi[3]))
-
-        if rx2 <= rx1 + 10 or ry2 <= ry1 + 10:
-            # ROI too small — skip
-            return []
-
-        crop = full_image[ry1:ry2, rx1:rx2]
-        dets = run_inference_on_image(
-            session, crop, conf_threshold, class_map,
-            nms_threshold=nms_threshold,
-        )
-
-        # Re-project from crop-local to full-image coordinates
-        for det in dets:
-            x1, y1, x2, y2 = det['xyxy']
-            det['xyxy'] = [
-                x1 + rx1,
-                y1 + ry1,
-                x2 + rx1,
-                y2 + ry1,
-            ]
-
-        return dets
 
     def _detect_text_layout(
         self,
@@ -1013,7 +1250,14 @@ class ChartAnalysisPipeline(BasePipeline):
         # Store the additional doclayout OCR results back into detections
         detections['layout_text_regions'] = extra_regions
 
-    def _format_result(self, orchestration_result, image_path, detections) -> PipelineResult:
+    def _format_result(
+        self,
+        orchestration_result,
+        image_path,
+        detections,
+        classification_confidence: float = 1.0,
+        detection_confidence: float = 0.0,
+    ) -> PipelineResult:
         """Formats the final output dictionary."""
         # Handle baselines formatting
         baselines = []
@@ -1036,6 +1280,15 @@ class ChartAnalysisPipeline(BasePipeline):
             else str(orchestration_result.orientation)
         )
 
+        # diagnostics is a dict at every construction site in
+        # ChartAnalysisOrchestrator/strategies, but fall back to {} the same
+        # defensive way strategies/hybrid.py already does, in case a future
+        # strategy leaves it unset.
+        metadata = dict(orchestration_result.diagnostics or {})
+        metadata['model_confidences'] = self._build_confidence_summary(
+            classification_confidence, detection_confidence
+        )
+
         final = {
             'image_file': image_path.name,
             'original_image_path': str(image_path.resolve()),
@@ -1044,7 +1297,7 @@ class ChartAnalysisPipeline(BasePipeline):
             'elements': orchestration_result.elements,
             'calibration': calib,
             'baselines': baselines,
-            'metadata': orchestration_result.diagnostics,
+            'metadata': metadata,
             'detections': detections
         }
 

@@ -18,10 +18,19 @@ CLASS_MAP_BAR: Dict[int, str] = {
     5: 'legend', 6: 'chart_title', 7: 'data_label', 8: 'axis_labels'
 }
 
-# Box plot detection model
+# Box plot detection model (legacy monolithic — kept for backward compatibility)
 CLASS_MAP_BOX: Dict[int, str] = {
     0: 'chart', 1: 'box', 2: 'axis_title', 3: 'significance_marker', 4: 'range_indicator',
     5: 'legend', 6: 'chart_title', 7: 'median_line', 8: 'axis_labels', 9: 'outlier'
+}
+
+# Box plot modular expert models
+CLASS_MAP_BOX_GLOBAL: Dict[int, str] = {
+    0: 'chart', 1: 'axis_title', 2: 'legend', 3: 'chart_title', 4: 'axis_labels'
+}
+
+CLASS_MAP_BOX_ELEMENT: Dict[int, str] = {
+    0: 'box', 1: 'range_indicator', 2: 'median_line', 3: 'outlier', 4: 'significance_marker'
 }
 
 # Line chart detection model
@@ -80,14 +89,34 @@ CLASS_MAP_PIE_POSE: Dict[int, str] = {
 # Backward compatibility alias used by runtime paths
 CLASS_MAP_PIE: Dict[int, str] = CLASS_MAP_PIE_POSE
 
-# Area chart detection model (shared structure with line; uses same detection model)
+# Area chart detection model (legacy monolithic — kept for backward compatibility)
 CLASS_MAP_AREA: Dict[int, str] = {
     0: 'chart', 1: 'data_point', 2: 'chart_title', 3: 'significance_marker', 4: 'error_bar',
     5: 'legend', 6: 'axis_title', 7: 'data_label', 8: 'axis_labels'
 }
 
-# Backward compatibility alias
-CLASS_MAP_LINE_OBJ = CLASS_MAP_LINE
+# Line and Area Modular Expert Models
+CLASS_MAP_LINE_OBJ: Dict[int, str] = {
+    0: 'chart', 1: 'line_segment', 2: 'axis_title', 3: 'legend',
+    4: 'chart_title', 5: 'data_label', 6: 'axis_labels'
+}
+
+CLASS_MAP_LINE_MARKERS: Dict[int, str] = {
+    0: 'data_marker'
+}
+
+CLASS_MAP_LINE_SEG: Dict[int, str] = {
+    0: 'line_series'
+}
+
+CLASS_MAP_AREA_OBJ: Dict[int, str] = {
+    0: 'chart', 1: 'axis_title', 2: 'legend',
+    3: 'chart_title', 4: 'data_label', 5: 'axis_labels'
+}
+
+CLASS_MAP_AREA_SEG: Dict[int, str] = {
+    0: 'area_series'
+}
 
 # DocLayout-YOLO document layout detection model (doclayout_yolo.onnx)
 # Output format: [1, 14, 21504] → 4 bbox coords + 10 class scores per anchor
@@ -108,11 +137,20 @@ CLASS_MAP_DOCLAYOUT: Dict[int, str] = {
 DOCLAYOUT_TEXT_CLASS_IDS: frozenset = frozenset({0, 1, 4})  # title, plain_text, figure_caption
 
 
+# Multi-chart object detection model (type_detect.onnx)
+# Detects individual chart regions inside multi-panel figures & pre-classifies chart types
+CLASS_MAP_TYPE_DETECT: Dict[int, str] = {
+    0: 'area', 1: 'bar', 2: 'box', 3: 'heatmap',
+    4: 'histogram', 5: 'line', 6: 'pie', 7: 'scatter'
+}
+
+
 def get_class_map(chart_type: str) -> Dict[int, str]:
     """Get the appropriate class map for a chart type.
 
     Args:
-        chart_type: One of 'bar', 'box', 'line', 'scatter', 'histogram', 'heatmap', 'pie', 'area'
+        chart_type: One of 'bar', 'box', 'line', 'scatter', 'histogram', 'heatmap', 'pie', 'area', 'type_detect',
+                    'line_obj', 'line_markers', 'line_seg', 'area_obj', 'area_seg'
 
     Returns:
         Dictionary mapping class IDs to class names
@@ -120,21 +158,34 @@ def get_class_map(chart_type: str) -> Dict[int, str]:
     return {
         'bar': CLASS_MAP_BAR,
         'box': CLASS_MAP_BOX,
+        'box_global': CLASS_MAP_BOX_GLOBAL,
+        'box_element': CLASS_MAP_BOX_ELEMENT,
         'line': CLASS_MAP_LINE,
+        'line_obj': CLASS_MAP_LINE_OBJ,
+        'line_markers': CLASS_MAP_LINE_MARKERS,
+        'line_seg': CLASS_MAP_LINE_SEG,
         'scatter': CLASS_MAP_SCATTER,
         'histogram': CLASS_MAP_HISTOGRAM,
         'heatmap': CLASS_MAP_HEATMAP,
         'pie': CLASS_MAP_PIE_POSE,
         'area': CLASS_MAP_AREA,
+        'area_obj': CLASS_MAP_AREA_OBJ,
+        'area_seg': CLASS_MAP_AREA_SEG,
+        'type_detect': CLASS_MAP_TYPE_DETECT,
     }.get(chart_type, CLASS_MAP_BAR)
 
 
 __all__ = [
     'CLASS_MAP_CLASSIFICATION',
+    'CLASS_MAP_TYPE_DETECT',
     'CLASS_MAP_BAR',
     'CLASS_MAP_BOX',
+    'CLASS_MAP_BOX_GLOBAL',
+    'CLASS_MAP_BOX_ELEMENT',
     'CLASS_MAP_LINE',
     'CLASS_MAP_LINE_OBJ',
+    'CLASS_MAP_LINE_MARKERS',
+    'CLASS_MAP_LINE_SEG',
     'CLASS_MAP_SCATTER',
     'CLASS_MAP_HISTOGRAM',
     'CLASS_MAP_HEATMAP',
@@ -146,6 +197,8 @@ __all__ = [
     'CLASS_MAP_PIE_POSE',
     'CLASS_MAP_PIE',
     'CLASS_MAP_AREA',
+    'CLASS_MAP_AREA_OBJ',
+    'CLASS_MAP_AREA_SEG',
     'CLASS_MAP_DOCLAYOUT',
     'DOCLAYOUT_TEXT_CLASS_IDS',
     'get_class_map',

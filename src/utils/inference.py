@@ -257,9 +257,76 @@ def _postprocess_classification_output(
     return detections
 
 
+def _postprocess_segmentation_output(
+    output0: np.ndarray,
+    output1: np.ndarray,
+    conf_threshold: float,
+    ratio: float,
+    pad: tuple,
+    mask_threshold: float = 0.5,
+) -> list:
+    """Post-process YOLO segmentation output with embedded NMS (e.g. YOLOv11/26-seg).
+    Expected output0 shape: (1, 300, 38) where [x1, y1, x2, y2, score, cls, coeff_0..31]
+    Expected output1 shape: (1, 32, mh, mw) where mh, mw are proto mask dimensions (e.g. 256, 256).
+    """
+    pad_w, pad_h = pad
+    preds = output0[0]
+    protos = output1[0]  # (32, mh, mw)
+
+    mask = preds[:, 4] >= conf_threshold
+    if not np.any(mask):
+        return []
+
+    filtered = preds[mask]
+    boxes = filtered[:, :4].copy()
+    scores = filtered[:, 4]
+    class_ids = filtered[:, 5].astype(int)
+    coeffs = filtered[:, 6:]  # (K, 32)
+
+    K = coeffs.shape[0]
+    mh, mw = protos.shape[1], protos.shape[2]
+    proto_flat = protos.reshape(32, -1)
+    mask_logits = np.matmul(coeffs, proto_flat).reshape(K, mh, mw)
+    masks = 1.0 / (1.0 + np.exp(-mask_logits))  # Sigmoid
+
+    detections = []
+    for i in range(K):
+        bx1, by1, bx2, by2 = boxes[i]
+
+        # Proto-space coordinates (1024 letterbox -> proto space mw, mh)
+        px1 = int(np.clip(bx1 * mw / 1024.0, 0, mw))
+        py1 = int(np.clip(by1 * mh / 1024.0, 0, mh))
+        px2 = int(np.clip(bx2 * mw / 1024.0, 0, mw))
+        py2 = int(np.clip(by2 * mh / 1024.0, 0, mh))
+
+        # Unletterbox bounding box to original image coordinates
+        ox1 = int((bx1 - pad_w) / ratio)
+        oy1 = int((by1 - pad_h) / ratio)
+        ox2 = int((bx2 - pad_w) / ratio)
+        oy2 = int((by2 - pad_h) / ratio)
+
+        bw, bh = max(1, ox2 - ox1), max(1, oy2 - oy1)
+
+        # Bilinear upsample cropped proto sub-mask directly to instance bbox size
+        if px2 > px1 and py2 > py1:
+            sub_mask = masks[i, py1:py2, px1:px2].astype(np.float32)
+            upsampled = cv2.resize(sub_mask, (bw, bh), interpolation=cv2.INTER_LINEAR)
+            binary_mask = (upsampled >= mask_threshold).astype(np.uint8)
+        else:
+            binary_mask = np.zeros((bh, bw), dtype=np.uint8)
+
+        detections.append({
+            'xyxy': [ox1, oy1, ox2, oy2],
+            'conf': float(scores[i]),
+            'cls': int(class_ids[i]),
+            'mask': binary_mask,
+        })
+    return detections
+
+
 def _infer_model_output_type(output: np.ndarray, class_map: dict, requested: str) -> str:
     """Infer output type when requested='auto'."""
-    if requested in ('bbox', 'pose', 'yolo_nms', 'classification'):
+    if requested in ('bbox', 'pose', 'yolo_nms', 'classification', 'segmentation'):
         return requested
 
     if output.ndim == 2:
@@ -360,6 +427,14 @@ def run_inference(
                 pad=pad,
                 expected_keypoints=expected_keypoints,
             )
+        elif output_type == 'segmentation':
+            return _postprocess_segmentation_output(
+                output0=outputs[0],
+                output1=outputs[1],
+                conf_threshold=conf_threshold,
+                ratio=ratio,
+                pad=pad,
+            )
         return _postprocess_bbox_output(
             output=outputs[0],
             conf_threshold=conf_threshold,
@@ -392,7 +467,7 @@ def run_inference_on_image(
         input_size: Model input size (width, height)
         nms_threshold: Non-Maximum Suppression threshold. Higher values (e.g., 0.7) 
                        allow more overlapping boxes, useful for grouped elements like box plots.
-        model_output_type: "bbox", "pose", "classification", or "auto" detection output parser.
+        model_output_type: "bbox", "pose", "classification", "yolo_nms", "segmentation", or "auto".
         expected_keypoints: Expected keypoint count for pose models.
     """
     if not 0.0 <= conf_threshold <= 1.0:
@@ -443,6 +518,14 @@ def run_inference_on_image(
                 nms_threshold=nms_threshold,
                 expected_keypoints=expected_keypoints,
             )
+        elif output_type == 'segmentation':
+            return _postprocess_segmentation_output(
+                output0=outputs[0],
+                output1=outputs[1],
+                conf_threshold=conf_threshold,
+                ratio=ratio,
+                pad=pad,
+            )
         return _postprocess_bbox_output(
             output=outputs[0],
             conf_threshold=conf_threshold,
@@ -453,4 +536,100 @@ def run_inference_on_image(
         )
     except Exception as e:
         logging.error(f"Erro durante a inferência ONNX na imagem em memória: {e}")
+        return []
+
+
+def decompose_multipanel_figure(
+    img: np.ndarray,
+    model_manager: Any,
+    conf_threshold: float = 0.25,
+    padding: int = 20,
+) -> list:
+    """
+    Identifies individual charts within a multi-panel figure using type_detect.onnx.
+    
+    Args:
+        img: Input image array (BGR)
+        model_manager: ModelManager instance containing loaded models
+        conf_threshold: Confidence threshold for chart detection
+        padding: Padding in pixels to add around detected chart bounding boxes
+
+    Returns:
+        List of tuples: ((x1, y1, x2, y2), padded_chart_crop, predicted_chart_type)
+    """
+    logger = logging.getLogger("ChartAnalysisPipeline.TypeDetect")
+
+    if img is None or img.size == 0:
+        logger.warning("decompose_multipanel_figure called with empty image")
+        return []
+    if model_manager is None:
+        logger.warning("decompose_multipanel_figure called with model_manager=None")
+        return []
+
+    h, w = img.shape[:2]
+    logger.info("Running type_detect multi-panel decomposition on image (%dx%d px)", w, h)
+
+    try:
+        type_detect_model = model_manager.get_model('type_detect')
+        if type_detect_model is None:
+            logger.warning("type_detect.onnx model not found in model_manager")
+            return []
+
+        from core.class_maps import CLASS_MAP_TYPE_DETECT
+        dets = run_inference_on_image(
+            type_detect_model, img, conf_threshold, CLASS_MAP_TYPE_DETECT,
+            input_size=(640, 640), model_output_type='yolo_nms'
+        )
+
+        logger.info("type_detect raw inference returned %d detection(s) (conf_threshold=%.2f)", len(dets), conf_threshold)
+
+        if not dets:
+            logger.info("0 sub-chart bounding boxes detected by type_detect.onnx")
+            return []
+
+        crops = []
+        for idx, d in enumerate(dets):
+            xyxy = d.get('xyxy')
+            conf = d.get('conf', 0.0)
+            cls_id = int(d.get('cls', 1))
+            chart_type = CLASS_MAP_TYPE_DETECT.get(cls_id, 'bar')
+
+            if not xyxy or len(xyxy) < 4:
+                logger.debug("  Det #%d: invalid xyxy box %s, skipped", idx + 1, xyxy)
+                continue
+
+            x1, y1, x2, y2 = [int(v) for v in xyxy[:4]]
+            bw, bh = x2 - x1, y2 - y1
+
+            logger.debug(
+                "  Det #%d: class=%d (%s), conf=%.2f, box=[%d, %d, %d, %d] (%dx%d px)",
+                idx + 1, cls_id, chart_type, conf, x1, y1, x2, y2, bw, bh
+            )
+
+            # Filter non-viable detections
+            if bw < 50 or bh < 50:
+                logger.debug("  Det #%d: crop too small (%dx%d < 50x50), skipped", idx + 1, bw, bh)
+                continue
+
+            # Add padding
+            px1 = max(0, x1 - padding)
+            py1 = max(0, y1 - padding)
+            px2 = min(w, x2 + padding)
+            py2 = min(h, y2 + padding)
+
+            sub_crop = img[py1:py2, px1:px2]
+            if sub_crop.size > 0:
+                crops.append(((px1, py1, px2, py2), sub_crop, chart_type))
+                logger.info(
+                    "  Sub-chart #%d accepted: type='%s', conf=%.2f, padded_box=[%d, %d, %d, %d] (%dx%d px)",
+                    len(crops), chart_type, conf, px1, py1, px2, py2, px2 - px1, py2 - py1
+                )
+
+        # Sort top-to-bottom, left-to-right
+        crops.sort(key=lambda item: (item[0][1], item[0][0]))
+        logger.info("decompose_multipanel_figure finalized %d sub-chart crop(s)", len(crops))
+        return crops
+
+    except Exception as exc:
+        logger.error("Exception during type_detect multi-panel decomposition: %s", exc, exc_info=True)
         return []

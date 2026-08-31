@@ -160,7 +160,7 @@ class ModularBaselineDetector:
                     m_primary = coeffs[0]
                     inverted_axis = m_primary < 0.0
                     if inverted_axis:
-                        self.logger.warning("⚠️ INVERTED X-axis: primary slope=%.6f < 0", m_primary)
+                        self.logger.warning("INVERTED X-axis: primary slope=%.6f < 0", m_primary)
 
                 return BaselineResult(
                     baselines=[
@@ -230,7 +230,7 @@ class ModularBaselineDetector:
             if primary_calibration_result is not None and hasattr(primary_calibration_result, "func"):
                 zero_baseline = primary_calibration_zero
                 self.logger.info(
-                    "✅ Using PRIMARY calibration zero: %.1fpx (R²=%.4f)",
+                    "Using PRIMARY calibration zero: %.1fpx (R²=%.4f)",
                     zero_baseline,
                     getattr(primary_calibration_result, "r2", 0.0),
                 )

@@ -167,7 +167,9 @@ class AccuracyComparator:
         """Compute chart-specific value extraction metrics."""
         if chart_type == 'bar':
             return self._compare_bar_values(gt, pred)
-        elif chart_type in ['line', 'scatter']:
+        elif chart_type in ('line', 'area'):
+            return self._compare_curve_values(gt, pred)
+        elif chart_type == 'scatter':
             return self._compare_point_values(gt, pred)
         elif chart_type == 'box':
             return self._compare_boxplot_values(gt, pred)
@@ -186,13 +188,14 @@ class AccuracyComparator:
         pred_values = np.array(pred.get('calibrated_values', []))
         
         if len(gt_values) == 0 or len(pred_values) == 0:
-            return {"mae": float('inf'), "relative_error_pct": 100.0, "count_match": False}
+            return {"mae": float('inf'), "rmse": float('inf'), "relative_error_pct": 100.0, "count_match": False}
         
         # Sort both arrays for comparison (bar order may differ)
         gt_sorted = np.sort(gt_values)
         pred_sorted = np.sort(pred_values[:len(gt_values)])  # Match lengths
         
         mae = mean_absolute_error(gt_sorted, pred_sorted)
+        rmse = np.sqrt(np.mean((gt_sorted - pred_sorted) ** 2))
         relative_error = np.mean(np.abs((gt_sorted - pred_sorted) / (gt_sorted + 1e-10))) * 100
         
         # Relaxed accuracy: % of values within 5% tolerance
@@ -201,6 +204,7 @@ class AccuracyComparator:
         
         result = {
             "mae": float(mae),
+            "rmse": float(rmse),
             "relative_error_pct": float(relative_error),
             "relaxed_accuracy": float(relaxed_accuracy),
             "count_match": len(gt_values) == len(pred_values),
@@ -212,6 +216,60 @@ class AccuracyComparator:
             if ccc is not None:
                 result["ccc"] = ccc
         return result
+
+    def _compare_curve_values(self, gt: Dict, pred: Dict) -> Dict[str, float]:
+        """Compare dense curve or data point predictions for line/area charts against ground truth."""
+        gt_points = []
+        for chart in gt.get("charts", []):
+            gt_points.extend(chart.get("data_points", []))
+
+        if not gt_points:
+            return {"mae": float('inf'), "rmse": float('inf'), "num_gt": 0, "num_pred": 0}
+
+        pred_points = pred.get('metadata', {}).get('data_points', []) or pred.get('data_points', [])
+        if not pred_points:
+            return self._compare_point_values(gt, pred)
+
+        gt_x = [p.get('x', idx) for idx, p in enumerate(gt_points)]
+        gt_y = [p.get('y', 0.0) for p in gt_points]
+
+        pred_x = [p.get('x_value', p.get('x', idx)) for idx, p in enumerate(pred_points)]
+        pred_y = [p.get('estimated_value', p.get('y', p.get('value', 0.0))) for p in pred_points]
+
+        # Convert to numeric arrays
+        try:
+            gt_x_num = np.array(gt_x, dtype=float)
+            gt_y_num = np.array(gt_y, dtype=float)
+            pred_x_num = np.array(pred_x, dtype=float)
+            pred_y_num = np.array(pred_y, dtype=float)
+
+            # Resample predicted curve at GT X locations if pred is dense
+            if len(pred_x_num) > len(gt_x_num) and len(pred_x_num) >= 2:
+                sort_idx = np.argsort(pred_x_num)
+                pred_y_interp = np.interp(gt_x_num, pred_x_num[sort_idx], pred_y_num[sort_idx])
+            else:
+                min_len = min(len(gt_y_num), len(pred_y_num))
+                gt_y_num = gt_y_num[:min_len]
+                pred_y_interp = pred_y_num[:min_len]
+
+            mae = mean_absolute_error(gt_y_num, pred_y_interp)
+            rmse = np.sqrt(np.mean((gt_y_num - pred_y_interp) ** 2))
+            rel_err = np.mean(np.abs((gt_y_num - pred_y_interp) / (gt_y_num + 1e-10))) * 100.0
+
+            result = {
+                "mae": float(mae),
+                "rmse": float(rmse),
+                "relative_error_pct": float(rel_err),
+                "num_gt": len(gt_points),
+                "num_pred": len(pred_points),
+            }
+            if len(gt_y_num) >= 2:
+                ccc = _lin_ccc(gt_y_num, pred_y_interp)
+                if ccc is not None:
+                    result["ccc"] = ccc
+            return result
+        except Exception:
+            return self._compare_point_values(gt, pred)
     
     def _compare_point_values(self, gt: Dict, pred: Dict) -> Dict[str, float]:
         """Compare line/scatter points using Hungarian matching."""

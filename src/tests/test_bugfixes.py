@@ -30,10 +30,9 @@ def test_issue_c_process_ocr_reads_chart_title():
     pipeline.ocr_engine.process_batch.return_value = [{"text": "MockTitle", "confidence": 0.99}]
     
     pipeline._process_ocr(img, detections)
-    # The title should be added to axis_labels and carry text
-    assert len(detections.get('axis_labels', [])) == 1
-    assert detections['axis_labels'][0]['text'] == "MockTitle"
-    assert detections['axis_labels'][0]['ocr_source'] == "chart_title"
+    assert len(detections.get('chart_title', [])) == 1
+    assert detections['chart_title'][0]['text'] == "MockTitle"
+    assert detections['chart_title'][0]['ocr_source'] == "chart_title"
 
 def test_issue_d_process_ocr_reads_legend():
     pipeline = ChartAnalysisPipeline(MagicMock(), MagicMock(), MagicMock())
@@ -44,9 +43,9 @@ def test_issue_d_process_ocr_reads_legend():
     pipeline.ocr_engine.process_batch.return_value = [{"text": "LegendA", "confidence": 0.99}]
     
     pipeline._process_ocr(img, detections)
-    assert len(detections.get('axis_labels', [])) == 1
-    assert detections['axis_labels'][0]['text'] == "LegendA"
-    assert detections['axis_labels'][0]['ocr_source'] == "legend"
+    assert len(detections.get('legend', [])) == 1
+    assert detections['legend'][0]['text'] == "LegendA"
+    assert detections['legend'][0]['ocr_source'] == "legend"
 
 def test_issue_e_legend_misclassified_as_title():
     pipeline = ChartAnalysisPipeline(MagicMock(), MagicMock(), MagicMock())
@@ -83,7 +82,7 @@ def test_issue_e_legend_misclassified_as_title():
             
 def test_issue_g_line_chart_error_bar_association():
     from handlers.line_handler import LineHandler
-    handler = LineHandler()
+    handler = LineHandler(MagicMock(), MagicMock())
     img = np.zeros((100, 100, 3))
     
     # Needs to mock the extractor

@@ -62,5 +62,6 @@ def test_classify_chart_types_error_fallback_to_unknown():
     )
     img = np.zeros((100, 100, 3), dtype=np.uint8)
     
-    types = pipeline._classify_chart_types(img)
+    types, top_conf = pipeline._classify_chart_types(img)
     assert types == ['unknown']
+    assert top_conf == 0.0

@@ -82,7 +82,7 @@ class PROSACCalibration(BaseCalibration):
         import time
         t_start = time.perf_counter()
         
-        logger.info(f"📊 PROSAC CALIBRATION ATTEMPT (axis={axis_type}):")
+        logger.info(f"PROSAC CALIBRATION ATTEMPT (axis={axis_type}):")
         logger.info(f"   ├─ Input labels: {len(scale_labels)}")
         logger.info(f"   ├─ Min inliers required: {self.min_inliers}")
         logger.info(f"   └─ Max trials: {self.max_trials}")
@@ -99,7 +99,7 @@ class PROSACCalibration(BaseCalibration):
             logger.error(f"Error extracting points in PROSACCalibration: {e}")
             return None
         t_extract_end = time.perf_counter()
-        logger.info(f"⏱️ Point extraction took: {(t_extract_end - t_extract_start)*1000:.1f}ms")
+        logger.info(f"Point extraction took: {(t_extract_end - t_extract_start)*1000:.1f}ms")
         
         # Filter NaN/Inf
         valid_mask = np.isfinite(coords) & np.isfinite(values) & np.isfinite(weights)
@@ -146,7 +146,7 @@ class PROSACCalibration(BaseCalibration):
         t_thresh_start = time.perf_counter()
         thr = self._compute_mad_threshold(x_all, y_all, self.residual_threshold, w_all)
         t_thresh_end = time.perf_counter()
-        logger.info(f"⏱️ Adaptive threshold took: {(t_thresh_end - t_thresh_start)*1000:.1f}ms")
+        logger.info(f"Adaptive threshold took: {(t_thresh_end - t_thresh_start)*1000:.1f}ms")
         
         # FIXED: More lenient early termination for small datasets
         if n <= 4:
@@ -188,7 +188,7 @@ class PROSACCalibration(BaseCalibration):
             if it > 0 and it % 100 == 0:
                 t_now = time.perf_counter()
                 elapsed = t_now - t_loop_start
-                logger.info(f"⏱️ PROSAC progress: iter {it}/{self.max_trials}, elapsed={elapsed:.2f}s, best_inliers={best_inliers.sum() if best_inliers is not None else 0}")
+                logger.info(f"PROSAC progress: iter {it}/{self.max_trials}, elapsed={elapsed:.2f}s, best_inliers={best_inliers.sum() if best_inliers is not None else 0}")
             
             # Grow PROSAC pool
             if it > 0 and it % self.prosac_growth == 0:
@@ -295,11 +295,11 @@ class PROSACCalibration(BaseCalibration):
             score_history.append(best_score)
         
         t_loop_end = time.perf_counter()
-        logger.info(f"⏱️ Main loop timing: total={t_loop_end - t_loop_start:.2f}s, MSAC={t_msac_total*1000:.1f}ms, LO={t_lo_total*1000:.1f}ms ({lo_count} calls)")
+        logger.info(f"Main loop timing: total={t_loop_end - t_loop_start:.2f}s, MSAC={t_msac_total*1000:.1f}ms, LO={t_lo_total*1000:.1f}ms ({lo_count} calls)")
         
         if best_inliers is None:
             logger.error(
-                f"❌ PROSAC CALIBRATION FAILED (axis={axis_type}):\n"
+                f"PROSAC CALIBRATION FAILED (axis={axis_type}):\n"
                 f"   ├─ Input points: {n}\n"
                 f"   ├─ Adaptive min inliers: {adaptive_min_inliers}\n"
                 f"   ├─ Iterations completed: {len(score_history)}/{self.max_trials}\n"
@@ -354,32 +354,32 @@ class PROSACCalibration(BaseCalibration):
         
         t_end = time.perf_counter()
         logger.info(
-            f"📊 CALIBRATION COMPLETE (axis={axis_type}):\n"
+            f"CALIBRATION COMPLETE (axis={axis_type}):\n"
             f"  ├─ R² = {r2:.4f}\n"
             f"  ├─ Slope (m) = {best_m:.6f}\n"
             f"  ├─ Intercept (b) = {best_b:.4f}\n"
             f"  ├─ Zero-crossing (x₀=-b/m) = {zero_crossing:.2f}px\n"
             f"  ├─ Inliers = {best_inliers.sum()}/{n}\n"
-            f"  └─ ⏱️ Total time: {(t_end - t_start)*1000:.1f}ms"
+            f"  └─ Total time: {(t_end - t_start)*1000:.1f}ms"
         )
         
         # Validate slope direction
         if axis_type == 'x':  # Horizontal charts
             if best_m < 0:
                 logger.warning(
-                    f"⚠️  INVERTED X-AXIS DETECTED: slope={best_m:.6f} < 0\n"
+                    f"INVERTED X-AXIS DETECTED: slope={best_m:.6f} < 0\n"
                     f"    → Values decrease left-to-right (right-origin chart)"
                 )
             else:
-                logger.info(f"✓ Normal X-axis: slope={best_m:.6f} > 0 (left-origin)")
+                logger.info(f"Normal X-axis: slope={best_m:.6f} > 0 (left-origin)")
         elif axis_type == 'y':  # Vertical charts
             if best_m > 0:
                 logger.warning(
-                    f"⚠️  INVERTED Y-AXIS DETECTED: slope={best_m:.6f} > 0\n"
+                    f"INVERTED Y-AXIS DETECTED: slope={best_m:.6f} > 0\n"
                     f"    → Values decrease bottom-to-top (inverted vertical)"
                 )
             else:
-                logger.info(f"✓ Normal Y-axis: slope={best_m:.6f} < 0 (bottom-origin)")
+                logger.info(f"Normal Y-axis: slope={best_m:.6f} < 0 (bottom-origin)")
         
         # Map inliers back to original order
         orig_inliers = self._unorder_mask(best_inliers, order, n)

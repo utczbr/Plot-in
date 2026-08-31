@@ -24,8 +24,10 @@ class TestAreaChartWiring:
 
     def test_area_in_detection_config(self):
         from core.config import MODELS_CONFIG
-        assert 'area' in MODELS_CONFIG.detection
-        assert MODELS_CONFIG.detection['area'] == 'detect_line.onnx'
+        assert 'area_obj' in MODELS_CONFIG.detection
+        assert MODELS_CONFIG.detection['area_obj'] == 'area_obj_detect.onnx'
+        assert 'area_seg' in MODELS_CONFIG.detection
+        assert MODELS_CONFIG.detection['area_seg'] == 'area_seg.onnx'
 
     def test_area_class_map_exists(self):
         from core.class_maps import CLASS_MAP_AREA, get_class_map

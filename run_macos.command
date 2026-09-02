@@ -79,6 +79,12 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
     fi
 fi
 
+# ── Execution Provider Configuration ──────────────────────────────────────
+# Default DISABLE_COREML=1 on macOS to prevent CoreML JIT compiler timeouts
+# and "Error in building plan" on models with dynamic shapes, utilizing the fast
+# Apple Silicon CPU directly. Set DISABLE_COREML=0 to re-enable CoreML.
+export DISABLE_COREML="${DISABLE_COREML:-1}"
+
 # ── Launch the application ────────────────────────────────────────────────
 echo "» Starting Chart Analysis GUI..."
 "$PYTHON_BIN" src/main_modern.py "$@"

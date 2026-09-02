@@ -76,9 +76,18 @@ class PaddleOCREngine(BaseOCREngine):
         # Set execution providers based on GPU availability
         # Priority order: CUDA (GPU) → CPUExecutionProvider
         import platform
+        import os
         is_mac = platform.system() == 'Darwin'
-        if use_gpu:
-            providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if is_mac else ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        force_cpu = os.environ.get('ORT_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
+        disable_coreml = os.environ.get('DISABLE_COREML', '').lower() in ('1', 'true', 'yes') or force_cpu
+        disable_cuda = os.environ.get('DISABLE_CUDA', '').lower() in ('1', 'true', 'yes') or force_cpu
+        if use_gpu and not force_cpu:
+            if is_mac and not disable_coreml:
+                providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider']
+            elif not is_mac and not disable_cuda:
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            else:
+                providers = ['CPUExecutionProvider']
         else:
             providers = ['CPUExecutionProvider']
         

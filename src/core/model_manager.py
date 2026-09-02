@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 import re
 import sys
+import os
 import platform
 from typing import Dict, Optional
 
@@ -111,9 +112,12 @@ class ModelManager:
         available = set(ort.get_available_providers())
         providers = []
         is_mac = platform.system() == 'Darwin'
-        if not is_mac and 'CUDAExecutionProvider' in available:
+        force_cpu = os.environ.get('ORT_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
+        disable_coreml = os.environ.get('DISABLE_COREML', '').lower() in ('1', 'true', 'yes') or force_cpu
+        disable_cuda = os.environ.get('DISABLE_CUDA', '').lower() in ('1', 'true', 'yes') or force_cpu
+        if not is_mac and not disable_cuda and 'CUDAExecutionProvider' in available:
             providers.append('CUDAExecutionProvider')
-        if is_mac and 'CoreMLExecutionProvider' in available:
+        if is_mac and not disable_coreml and 'CoreMLExecutionProvider' in available:
             providers.append('CoreMLExecutionProvider')
         providers.append('CPUExecutionProvider')
         return providers

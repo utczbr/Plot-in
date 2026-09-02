@@ -110,3 +110,28 @@ def test_model_manager_keeps_previous_models_on_failed_reload(monkeypatch, tmp_p
 
     assert manager.get_loaded_models_dir() == dir_a
     assert manager.get_model("classification") is first_classification
+
+
+def test_model_manager_get_providers_respects_env_vars(monkeypatch):
+    from core.model_manager import _ensure_ort
+    ort = _ensure_ort()
+    monkeypatch.setattr(ort, "get_available_providers", lambda: ["CoreMLExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+
+    # Default on Darwin: CoreML + CPU
+    monkeypatch.delenv("DISABLE_COREML", raising=False)
+    monkeypatch.delenv("ORT_FORCE_CPU", raising=False)
+    providers = ModelManager._get_providers()
+    assert providers == ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+
+    # DISABLE_COREML=1
+    monkeypatch.setenv("DISABLE_COREML", "1")
+    providers = ModelManager._get_providers()
+    assert providers == ["CPUExecutionProvider"]
+
+    # ORT_FORCE_CPU=1
+    monkeypatch.delenv("DISABLE_COREML", raising=False)
+    monkeypatch.setenv("ORT_FORCE_CPU", "1")
+    providers = ModelManager._get_providers()
+    assert providers == ["CPUExecutionProvider"]
+

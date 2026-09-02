@@ -371,6 +371,29 @@ def _postprocess_onnx_output(
     )
 
 
+def _safe_session_run(session: Any, feed_dict: dict) -> list:
+    """Executes session.run with automatic fallback to CPUExecutionProvider if an accelerator fails."""
+    try:
+        return session.run(None, feed_dict)
+    except Exception as exc:
+        get_providers_fn = getattr(session, "get_providers", None)
+        set_providers_fn = getattr(session, "set_providers", None)
+        if callable(get_providers_fn) and callable(set_providers_fn):
+            current_providers = get_providers_fn()
+            if any(p != "CPUExecutionProvider" for p in current_providers):
+                logging.warning(
+                    f"ONNX inference failed with provider(s) {current_providers}: {exc}. "
+                    "Automatically falling back to CPUExecutionProvider and retrying..."
+                )
+                try:
+                    set_providers_fn(["CPUExecutionProvider"])
+                    return session.run(None, feed_dict)
+                except Exception as retry_exc:
+                    logging.error(f"Inference retry on CPUExecutionProvider also failed: {retry_exc}")
+                    raise
+        raise
+
+
 def run_inference(
     session: ort.InferenceSession,
     image_path: Path,
@@ -402,7 +425,7 @@ def run_inference(
         input_img = np.expand_dims(input_img, 0)
 
         input_name = session.get_inputs()[0].name
-        outputs = session.run(None, {input_name: input_img})
+        outputs = _safe_session_run(session, {input_name: input_img})
 
         output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
         if output_type == 'classification':
@@ -492,7 +515,7 @@ def run_inference_on_image(
         input_img = np.expand_dims(input_img, 0)
 
         input_name = session.get_inputs()[0].name
-        outputs = session.run(None, {input_name: input_img})
+        outputs = _safe_session_run(session, {input_name: input_img})
 
         output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
         if output_type == 'classification':

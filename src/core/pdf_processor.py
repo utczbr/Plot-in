@@ -19,7 +19,7 @@ import logging
 import fitz  # PyMuPDF
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Optional, Generator, Any
+from typing import List, Tuple, Optional, Generator, Any, Callable
 from contextlib import contextmanager
 import cv2
 import os
@@ -212,6 +212,113 @@ def _render_page_as_image(
         return None
 
 
+def _process_page_with_doclayout_and_type_detect(
+    page_img: np.ndarray,
+    page_num: int,
+    pdf_stem: str,
+    output_dir: Path,
+    model_manager: Optional[Any],
+    min_width: int,
+    min_height: int,
+    render_dpi: int = 200,
+    source_method: str = "doclayout_figure_crop",
+    page_rect: Optional[fitz.Rect] = None,
+) -> List[dict]:
+    """
+    Applies the full hierarchical pipeline to a document page canvas or full-page scan:
+    1. DocLayout (doclayout_yolo.onnx @ 1024x1024) -> proposes figure regions (cls == 3)
+    2. type_detect (type_detect.onnx @ 640x640) -> decomposes each figure region into sub-charts
+    """
+    page_charts: List[dict] = []
+    if page_img is None or page_img.size == 0:
+        return page_charts
+
+    h, w = page_img.shape[:2]
+    figure_crops = []
+
+    if model_manager is not None and getattr(model_manager, '_models', None):
+        try:
+            doclayout_model = None
+            if hasattr(model_manager, '_models') and isinstance(model_manager._models, dict):
+                if 'doclayout' in model_manager._models and model_manager._models['doclayout'] is not None:
+                    doclayout_model = model_manager.get_model('doclayout')
+                elif 'doclayout_yolo' in model_manager._models and model_manager._models['doclayout_yolo'] is not None:
+                    doclayout_model = model_manager.get_model('doclayout_yolo')
+            else:
+                doclayout_model = model_manager.get_model('doclayout')
+        except Exception:
+            doclayout_model = None
+
+        if doclayout_model is not None:
+            try:
+                from utils.inference import run_inference_on_image
+                from core.class_maps import CLASS_MAP_DOCLAYOUT
+                layout_dets = run_inference_on_image(
+                    doclayout_model, page_img, 0.25, CLASS_MAP_DOCLAYOUT,
+                    input_size=(1024, 1024), model_output_type='bbox',
+                )
+                for d in layout_dets:
+                    if d.get('cls') == 3:  # 3: figure ONLY (excludes plain_text, title, caption, table)
+                        bbox = d.get('bbox') or d.get('xyxy')
+                        if bbox and len(bbox) == 4:
+                            x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(w, x2), min(h, y2)
+                            crop_w, crop_h = x2 - x1, y2 - y1
+                            eff_min_w = int(min_width * (render_dpi / 300.0))
+                            eff_min_h = int(min_height * (render_dpi / 300.0))
+                            if crop_w >= eff_min_w and crop_h >= eff_min_h:
+                                crop_img = page_img[y1:y2, x1:x2]
+                                if crop_img.size > 0:
+                                    figure_crops.append(((x1, y1, x2, y2), crop_img))
+            except Exception as exc:
+                logger.debug("DocLayout figure cropping pass skipped: %s", exc)
+
+    if not figure_crops and model_manager is None:
+        cv_candidates = _find_chart_regions_cv2(page_img, min_width=min_width, min_height=min_height)
+        for (bx, by, bw, bh), crop_img in cv_candidates:
+            figure_crops.append(((bx, by, bx + bw, by + bh), crop_img))
+
+    if figure_crops:
+        logger.info(f"Page {page_num + 1}: {len(figure_crops)} layout figure region(s) proposed via {source_method}")
+        flat_chart_crops = []
+        if model_manager is not None:
+            from utils.inference import decompose_multipanel_figure
+            for bbox, crop_img in figure_crops:
+                sub_chart_crops = decompose_multipanel_figure(crop_img, model_manager, padding=20)
+                if sub_chart_crops:
+                    for (sb_bbox, sub_crop, pred_type) in sub_chart_crops:
+                        page_x1 = bbox[0] + sb_bbox[0]
+                        page_y1 = bbox[1] + sb_bbox[1]
+                        page_x2 = bbox[0] + sb_bbox[2]
+                        page_y2 = bbox[1] + sb_bbox[3]
+                        flat_chart_crops.append(((page_x1, page_y1, page_x2, page_y2), sub_crop, pred_type))
+                else:
+                    flat_chart_crops.append((bbox, crop_img, None))
+        else:
+            flat_chart_crops = [(bbox, crop_img, None) for bbox, crop_img in figure_crops]
+
+        for c_idx, (bbox, crop_img, pred_type) in enumerate(flat_chart_crops):
+            cw, ch = crop_img.shape[1], crop_img.shape[0]
+            filename = f"{pdf_stem}_page{page_num + 1:02d}_fig{c_idx + 1:02d}.png"
+            file_path = output_dir / filename
+            cv2.imwrite(str(file_path), crop_img)
+            p_rect = page_rect if page_rect is not None else fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+            page_charts.append({
+                'page_num': page_num + 1,
+                'image_index': c_idx + 1,
+                'file_path': file_path,
+                'high_res_path': file_path,
+                'image_buffer': crop_img,
+                'dimensions': (cw, ch),
+                'pdf_rect': p_rect,
+                'extraction_method': source_method + ('_type_detect' if pred_type else ''),
+                'preliminary_type': pred_type,
+            })
+
+    return page_charts
+
+
 def _extract_images_from_page_optimized(
     page: fitz.Page,
     page_num: int,
@@ -226,12 +333,12 @@ def _extract_images_from_page_optimized(
     Extract chart images from a single PDF page.
 
     Strategy:
-      1. Try to extract raster images embedded directly in the PDF
-         (works for scanned figures or pre-rasterised figures).
+      1. Try to extract raster images embedded directly in the PDF.
+         If an embedded image covers the full page (scanned document page),
+         it is processed through DocLayout to locate figures, then type_detect.
       2. If no embedded images are found — or all are too small / not
-         chart-like — fall back to rendering the full page at *render_dpi*.
-         If model_manager is provided and doclayout model is present,
-         slices the page into individual figure bounding box crops.
+         chart-like — fall back to rendering the full page at *render_dpi*
+         and applying DocLayout -> type_detect.
     """
     page_charts: List[dict] = []
 
@@ -265,7 +372,40 @@ def _extract_images_from_page_optimized(
                     img_rects = page.get_image_rects(xref)
                     rect = img_rects[0] if img_rects else fitz.Rect(0, 0, w, h)
 
-                    # High-res canvas render with padding in memory
+                    # Check if this embedded image is a full-page scan
+                    page_w = max(1.0, page.rect.width)
+                    page_h = max(1.0, page.rect.height)
+                    coverage = (rect.width * rect.height) / (page_w * page_h)
+                    has_text = len(page.get_text().strip()) > 50
+                    is_full_page_scan = (
+                        coverage >= 0.75
+                        or (rect.width >= 0.88 * page_w and rect.height >= 0.88 * page_h)
+                        or (not has_text and coverage >= 0.50)
+                    )
+
+                    if is_full_page_scan:
+                        logger.info(
+                            f"Page {page_num + 1} embedded image {img_index + 1} detected as full-page scan ({w}x{h}px, coverage={coverage:.1%}). "
+                            "Applying DocLayout on entire page to detect figure regions, then type_detect."
+                        )
+                        scanned_charts = _process_page_with_doclayout_and_type_detect(
+                            cv_image,
+                            page_num=page_num,
+                            pdf_stem=pdf_stem,
+                            output_dir=output_dir,
+                            model_manager=model_manager,
+                            min_width=min_width,
+                            min_height=min_height,
+                            render_dpi=render_dpi,
+                            source_method="scanned_page_doclayout",
+                            page_rect=page.rect,
+                        )
+                        if scanned_charts:
+                            page_charts.extend(scanned_charts)
+                        # Full-page scans with no figures detected are text-only pages; do not emit whole page as chart
+                        continue
+
+                    # High-res canvas render with padding in memory for discrete figures
                     high_res_filename = f"{pdf_stem}_page{page_num+1:02d}_img{img_index+1:02d}_rendered.png"
                     high_res_path = output_dir / high_res_filename
                     rendered_buffer = cv_image
@@ -296,7 +436,7 @@ def _extract_images_from_page_optimized(
                             logger.warning(f"Failed to render padded high-res region for image {img_index}: {render_exc}")
 
                     sub_chart_crops = []
-                    if model_manager is not None:
+                    if model_manager is not None and getattr(model_manager, '_models', None):
                         from utils.inference import decompose_multipanel_figure
                         sub_chart_crops = decompose_multipanel_figure(rendered_buffer, model_manager, padding=20)
 
@@ -357,70 +497,20 @@ def _extract_images_from_page_optimized(
         )
         cv_img = _render_page_as_image_array(page, dpi=render_dpi)
         if cv_img is not None:
-            h, w = cv_img.shape[:2]
-
-            figure_crops = []
-            extraction_method = "doclayout_figure_crop"
-            if model_manager is not None:
-                try:
-                    doclayout_model = model_manager.get_model('doclayout')
-                    if doclayout_model is not None:
-                        from utils.inference import run_inference_on_image
-                        from core.class_maps import CLASS_MAP_DOCLAYOUT
-                        layout_dets = run_inference_on_image(
-                            doclayout_model, cv_img, 0.25, CLASS_MAP_DOCLAYOUT,
-                            input_size=(1024, 1024), model_output_type='bbox',
-                        )
-                        for d in layout_dets:
-                            if d.get('cls') == 3:  # 3: figure ONLY (excludes plain_text, title, caption, table)
-                                bbox = d.get('bbox')
-                                if bbox and len(bbox) == 4:
-                                    x1, y1, x2, y2 = bbox
-                                    crop_w, crop_h = x2 - x1, y2 - y1
-                                    eff_min_w = int(min_width * (render_dpi / 300.0))
-                                    eff_min_h = int(min_height * (render_dpi / 300.0))
-                                    if crop_w >= eff_min_w and crop_h >= eff_min_h:
-                                        crop_img = cv_img[y1:y2, x1:x2]
-                                        if crop_img.size > 0:
-                                            figure_crops.append((bbox, crop_img))
-                except Exception as exc:
-                    logger.debug("DocLayout figure cropping pass skipped: %s", exc)
-
-            if figure_crops:
-                logger.info(f"Page {page_num + 1}: {len(figure_crops)} layout figure region(s) proposed via {extraction_method}")
-                flat_chart_crops = []
-                if model_manager is not None:
-                    from utils.inference import decompose_multipanel_figure
-                    for bbox, crop_img in figure_crops:
-                        sub_chart_crops = decompose_multipanel_figure(crop_img, model_manager, padding=20)
-                        if sub_chart_crops:
-                            for (sb_bbox, sub_crop, pred_type) in sub_chart_crops:
-                                page_x1 = bbox[0] + sb_bbox[0]
-                                page_y1 = bbox[1] + sb_bbox[1]
-                                page_x2 = bbox[0] + sb_bbox[2]
-                                page_y2 = bbox[1] + sb_bbox[3]
-                                flat_chart_crops.append(((page_x1, page_y1, page_x2, page_y2), sub_crop, pred_type))
-                        else:
-                            flat_chart_crops.append((bbox, crop_img, None))
-                else:
-                    flat_chart_crops = [(bbox, crop_img, None) for bbox, crop_img in figure_crops]
-
-                for c_idx, (bbox, crop_img, pred_type) in enumerate(flat_chart_crops):
-                    cw, ch = crop_img.shape[1], crop_img.shape[0]
-                    filename = f"{pdf_stem}_page{page_num + 1:02d}_fig{c_idx + 1:02d}.png"
-                    file_path = output_dir / filename
-                    cv2.imwrite(str(file_path), crop_img)
-                    page_charts.append({
-                        'page_num': page_num + 1,
-                        'image_index': c_idx + 1,
-                        'file_path': file_path,
-                        'high_res_path': file_path,
-                        'image_buffer': crop_img,
-                        'dimensions': (cw, ch),
-                        'pdf_rect': fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3]),
-                        'extraction_method': extraction_method + ('_type_detect' if pred_type else ''),
-                        'preliminary_type': pred_type,
-                    })
+            canvas_charts = _process_page_with_doclayout_and_type_detect(
+                cv_img,
+                page_num=page_num,
+                pdf_stem=pdf_stem,
+                output_dir=output_dir,
+                model_manager=model_manager,
+                min_width=min_width,
+                min_height=min_height,
+                render_dpi=render_dpi,
+                source_method="doclayout_figure_crop",
+                page_rect=page.rect,
+            )
+            if canvas_charts:
+                page_charts.extend(canvas_charts)
 
     return page_charts
 
@@ -568,6 +658,8 @@ def process_pdf_charts_optimized(
     min_chart_height: int = 200,
     cancel_event: Optional[Any] = None,
     model_manager: Optional[Any] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+    **kwargs,
 ) -> List[dict]:
     """
     Pipeline completo para extrair gráficos de um PDF com suporte a extração paralela.
@@ -582,15 +674,17 @@ def process_pdf_charts_optimized(
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Processing {pdf_path.name} (render DPI={high_res_dpi})")
 
-    if model_manager is None:
+    if model_manager is None or not getattr(model_manager, '_models', None):
         try:
             from core.model_manager import ModelManager
             models_dir = Path(__file__).parent.parent / "models"
-            model_manager = ModelManager()
-            model_manager.load_models(str(models_dir))
-            logger.info("Auto-instantiated ModelManager with models from %s", models_dir)
+            if model_manager is None:
+                model_manager = ModelManager()
+            if not getattr(model_manager, '_models', None):
+                model_manager.load_models(str(models_dir))
+            logger.info("Auto-instantiated/loaded ModelManager with models from %s", models_dir)
         except Exception as exc:
-            logger.warning("Could not auto-instantiated ModelManager: %s", exc)
+            logger.warning("Could not auto-instantiate/load ModelManager: %s", exc)
 
     processed_charts: List[dict] = []
 
@@ -605,6 +699,8 @@ def process_pdf_charts_optimized(
         if cancel_event is not None and cancel_event.is_set():
             return []
         try:
+            if progress_callback is not None:
+                progress_callback(f"Extracting charts from page {page_num + 1}/{total_pages}...")
             with open_pdf_document(pdf_path) as thread_doc:
                 page = thread_doc[page_num]
                 return _extract_images_from_page_optimized(
@@ -683,7 +779,9 @@ def _save_processing_metadata(processed_charts: List[dict], output_dir: Path, pd
                 'high_res_dimensions': chart.get('high_res_dimensions'),
                 'extraction_method': chart.get('extraction_method'),
                 'processing_method': chart.get('processing_method'),
-                'errors': chart.get('high_res_error')
+                'errors': chart.get('high_res_error'),
+                'preliminary_type': chart.get('preliminary_type'),
+                'confidence_info': chart.get('confidence_info'),
             }
             metadata['charts'].append(chart_meta)
         

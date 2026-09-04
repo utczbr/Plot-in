@@ -585,8 +585,8 @@ def decompose_multipanel_figure(
     if img is None or img.size == 0:
         logger.warning("decompose_multipanel_figure called with empty image")
         return []
-    if model_manager is None:
-        logger.warning("decompose_multipanel_figure called with model_manager=None")
+    if model_manager is None or not getattr(model_manager, '_models', None):
+        logger.warning("decompose_multipanel_figure called with None or unloaded model_manager")
         return []
 
     h, w = img.shape[:2]

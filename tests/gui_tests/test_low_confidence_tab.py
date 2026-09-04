@@ -189,3 +189,90 @@ def test_partition_assets_by_confidence_logic(tmp_path: Path):
     assert normal_idx == [1]
     assert low_idx == [0]
 
+
+def test_finish_populate_file_list_auto_expands_when_all_low_conf(qapp, tmp_path: Path):
+    """When all assets are low confidence, low_conf_scroll must auto-expand and select first item."""
+    from main_modern import ModernChartAnalysisApp
+    from core.input_resolver import ResolvedAsset
+    from unittest.mock import MagicMock, patch
+
+    app = MagicMock()
+    app.file_list_layout = QVBoxLayout()
+    app.low_conf_layout = QVBoxLayout()
+    app.low_conf_scroll = QScrollArea()
+    app.low_conf_scroll.setVisible(False)
+    app.low_conf_header_btn = QPushButton()
+    app.output_path_edit = MagicMock()
+    app.output_path_edit.text.return_value = str(tmp_path)
+    app._benchmark_result_cache = {}
+    app.current_image_index = -1
+    app.image_files = []
+    app._file_list_buttons = {}
+    app._generate_unique_stems = lambda fps: {fp: Path(fp).stem for fp in fps}
+    app._scaled_icon_px = MagicMock(return_value=13)
+    from PyQt6.QtGui import QIcon
+    app.get_icon = MagicMock(return_value=QIcon())
+    app.has_icon = MagicMock(return_value=False)
+    app.load_image_by_index = MagicMock()
+
+    # Create two low-confidence assets
+    asset1 = ResolvedAsset(
+        image_path=tmp_path / "chart1.png",
+        source_document="doc.pdf",
+        page_index=1,
+        figure_id="doc_p001_f00",
+        confidence_info={"classification": 0.4, "average": 0.4, "is_low_confidence": True},
+    )
+    asset2 = ResolvedAsset(
+        image_path=tmp_path / "chart2.png",
+        source_document="doc.pdf",
+        page_index=2,
+        figure_id="doc_p002_f00",
+        confidence_info={"classification": 0.2, "average": 0.2, "is_low_confidence": True},
+    )
+
+    ModernChartAnalysisApp._finish_populate_file_list(app, [asset1, asset2])
+
+    # low_conf_scroll must be auto-expanded
+    assert app.low_conf_scroll.isVisible() is True
+    assert "▾" in app.low_conf_header_btn.text()
+    assert app._low_conf_count == 2
+    # First image should be loaded
+    app.load_image_by_index.assert_called_with(0)
+
+
+def test_batch_analysis_thread_emits_assets_resolved(qapp, tmp_path: Path):
+    """BatchAnalysisThread must emit assets_resolved when run_batch_analysis invokes assets_callback."""
+    from main_modern import BatchAnalysisThread
+    from unittest.mock import MagicMock, patch
+
+    emitted_assets = []
+
+    thread = BatchAnalysisThread(
+        input_path=str(tmp_path / "input"),
+        output_path=str(tmp_path / "output"),
+        models_dir=str(tmp_path / "models"),
+        easyocr_reader=None,
+        conf=0.6,
+    )
+    thread.assets_resolved.connect(lambda assets: emitted_assets.extend(assets))
+
+    mock_analysis_mgr = MagicMock()
+    # Simulate run_batch_analysis calling assets_callback
+    def fake_run_batch(*args, **kwargs):
+        cb = kwargs.get("assets_callback")
+        if cb:
+            cb(["asset1", "asset2"])
+        return 2, 2
+
+    mock_analysis_mgr.run_batch_analysis.side_effect = fake_run_batch
+
+    thread.context = MagicMock()
+    thread.context.analysis_manager = mock_analysis_mgr
+    thread.context.model_manager = MagicMock()
+
+    thread.run()
+
+    assert emitted_assets == ["asset1", "asset2"]
+
+

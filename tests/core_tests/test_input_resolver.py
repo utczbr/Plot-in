@@ -387,3 +387,146 @@ class TestUpfrontClassificationAndDirectoryForwarding:
         assert conf["classification"] == 0.45
         assert conf["is_low_confidence"] is True
         assert conf["source"] == "preliminary_classification_only"
+
+    @patch("core.input_resolver._run_pdf_processor")
+    def test_cached_renders_loaded_without_running_processor(self, mock_run_pdf, tmp_path):
+        import json
+        from core.input_resolver import _expand_pdf
+
+        render_dir = tmp_path / "renders"
+        render_dir.mkdir()
+        pdf_file = tmp_path / "sample.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 test")
+
+        img_file = render_dir / "sample_page01_img01.png"
+        img_file.write_bytes(b"png")
+
+        metadata_file = render_dir / "sample_processing_metadata.json"
+        metadata = {
+            "charts": [
+                {
+                    "page_num": 1,
+                    "high_res_file": str(img_file),
+                    "dimensions": [400, 300],
+                }
+            ]
+        }
+        metadata_file.write_text(json.dumps(metadata))
+
+        assets = _expand_pdf(
+            pdf_path=pdf_file,
+            render_dir=render_dir,
+            force_reextract=False,
+        )
+
+        assert len(assets) == 1
+        assert assets[0].image_path == img_file
+        assert assets[0].source_document == str(pdf_file)
+        # Processor should NOT have been called because valid cache exists
+        mock_run_pdf.assert_not_called()
+
+    @patch("core.input_resolver._run_pdf_processor")
+    def test_force_reextract_bypasses_cache(self, mock_run_pdf, tmp_path):
+        import json
+        from core.input_resolver import _expand_pdf
+
+        render_dir = tmp_path / "renders"
+        render_dir.mkdir()
+        pdf_file = tmp_path / "sample.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 test")
+
+        img_file = render_dir / "sample_page01_img01.png"
+        img_file.write_bytes(b"png")
+
+        metadata_file = render_dir / "sample_processing_metadata.json"
+        metadata = {
+            "charts": [
+                {
+                    "page_num": 1,
+                    "high_res_file": str(img_file),
+                    "dimensions": [400, 300],
+                }
+            ]
+        }
+        metadata_file.write_text(json.dumps(metadata))
+
+        mock_run_pdf.return_value = []
+        assets = _expand_pdf(
+            pdf_path=pdf_file,
+            render_dir=render_dir,
+            force_reextract=True,
+        )
+
+        # Processor should have been called because force_reextract=True
+        mock_run_pdf.assert_called_once()
+
+    @patch("core.input_resolver._run_pdf_processor")
+    @patch("core.ensemble_classifier.WeightedChartClassifier")
+    def test_cached_metadata_skips_upfront_classification(self, mock_classifier_cls, mock_run_pdf, tmp_path):
+        import json
+        from core.input_resolver import _expand_pdf
+        from core.ensemble_classifier import WeightedChartClassifier
+
+        WeightedChartClassifier.clear_cache()
+        render_dir = tmp_path / "renders"
+        render_dir.mkdir()
+        pdf_file = tmp_path / "sample.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 test")
+
+        img_file = render_dir / "sample_page01_img01.png"
+        img_file.write_bytes(b"png")
+
+        metadata_file = render_dir / "sample_processing_metadata.json"
+        metadata = {
+            "charts": [
+                {
+                    "page_num": 1,
+                    "high_res_file": str(img_file),
+                    "dimensions": [400, 300],
+                    "confidence_info": {
+                        "classification": 0.92,
+                        "chart_types": ["line"],
+                        "is_low_confidence": False,
+                    }
+                }
+            ]
+        }
+        metadata_file.write_text(json.dumps(metadata))
+
+        mock_mm = MagicMock()
+        assets = _expand_pdf(
+            pdf_path=pdf_file,
+            render_dir=render_dir,
+            force_reextract=False,
+            model_manager=mock_mm,
+        )
+
+        assert len(assets) == 1
+        assert assets[0].confidence_info is not None
+        assert assets[0].confidence_info["classification"] == 0.92
+        assert assets[0].confidence_info["chart_types"] == ["line"]
+        # Classifier should NOT be instantiated to classify images because confidence was cached
+        mock_classifier_cls.assert_not_called()
+        # Ensure set_cached_result was called to seed the cache for the batch pipeline
+        mock_classifier_cls.set_cached_result.assert_called_once_with(
+            img_file,
+            ["line"],
+            0.92,
+        )
+
+    def test_check_cache_only_returns_empty_when_no_cached_renders(self, tmp_path):
+        pdf_file = tmp_path / "uncached.pdf"
+        pdf_file.touch()
+        render_dir = tmp_path / "renders"
+        render_dir.mkdir()
+
+        with patch("core.input_resolver._run_pdf_processor") as mock_run:
+            assets = resolve_input_assets(
+                input_path=pdf_file,
+                render_dir=render_dir,
+                check_cache_only=True,
+            )
+            assert assets == []
+            mock_run.assert_not_called()
+
+

@@ -203,7 +203,8 @@ class AnalysisManager:
     
     def run_batch_analysis(self, input_path: str, output_path: str, models_dir: str, conf: float,
                             status_callback=None, cancel_event=None,
-                            output_stems: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
+                            output_stems: Optional[Dict[str, str]] = None,
+                            assets_callback=None) -> Tuple[int, int]:
         """Run analysis on multiple images."""
         if self._models and hasattr(self._models, "load_models"):
             self._models.load_models(models_dir)
@@ -219,7 +220,18 @@ class AnalysisManager:
         from core.input_resolver import resolve_input_assets, asset_provenance_dict
 
         render_dir = Path(output_path) / "pdf_renders"
-        assets = resolve_input_assets(input_path=input_dir, render_dir=render_dir, cancel_event=cancel_event)
+        assets = resolve_input_assets(
+            input_path=input_dir,
+            render_dir=render_dir,
+            cancel_event=cancel_event,
+            model_manager=self._models,
+        )
+        if assets_callback:
+            try:
+                assets_callback(assets)
+            except Exception as exc:
+                self.logger.warning("assets_callback raised error: %s", exc)
+
         total = len(assets)
         processed = 0
 

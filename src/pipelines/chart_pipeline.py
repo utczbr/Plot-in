@@ -164,11 +164,11 @@ class ChartAnalysisPipeline(BasePipeline):
             # duplicate every extracted element (see loop below), so we
             # restrict classification to a single top guess in this case.
             chart_types, ensemble_classification_conf = self._classify_chart_types(
-                img, advanced_settings, top_k=1
+                img, advanced_settings, top_k=1, image_path=image_path
             )
         else:
             chart_types, ensemble_classification_conf = self._classify_chart_types(
-                img, advanced_settings, top_k=2
+                img, advanced_settings, top_k=2, image_path=image_path
             )
         self.logger.info(f"Classified as: {chart_types}")
         
@@ -401,7 +401,11 @@ class ChartAnalysisPipeline(BasePipeline):
         return primary_final_result
 
     def _classify_chart_types(
-        self, img: np.ndarray, advanced_settings: Optional[Dict] = None, top_k: int = 2
+        self,
+        img: np.ndarray,
+        advanced_settings: Optional[Dict] = None,
+        top_k: int = 2,
+        image_path: Optional[Union[str, Path]] = None,
     ) -> Tuple[List[str], float]:
         """Determines the types of the chart using the weighted multi-model ensemble.
 
@@ -416,7 +420,9 @@ class ChartAnalysisPipeline(BasePipeline):
         try:
             from core.ensemble_classifier import WeightedChartClassifier
             ensemble = WeightedChartClassifier(self.models_manager)
-            types, top_conf = ensemble.classify_image_with_conf(img, advanced_settings=advanced_settings, top_k=top_k)
+            types, top_conf = ensemble.classify_image_with_conf(
+                img, advanced_settings=advanced_settings, top_k=top_k, image_path=image_path
+            )
 
             if types and types != ['unknown'] and 'heatmap' not in types and (top_conf is not None and top_conf < 0.70):
                 types = self._heatmap_rescue(img, types, advanced_settings, top_conf=top_conf)

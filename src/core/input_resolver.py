@@ -45,6 +45,8 @@ def _run_pdf_processor(
     min_chart_height: int = 200,
     cancel_event: Optional[Any] = None,
     model_manager: Optional[Any] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+    **kwargs,
 ) -> List[dict]:
     """Helper wrapping process_pdf_charts_optimized.
 
@@ -69,6 +71,8 @@ def _run_pdf_processor(
         min_chart_height=min_chart_height,
         cancel_event=cancel_event,
         model_manager=model_manager,
+        progress_callback=progress_callback,
+        **kwargs,
     )
 
 
@@ -82,6 +86,8 @@ def _expand_pdf(
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
     model_manager: Optional[Any] = None,
+    force_reextract: bool = False,
+    check_cache_only: bool = False,
 ) -> List[ResolvedAsset]:
     """Render all chart images from a PDF into render_dir.
 
@@ -90,39 +96,67 @@ def _expand_pdf(
     if progress_callback:
         progress_callback(f"Extracting charts from {pdf_path.name}...")
 
-    assets: List[ResolvedAsset] = []
-    try:
-        charts = _run_pdf_processor(
-            pdf_path=pdf_path,
-            output_dir=render_dir,
-            high_res_dpi=high_res_dpi,
-            min_chart_width=min_chart_width,
-            min_chart_height=min_chart_height,
-            cancel_event=cancel_event,
-            model_manager=model_manager,
-        )
-    except Exception as exc:
-        try:
-            from core.pdf_processor import PDFAccessError
-            is_pdf_acc = isinstance(exc, PDFAccessError)
-        except Exception:
-            is_pdf_acc = False
+    charts = None
+    if not force_reextract and render_dir.exists():
+        metadata_file = render_dir / f"{pdf_path.stem}_processing_metadata.json"
+        if metadata_file.exists() and pdf_path.exists():
+            try:
+                if metadata_file.stat().st_mtime >= pdf_path.stat().st_mtime:
+                    import json
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        meta_data = json.load(f)
+                    cached_charts = meta_data.get("charts", [])
+                    if cached_charts:
+                        all_exist = True
+                        for c in cached_charts:
+                            hr_p = Path(c.get("high_res_file", ""))
+                            if not hr_p.exists():
+                                all_exist = False
+                                break
+                        if all_exist:
+                            charts = [{
+                                'page_num': c.get('page_num', 1),
+                                'image_index': idx + 1,
+                                'high_res_path': c.get('high_res_file'),
+                                'dimensions': c.get('dimensions'),
+                                'confidence_info': c.get('confidence_info'),
+                            } for idx, c in enumerate(cached_charts)]
+                            logger.info("Reusing %d pre-rendered chart(s) for %s from %s", len(charts), pdf_path.name, metadata_file.name)
+            except Exception as exc:
+                logger.debug("Failed loading cached PDF metadata for %s: %s", pdf_path.name, exc)
+                charts = None
 
-        reason = str(exc) if is_pdf_acc else f"Failed to process: {exc}"
-        logger.error("PDF expansion failed for %s: %s", pdf_path, reason)
-        if failure_callback:
-            failure_callback(pdf_path, reason)
+    if charts is None:
+        if check_cache_only:
+            return []
+        try:
+            charts = _run_pdf_processor(
+                pdf_path=pdf_path,
+                output_dir=render_dir,
+                high_res_dpi=high_res_dpi,
+                min_chart_width=min_chart_width,
+                min_chart_height=min_chart_height,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+                model_manager=model_manager,
+            )
+        except Exception as exc:
+            logger.error("PDF processing failed for %s: %s", pdf_path, exc, exc_info=True)
+            if failure_callback is not None:
+                try:
+                    failure_callback(pdf_path, str(exc))
+                except Exception:
+                    pass
+            return []
+
+    if not charts:
+        logger.info("No charts extracted from PDF %s", pdf_path.name)
         return []
 
-    if not charts and failure_callback:
-        failure_callback(pdf_path, "Opened successfully but no chart-like content was found.")
-
+    assets: List[ResolvedAsset] = []
     for chart in charts:
         high_res_path = chart.get('high_res_path')
-        if high_res_path is None or not Path(high_res_path).exists():
-            logger.warning(
-                "Skipping chart with missing high_res_path from %s", pdf_path.name,
-            )
+        if not high_res_path or not Path(high_res_path).exists():
             continue
 
         page_num = chart.get('page_num', 0)
@@ -135,38 +169,77 @@ def _expand_pdf(
             page_index=page_num,
             figure_id=figure_id,
             image_buffer=chart.get('image_buffer'),
+            confidence_info=chart.get('confidence_info'),
         ))
 
-    # Upfront classification on PDF-extracted assets if model_manager is available
-    if model_manager is not None and assets:
-        try:
-            from core.ensemble_classifier import WeightedChartClassifier
-            from services.confidence_extractor import LOW_CONFIDENCE_THRESHOLD
-            import cv2
+    # Upfront classification on PDF-extracted assets if model_manager is available and loaded
+    if model_manager is not None and getattr(model_manager, '_models', None) and assets:
+        needs_classification = [idx for idx, a in enumerate(assets) if a.confidence_info is None]
+        if needs_classification:
+            try:
+                from core.ensemble_classifier import WeightedChartClassifier
+                from services.confidence_extractor import LOW_CONFIDENCE_THRESHOLD
+                import cv2
 
-            classifier_ensemble = WeightedChartClassifier(model_manager)
-            for idx, asset in enumerate(assets):
-                try:
-                    img_buf = asset.image_buffer
-                    if img_buf is None and asset.image_path.exists():
-                        img_buf = cv2.imread(str(asset.image_path))
+                classifier_ensemble = WeightedChartClassifier(model_manager)
+                for idx in needs_classification:
+                    asset = assets[idx]
+                    try:
+                        img_buf = asset.image_buffer
+                        if img_buf is None and asset.image_path.exists():
+                            img_buf = cv2.imread(str(asset.image_path))
 
-                    if img_buf is not None and img_buf.size > 0:
-                        types, top_conf = classifier_ensemble.classify_image_with_conf(img_buf, top_k=1)
-                        conf_val = max(0.0, min(1.0, float(top_conf or 0.0)))
-                        is_low = conf_val < LOW_CONFIDENCE_THRESHOLD
-                        conf_dict = {
-                            'classification': conf_val,
-                            'detection': 0.0,
-                            'average': conf_val,
-                            'is_low_confidence': is_low,
-                            'source': 'preliminary_classification_only',
-                        }
-                        assets[idx] = asset._replace(confidence_info=conf_dict)
-                except Exception as c_exc:
-                    logger.debug("Upfront classification failed for asset %s: %s", asset.figure_id, c_exc)
-        except Exception as exc:
-            logger.debug("Failed to run upfront classification ensemble: %s", exc)
+                        if img_buf is not None and img_buf.size > 0:
+                            types, top_conf = classifier_ensemble.classify_image_with_conf(
+                                img_buf, top_k=2, image_path=asset.image_path
+                            )
+                            conf_val = max(0.0, min(1.0, float(top_conf or 0.0)))
+                            is_low = conf_val < LOW_CONFIDENCE_THRESHOLD
+                            conf_dict = {
+                                'classification': conf_val,
+                                'detection': 0.0,
+                                'average': conf_val,
+                                'is_low_confidence': is_low,
+                                'source': 'preliminary_classification_only',
+                                'chart_types': types,
+                            }
+                            assets[idx] = asset._replace(confidence_info=conf_dict)
+                    except Exception as c_exc:
+                        logger.debug("Upfront classification failed for asset %s: %s", asset.figure_id, c_exc)
+
+                # Persist updated confidence_info back to metadata JSON
+                metadata_file = render_dir / f"{pdf_path.stem}_processing_metadata.json"
+                if metadata_file.exists():
+                    try:
+                        import json
+                        with open(metadata_file, "r", encoding="utf-8") as f:
+                            meta_data = json.load(f)
+                        charts_list = meta_data.get("charts", [])
+                        for idx, a in enumerate(assets):
+                            if idx < len(charts_list) and a.confidence_info:
+                                charts_list[idx]["confidence_info"] = a.confidence_info
+                                if "chart_types" in a.confidence_info and a.confidence_info["chart_types"]:
+                                    charts_list[idx]["preliminary_type"] = a.confidence_info["chart_types"][0]
+                        with open(metadata_file, "w", encoding="utf-8") as f:
+                            json.dump(meta_data, f, ensure_ascii=False, indent=2)
+                        logger.debug("Persisted upfront classification into %s", metadata_file.name)
+                    except Exception as p_exc:
+                        logger.debug("Failed saving updated metadata to %s: %s", metadata_file.name, p_exc)
+            except Exception as exc:
+                logger.debug("Failed to run upfront classification ensemble: %s", exc)
+        else:
+            # Seed the classification cache from already-loaded metadata so batch pipeline gets cache hits
+            try:
+                from core.ensemble_classifier import WeightedChartClassifier
+                for a in assets:
+                    if a.confidence_info and 'chart_types' in a.confidence_info and 'classification' in a.confidence_info:
+                        WeightedChartClassifier.set_cached_result(
+                            a.image_path,
+                            a.confidence_info['chart_types'],
+                            a.confidence_info['classification'],
+                        )
+            except Exception as seed_exc:
+                logger.debug("Failed seeding classification cache from metadata: %s", seed_exc)
 
     logger.info("PDF %s expanded to %d chart(s)", pdf_path.name, len(assets))
     return assets
@@ -183,6 +256,8 @@ def _resolve_single_file(
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
     model_manager: Optional[Any] = None,
+    force_reextract: bool = False,
+    check_cache_only: bool = False,
 ) -> List[ResolvedAsset]:
     suffix = file_path.suffix.lower()
 
@@ -205,6 +280,8 @@ def _resolve_single_file(
             min_chart_width, min_chart_height, progress_callback,
             cancel_event=cancel_event, failure_callback=failure_callback,
             model_manager=model_manager,
+            force_reextract=force_reextract,
+            check_cache_only=check_cache_only,
         )
 
     logger.warning(
@@ -225,6 +302,8 @@ def _resolve_directory(
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
     model_manager: Optional[Any] = None,
+    force_reextract: bool = False,
+    check_cache_only: bool = False,
 ) -> List[ResolvedAsset]:
     assets: List[ResolvedAsset] = []
 
@@ -256,6 +335,8 @@ def _resolve_directory(
                 min_chart_width, min_chart_height, progress_callback,
                 cancel_event=cancel_event, failure_callback=failure_callback,
                 model_manager=model_manager,
+                force_reextract=force_reextract,
+                check_cache_only=check_cache_only,
             )
             assets.extend(pdf_assets)
 
@@ -280,6 +361,8 @@ def resolve_input_assets(
     cancel_event: Optional[Any] = None,
     failure_callback: Optional[Callable[[Path, str], None]] = None,
     model_manager: Optional[Any] = None,
+    force_reextract: bool = False,
+    check_cache_only: bool = False,
 ) -> List[ResolvedAsset]:
     """Resolve an input path into a flat, ordered list of ResolvedAsset objects."""
     input_path = Path(input_path)
@@ -296,6 +379,8 @@ def resolve_input_assets(
             progress_callback, cancel_event=cancel_event,
             failure_callback=failure_callback,
             model_manager=model_manager,
+            force_reextract=force_reextract,
+            check_cache_only=check_cache_only,
         )
 
     if input_path.is_dir():
@@ -305,6 +390,8 @@ def resolve_input_assets(
             progress_callback, cancel_event=cancel_event,
             failure_callback=failure_callback,
             model_manager=model_manager,
+            force_reextract=force_reextract,
+            check_cache_only=check_cache_only,
         )
 
     logger.error("Input path is neither a file nor a directory: %s", input_path)

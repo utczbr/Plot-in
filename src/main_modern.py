@@ -504,12 +504,14 @@ class ResolveWorker(QThread):
     finished_signal = pyqtSignal(list)
     status_signal = pyqtSignal(str)
 
-    def __init__(self, path, rdir, failure_callback=None, model_manager=None, parent=None):
+    def __init__(self, path, rdir, failure_callback=None, model_manager=None, parent=None, models_dir=None, force_reextract=False):
         super().__init__(parent)
         self.path = path
         self.rdir = rdir
         self.failure_callback = failure_callback
         self.model_manager = model_manager
+        self.models_dir = models_dir
+        self.force_reextract = force_reextract
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -517,6 +519,13 @@ class ResolveWorker(QThread):
 
     def run(self):
         try:
+            if self.model_manager and self.models_dir:
+                try:
+                    self.status_signal.emit("Loading models...")
+                    self.model_manager.load_models(self.models_dir)
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("Pre-loading models in resolve worker failed: %s", exc)
+
             from core.input_resolver import resolve_input_assets
             result = resolve_input_assets(
                 input_path=self.path,
@@ -525,6 +534,7 @@ class ResolveWorker(QThread):
                 cancel_event=self._cancel_event,
                 failure_callback=self.failure_callback,
                 model_manager=self.model_manager,
+                force_reextract=self.force_reextract,
             )
             self.finished_signal.emit(result)
         except Exception as exc:
@@ -663,6 +673,7 @@ class BatchAnalysisThread(QThread):
     status_updated = pyqtSignal(str)
     progress_updated = pyqtSignal(int, int)
     batch_complete = pyqtSignal(str)
+    assets_resolved = pyqtSignal(list)
 
     def __init__(
         self,
@@ -697,10 +708,15 @@ class BatchAnalysisThread(QThread):
             analysis_manager.set_advanced_settings(self.advanced_settings)
             self.context.model_manager.load_models(self.models_dir)
 
+            def _on_assets(assets):
+                if not self._cancel_event.is_set():
+                    self.assets_resolved.emit(assets)
+
             processed, total = analysis_manager.run_batch_analysis(
                 self.input_path, self.output_path, self.models_dir, self.conf,
                 self.status_updated, self._cancel_event,
-                output_stems=self.output_stems
+                output_stems=self.output_stems,
+                assets_callback=_on_assets,
             )
 
             self.progress_updated.emit(processed, total)
@@ -3061,13 +3077,33 @@ Click to configure advanced options."""
             return
 
         # Check if any PDFs are present (need threaded expansion)
+        render_dir = self._get_render_dir(path)
+        from core.input_resolver import resolve_input_assets
+
         has_pdfs = False
+        pdf_paths = []
         if path.is_dir():
-            has_pdfs = any(
-                p.suffix.lower() == '.pdf' for p in path.iterdir() if p.is_file()
-            )
+            pdf_paths = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() == '.pdf']
+            has_pdfs = bool(pdf_paths)
         elif path.is_file() and path.suffix.lower() == '.pdf':
+            pdf_paths = [path]
             has_pdfs = True
+
+        # First, check if rendered chart assets already exist in render_dir for these PDFs
+        cached_assets = []
+        if has_pdfs and render_dir.exists():
+            try:
+                cached_assets = resolve_input_assets(
+                    input_path=path, render_dir=render_dir, input_type='auto',
+                    model_manager=self.context.model_manager, force_reextract=False,
+                    check_cache_only=True,
+                )
+            except Exception as exc:
+                logging.getLogger(__name__).debug("Checking cached renders failed: %s", exc)
+
+        if cached_assets:
+            self._finish_populate_file_list(cached_assets)
+            return
 
         if has_pdfs:
             reply = QMessageBox.question(
@@ -3080,16 +3116,12 @@ Click to configure advanced options."""
             if reply == QMessageBox.StandardButton.Yes:
                 self._start_pdf_resolve_worker(path)
             else:
-                from core.input_resolver import resolve_input_assets
-                render_dir = self._get_render_dir(path)
                 assets = resolve_input_assets(
                     input_path=path, render_dir=render_dir, input_type='image',
                 )
                 self._finish_populate_file_list(assets)
         else:
             # Fast path: image-only, no threading needed
-            from core.input_resolver import resolve_input_assets
-            render_dir = self._get_render_dir(path)
             assets = resolve_input_assets(
                 input_path=path, render_dir=render_dir, input_type='image',
             )
@@ -3098,18 +3130,14 @@ Click to configure advanced options."""
     def _start_pdf_resolve_worker(self, input_path: Path):
         render_dir = self._get_render_dir(input_path)
 
-        # Pre-load models eagerly so upfront classification works on first PDF load in session
-        models_dir = self.models_dir_edit.text() if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else str(self.project_root / "models")
-        try:
-            self.context.model_manager.load_models(models_dir)
-        except Exception as exc:
-            logging.getLogger(__name__).warning("Pre-loading models for PDF resolution failed: %s", exc)
+        models_dir = self.models_dir_edit.text() if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else self._default_models_dir()
 
         progress = QProgressDialog(
             "Extracting charts from PDFs...", "Cancel", 0, 0, self,
         )
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(500)
+        self._pdf_progress = progress
 
         self._pdf_failures = []
         self._resolve_worker = ResolveWorker(
@@ -3118,6 +3146,8 @@ Click to configure advanced options."""
             failure_callback=lambda p, reason: self._pdf_failures.append((p, reason)),
             model_manager=self.context.model_manager,
             parent=self,
+            models_dir=models_dir,
+            force_reextract=True,
         )
         self._resolve_worker.status_signal.connect(
             lambda msg: progress.setLabelText(msg),
@@ -3129,7 +3159,10 @@ Click to configure advanced options."""
         self._resolve_worker.start()
 
     def _on_resolve_finished(self, assets, progress):
-        progress.close()
+        try:
+            progress.close()
+        except Exception:
+            pass
         self._finish_populate_file_list(assets)
 
     def _generate_unique_stems(self, file_paths: list) -> dict:
@@ -3240,6 +3273,15 @@ Click to configure advanced options."""
 
         # 2. Populate low-confidence list
         self._low_conf_count = len(low_conf_indices)
+
+        # If all items are low-confidence (normal list is empty), auto-expand the low-confidence
+        # section so the user sees all extracted images in the sidebar rather than an empty list.
+        if not normal_indices and low_conf_indices:
+            self.low_conf_scroll.setVisible(True)
+            info_label = QLabel(f"All {len(low_conf_indices)} item(s) in Low Confidence (<60%) tab below:")
+            info_label.setStyleSheet("QLabel { color: #e5c07b; font-size: 9px; padding: 4px; font-style: italic; }")
+            self.file_list_layout.addWidget(info_label)
+
         arrow = "▾" if self.low_conf_scroll.isVisible() else "▸"
         self.low_conf_header_btn.setText(f"LOW CONFIDENCE (<60%) [{self._low_conf_count}] {arrow}")
 
@@ -3300,6 +3342,10 @@ Click to configure advanced options."""
                 self._file_list_buttons[i] = btn
                 self.low_conf_layout.addWidget(btn)
 
+        # If no image is currently selected/displayed and images are loaded, load the first one
+        if self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
+            self.load_image_by_index(0)
+
     def start_batch_analysis_thread(self):
         if not self.validate_paths():
             return
@@ -3341,6 +3387,7 @@ Click to configure advanced options."""
         self.batch_thread.status_updated.connect(self.update_status)
         self.batch_thread.progress_updated.connect(self.update_batch_progress)
         self.batch_thread.batch_complete.connect(self.on_batch_complete)
+        self.batch_thread.assets_resolved.connect(self._on_batch_assets_resolved)
         
         self.batch_thread.start()
         self.update_status("🚀 Starting batch analysis...")
@@ -3349,10 +3396,18 @@ Click to configure advanced options."""
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
+    def _on_batch_assets_resolved(self, assets):
+        """Immediately populate sidebar with resolved chart assets during batch run."""
+        if assets:
+            self._finish_populate_file_list(assets)
+
     def on_batch_complete(self, message):
         self.progress_bar.setVisible(False)
         self.run_batch_btn.setEnabled(True)
         self.update_status("✅ " + message)
+        # If image_files is still empty, populate from input path / renders
+        if not self.image_files:
+            self.populate_file_list()
         # Refresh cache so newly analysed images show check icons immediately.
         self._refresh_cache_from_output_dir()
         self._refresh_file_list_button_states()

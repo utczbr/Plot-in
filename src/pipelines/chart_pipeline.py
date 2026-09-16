@@ -230,6 +230,12 @@ class ChartAnalysisPipeline(BasePipeline):
                 detection_quality = 1.0
             else:
                 detections = self._detect_elements(img, chart_type, advanced_settings)
+
+            # Normalize rogue/legacy label aliases into axis_labels
+            if isinstance(detections, dict):
+                for alias in ('scale_label', 'tick_label', 'scale_labels', 'tick_labels'):
+                    if alias in detections and detections[alias]:
+                        detections.setdefault('axis_labels', []).extend(detections.pop(alias))
                 
             if not detections:
                 self.logger.warning(f"No detections found for {chart_type}.")

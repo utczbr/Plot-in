@@ -47,6 +47,7 @@ class EditorToolbar(QWidget):
     apply_requested = pyqtSignal()
     reset_requested = pyqtSignal()
     create_class_changed = pyqtSignal(str)
+    chart_type_changed = pyqtSignal(str)
 
     def __init__(self, parent=None, *, scale_fn: Callable[[int], int] | None = None):
         super().__init__(parent)
@@ -126,9 +127,32 @@ class EditorToolbar(QWidget):
 
         main_layout.addLayout(row1)
 
-        # ── Row 2: Class selector + Apply + Reset + Status ──
+        # ── Row 2: Chart Type + Class selector + Apply + Reset + Status ──
         row2 = QHBoxLayout()
         row2.setSpacing(4)
+
+        # Chart Type selector
+        lbl_type = QLabel("Type:")
+        lbl_type.setStyleSheet("font-size: 11px; color: #ccc;")
+        row2.addWidget(lbl_type)
+
+        self._chart_type_combo = QComboBox()
+        self._chart_type_combo.setToolTip("Select chart type for analysis / re-extraction")
+        self._chart_type_combo.setMinimumWidth(85)
+        self._chart_type_combo.setMaximumWidth(125)
+        self._chart_types = [
+            "bar", "line", "scatter", "box", "pie", "heatmap", "area", "histogram"
+        ]
+        self._chart_type_model = QStringListModel(self._chart_types, self)
+        self._chart_type_combo.setModel(self._chart_type_model)
+        self._chart_type_combo.currentTextChanged.connect(self._on_chart_type_combo_changed)
+        row2.addWidget(self._chart_type_combo)
+
+        # Separator
+        sep_type = QFrame()
+        sep_type.setFrameShape(QFrame.Shape.VLine)
+        sep_type.setFrameShadow(QFrame.Shadow.Sunken)
+        row2.addWidget(sep_type)
 
         # Class selector (for create mode)
         lbl = QLabel("Class:")
@@ -144,7 +168,7 @@ class EditorToolbar(QWidget):
         # endInsertRows → QItemSelectionModel → empty NSArray crash).
         self._class_model = QStringListModel([
             "bar", "scatter", "data_point", "chart_title",
-            "axis_title", "scale_label", "legend", "tick_label",
+            "axis_title", "axis_labels", "legend", "error_bar",
         ], self)
         self._class_combo.setModel(self._class_model)
         self._class_combo.currentTextChanged.connect(self.create_class_changed)
@@ -237,6 +261,7 @@ class EditorToolbar(QWidget):
         in the new list. Resets to index 0 otherwise.
         """
         safe_combo_populate(self._class_combo, classes, placeholder="(no classes)", retain_selection=True)
+        self._class_model = self._class_combo.model()
 
     def set_keypoint_buttons_visible(self, visible: bool) -> None:
         """Show or hide the Edit Key Point / Add Key Point mode buttons."""
@@ -253,6 +278,27 @@ class EditorToolbar(QWidget):
     @property
     def selected_class(self) -> str:
         return self._class_combo.currentText()
+
+    @property
+    def selected_chart_type(self) -> str:
+        return self._chart_type_combo.currentText()
+
+    def set_chart_type(self, chart_type: str, emit_signal: bool = False) -> None:
+        """Update chart type combo selection."""
+        ct = str(chart_type or "").lower().strip()
+        idx = self._chart_type_combo.findText(ct)
+        if idx >= 0:
+            if not emit_signal:
+                self._chart_type_combo.blockSignals(True)
+            self._chart_type_combo.setCurrentIndex(idx)
+            if not emit_signal:
+                self._chart_type_combo.blockSignals(False)
+
+    def _on_chart_type_combo_changed(self, new_type: str):
+        if not new_type:
+            return
+        self._btn_apply.setEnabled(True)
+        self.chart_type_changed.emit(new_type)
 
     def sync_class_to_selection(self, class_name: str) -> None:
         """Update class combo to match the selected box's class (Edit mode sync).

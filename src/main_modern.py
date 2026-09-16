@@ -1736,6 +1736,16 @@ Click to configure advanced options."""
         self.conf_slider.valueChanged.connect(self.update_slider_label)
         config_layout.addWidget(self.conf_slider)
 
+        self.chart_type_label = QLabel("CHART TYPE")
+        self.chart_type_label.setProperty("sectionHeader", True)
+        config_layout.addWidget(self.chart_type_label)
+
+        self.chart_type_combo = QComboBox()
+        self.chart_type_combo.addItems([
+            "Auto (Classifier)", "bar", "line", "scatter", "box", "pie", "heatmap", "area", "histogram"
+        ])
+        config_layout.addWidget(self.chart_type_combo)
+
         self.run_batch_btn = QPushButton("Run Batch Analysis")
         run_batch_icon_px = self._scaled_icon_px(14)
         self.run_batch_btn.setIcon(self.get_icon("bullseye-solid-full.svg", color="#ffffff", size=run_batch_icon_px))
@@ -1748,12 +1758,17 @@ Click to configure advanced options."""
             "    color: #ffffff;"
             "    font-size: 10px;"
             "    font-weight: 600;"
-            "    min-height: 26px;"
-            "    padding: 4px 10px;"
+            "    padding: 6px 10px;"
+            "    border-radius: 4px;"
             "}"
             "QPushButton:hover {"
-            "    background-color: #1685d1;"
-            "    border-color: #1685d1;"
+            "    background-color: #0098ff;"
+            "    border-color: #0098ff;"
+            "}"
+            "QPushButton:disabled {"
+            "    background-color: #3a3d41;"
+            "    border-color: #3a3d41;"
+            "    color: #858585;"
             "}"
         )
         self.run_batch_btn.setStyleSheet(run_batch_style)
@@ -1789,8 +1804,7 @@ Click to configure advanced options."""
         section_order = [
             ("chart_title", "Chart Title"),
             ("axis_title", "Axis Titles"),
-            ("scale_label", "Scale Labels"),
-            ("tick_label", "Tick Labels"),
+            ("axis_labels", "Axis Labels"),
             ("legend", "Legend"),
             ("data_label", "Data Labels"),
             ("other", "Other Text"),
@@ -1847,8 +1861,7 @@ Click to configure advanced options."""
         section_order = [
             ("chart_title", "Chart Title"),
             ("axis_title", "Axis Titles"),
-            ("scale_label", "Scale Labels"),
-            ("tick_label", "Tick Labels"),
+            ("axis_labels", "Axis Labels"),
             ("legend", "Legend"),
             ("data_label", "Data Labels"),
             ("color_bar_label", "Color Bar Labels"),
@@ -1967,6 +1980,7 @@ Click to configure advanced options."""
             self._editor_toolbar.apply_requested.connect(self._on_editor_apply)
             self._editor_toolbar.reset_requested.connect(self._on_editor_reset)
             self._editor_toolbar.create_class_changed.connect(self._on_editor_class_dropdown_changed)
+            self._editor_toolbar.chart_type_changed.connect(self._on_toolbar_chart_type_changed)
 
             # Connect editor state → toolbar status
             self._editor_state.edit_count_changed.connect(self._on_editor_count_changed)
@@ -2395,6 +2409,18 @@ Click to configure advanced options."""
             if hasattr(self._det_canvas_view, "set_create_class"):
                 self._det_canvas_view.set_create_class(new_class)
 
+    def _on_toolbar_chart_type_changed(self, new_type: str):
+        """Handle chart type selection changes in the canvas editor toolbar."""
+        if not new_type:
+            return
+        ct = new_type.lower().strip()
+        classes = self._CHART_TYPE_CLASSES.get(ct, self._CHART_TYPE_CLASSES_FALLBACK)
+        if self._editor_toolbar:
+            self._editor_toolbar.set_available_classes(classes)
+            self._editor_toolbar.set_keypoint_buttons_visible(ct in ("pie",))
+            self._editor_toolbar._btn_apply.setEnabled(True)
+        self.statusBar().showMessage(f"Chart type set to '{ct}'. Click Apply & Re-Extract to re-analyze.", 5000)
+
     def _on_editor_undo(self):
         if self._editor_state:
             self._editor_state.undo()
@@ -2460,6 +2486,9 @@ Click to configure advanced options."""
 
         # export_detections() returns Dict[class_name, List[dict]] — pass it directly
         manual_detections = self._det_scene.export_detections()
+        for alias in ('scale_label', 'tick_label', 'scale_labels', 'tick_labels'):
+            if alias in manual_detections and manual_detections[alias]:
+                manual_detections.setdefault('axis_labels', []).extend(manual_detections.pop(alias))
 
         logging.debug(
             "_on_editor_apply: exported detection keys=%s, bar_count=%d, slice_count=%d",
@@ -2520,9 +2549,8 @@ Click to configure advanced options."""
         # yield 2 chart-type hypotheses which, combined with manual_detections,
         # previously caused every extracted row to be duplicated (and doubled
         # again on each subsequent re-extract).
-        confirmed_chart_type = None
-        if self.current_analysis_result:
-            confirmed_chart_type = self.current_analysis_result.get('chart_type') or None
+        toolbar_ct = self._editor_toolbar.selected_chart_type if self._editor_toolbar else None
+        confirmed_chart_type = toolbar_ct or (self.current_analysis_result.get('chart_type') if self.current_analysis_result else None)
 
         self.analysis_thread = ModernAnalysisThread(
             str(image_path), conf, output_path, self.advanced_settings or {}, models_dir,
@@ -2591,18 +2619,18 @@ Click to configure advanced options."""
     # Omit 'chart' (it covers the whole image) and detection-only classes
     # like 'significance_marker', 'connector_line', etc.
     _CHART_TYPE_CLASSES: dict = {
-        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
-        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
-        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
-        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
-        'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label'],
-        'box':       ['box', 'outlier', 'range_indicator', 'median_line', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'scale_label', 'tick_label', 'significance_marker', 'connector_line'],
+        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'significance_marker', 'connector_line'],
+        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
+        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
+        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
+        'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
+        'box':       ['box', 'outlier', 'range_indicator', 'median_line', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
         'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
         'heatmap':   ['cell', 'color_bar', 'color_bar_label', 'color_bar_title', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
     }
     _CHART_TYPE_CLASSES_FALLBACK = [
         'bar', 'scatter', 'data_point', 'chart_title',
-        'axis_title', 'scale_label', 'legend', 'tick_label',
+        'axis_title', 'axis_labels', 'legend',
         'box', 'outlier', 'range_indicator', 'median_line',
         'significance_marker', 'connector_line',
     ]
@@ -2615,6 +2643,8 @@ Click to configure advanced options."""
             if visible and self._editor_state:
                 self._editor_state.clear()  # fresh start for new analysis
             if visible:
+                if chart_type:
+                    self._editor_toolbar.set_chart_type(chart_type)
                 classes = self._CHART_TYPE_CLASSES.get(
                     chart_type.lower(),
                     self._CHART_TYPE_CLASSES_FALLBACK,
@@ -3798,6 +3828,12 @@ Click to configure advanced options."""
                 from core.input_resolver import asset_provenance_dict
                 _provenance = asset_provenance_dict(self._resolved_assets[self.current_image_index])
 
+            chart_type_override = None
+            if hasattr(self, 'chart_type_combo') and self.chart_type_combo:
+                sel_text = self.chart_type_combo.currentText()
+                if sel_text and not sel_text.startswith("Auto"):
+                    chart_type_override = sel_text.lower()
+
             output_stem = getattr(self, "_unique_stems", {}).get(self.current_image_path)
             self.analysis_thread = ModernAnalysisThread(
                 self.current_image_path,
@@ -3808,6 +3844,7 @@ Click to configure advanced options."""
                 self.context,
                 provenance=_provenance,
                 output_stem=output_stem,
+                chart_type=chart_type_override,
                 parent=None
             )
             self.analysis_thread.status_updated.connect(self.update_status)
@@ -3977,7 +4014,7 @@ Click to configure advanced options."""
             section_records = categorize_ocr_records(self.current_analysis_result)
 
             widgets_created = 0
-            for section_key in ("chart_title", "axis_title", "scale_label", "tick_label", "legend", "data_label", "color_bar_label", "color_bar_title", "other", "layout_text"):
+            for section_key in ("chart_title", "axis_title", "axis_labels", "legend", "data_label", "color_bar_label", "color_bar_title", "other", "layout_text"):
                 section_info = self.ocr_section_widgets.get(section_key)
                 if not section_info:
                     continue
@@ -4399,8 +4436,6 @@ Click to configure advanced options."""
             "color_bar",
             "range_indicator",
             "outlier",
-            "scale_label",
-            "tick_label",
         ]
         general_set = {"chart_title", "axis_title", "legend", "axis_labels", "other"}
         chart_classes = []

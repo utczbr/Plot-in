@@ -311,27 +311,32 @@ class BarExtractor(BaseExtractor):
             # Error bars
             validated_error_bar = bar.get('error_bar_validated')
             assoc_error_bar = validated_error_bar['bbox'] if validated_error_bar else bar.get('associated_error_bar')
-            if assoc_error_bar and scale_model:
-                eb_x1, eb_y1, eb_x2, eb_y2 = assoc_error_bar
-                try:
-                    if is_vertical:
-                        error_val_1 = float(scale_model(eb_y1))
-                        error_val_2 = float(scale_model(eb_y2))
-                    else:
-                        model = x_scale_model if x_scale_model is not None else scale_model
-                        error_val_1 = float(model(eb_x1))
-                        error_val_2 = float(model(eb_x2))
-                    
-                    error_margin = abs(error_val_1 - error_val_2)
-                    bar_info['error_bar'] = {
-                        'margin': error_margin,
-                        'bbox': assoc_error_bar,
-                        'lower_bound': min(error_val_1, error_val_2),
-                        'upper_bound': max(error_val_1, error_val_2),
-                        **({'validation': validated_error_bar} if validated_error_bar else {})
-                    }
-                except Exception as e:
-                    logging.warning(f"Could not calculate error bar value: {e}")
+            if assoc_error_bar:
+                if isinstance(assoc_error_bar, dict):
+                    assoc_bbox = assoc_error_bar.get('xyxy') or assoc_error_bar.get('bbox')
+                else:
+                    assoc_bbox = assoc_error_bar
+                if assoc_bbox and len(assoc_bbox) == 4 and scale_model:
+                    eb_x1, eb_y1, eb_x2, eb_y2 = assoc_bbox
+                    try:
+                        if is_vertical:
+                            error_val_1 = float(scale_model(eb_y1))
+                            error_val_2 = float(scale_model(eb_y2))
+                        else:
+                            model = x_scale_model if x_scale_model is not None else scale_model
+                            error_val_1 = float(model(eb_x1))
+                            error_val_2 = float(model(eb_x2))
+                        
+                        error_margin = abs(error_val_1 - error_val_2) / 2.0
+                        bar_info['error_bar'] = {
+                            'margin': error_margin,
+                            'bbox': assoc_bbox,
+                            'lower_bound': min(error_val_1, error_val_2),
+                            'upper_bound': max(error_val_1, error_val_2),
+                            **({'validation': validated_error_bar} if validated_error_bar else {})
+                        }
+                    except Exception as e:
+                        logging.warning(f"Could not calculate error bar value: {e}")
 
             # Tick labels
             assoc_tick_labels = bar.get('associated_tick_labels', [])

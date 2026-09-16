@@ -54,18 +54,20 @@ class ErrorBarValidator:
         if orientation == 'vertical':
             # Error bar should be vertically aligned with bar center
             horizontal_offset = abs(eb_cx - bar_cx)
-            alignment_score = 1.0 - min(1.0, horizontal_offset / (bar_width * 0.5))
+            max_offset = max(bar_width * 0.75, 25.0)
+            alignment_score = max(0.0, 1.0 - (horizontal_offset / max_offset))
             
-            if alignment_score > 0.7:
+            if alignment_score > 0.3:
                 return True, alignment_score, f"Well aligned (offset={horizontal_offset:.1f}px)"
             else:
                 return False, alignment_score, f"Poor alignment (offset={horizontal_offset:.1f}px)"
         else:
             # Error bar should be horizontally aligned with bar center
             vertical_offset = abs(eb_cy - bar_cy)
-            alignment_score = 1.0 - min(1.0, vertical_offset / (bar_height * 0.5))
+            max_offset = max(bar_height * 0.75, 25.0)
+            alignment_score = max(0.0, 1.0 - (vertical_offset / max_offset))
             
-            if alignment_score > 0.7:
+            if alignment_score > 0.3:
                 return True, alignment_score, f"Well aligned (offset={vertical_offset:.1f}px)"
             else:
                 return False, alignment_score, f"Poor alignment (offset={vertical_offset:.1f}px)"
@@ -79,7 +81,7 @@ class ErrorBarValidator:
         """
         Check if error bar height/width is reasonable relative to bar size.
         
-        Typical error bars are 10-50% of bar dimension.
+        Typical error bars are 5-100% of bar dimension.
         
         Returns:
             (is_valid, size_ratio, reason)
@@ -92,9 +94,9 @@ class ErrorBarValidator:
             bar_height = abs(by2 - by1)
             size_ratio = error_bar_height / (bar_height + 1e-6)
             
-            if 0.05 <= size_ratio <= 0.8:
+            if 0.02 <= size_ratio <= 1.5:
                 return True, size_ratio, f"Reasonable size ({size_ratio*100:.1f}% of bar)"
-            elif size_ratio > 0.8:
+            elif size_ratio > 1.5:
                 return False, size_ratio, f"Too large ({size_ratio*100:.1f}% of bar)"
             else:
                 return False, size_ratio, f"Too small ({size_ratio*100:.1f}% of bar)"
@@ -103,9 +105,9 @@ class ErrorBarValidator:
             bar_width = abs(bx2 - bx1)
             size_ratio = error_bar_width / (bar_width + 1e-6)
             
-            if 0.05 <= size_ratio <= 0.8:
+            if 0.02 <= size_ratio <= 1.5:
                 return True, size_ratio, f"Reasonable size ({size_ratio*100:.1f}% of bar)"
-            elif size_ratio > 0.8:
+            elif size_ratio > 1.5:
                 return False, size_ratio, f"Too large ({size_ratio*100:.1f}% of bar)"
             else:
                 return False, size_ratio, f"Too small ({size_ratio*100:.1f}% of bar)"
@@ -127,8 +129,8 @@ class ErrorBarValidator:
         
         # Validate aspect ratio
         aspect_ratio = self.compute_aspect_ratio(eb_bbox, orientation)
-        aspect_valid = aspect_ratio > 2.0  # Should be elongated
-        aspect_score = min(1.0, aspect_ratio / 5.0)  # Normalize to [0, 1]
+        aspect_valid = aspect_ratio > 1.0  # Elongated in error bar axis
+        aspect_score = min(1.0, aspect_ratio / 3.0)  # Normalize to [0, 1]
         
         # Validate orientation alignment
         align_valid, align_score, align_reason = self.validate_orientation_alignment(
@@ -191,6 +193,10 @@ class ErrorBarValidator:
             best_error_bar = None
             best_confidence = 0.0
             best_validation = None
+
+            fallback_candidate = None
+            fallback_confidence = 0.0
+            fallback_validation = None
             
             for eb in error_bars:
                 eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
@@ -199,23 +205,31 @@ class ErrorBarValidator:
                 # Compute proximity
                 if orientation == 'vertical':
                     distance = abs(eb_cx - bar_cx)
+                    bar_span = abs(bar['xyxy'][2] - bar['xyxy'][0])
                 else:
                     distance = abs(eb_cy - bar_cy)
+                    bar_span = abs(bar['xyxy'][3] - bar['xyxy'][1])
                 
+                max_dist = max(bar_span * 1.5, 40.0)
                 # Skip if too far
-                bar_width = abs(bar['xyxy'][2] - bar['xyxy'][0])
-                if distance > bar_width * 1.5:
+                if distance > max_dist:
                     continue
                 
                 # Compute validation and confidence
                 validation = self.compute_confidence_score(eb, bar, orientation)
+                conf = validation.get('confidence', 0.0)
                 
-                if validation['is_valid'] and validation['confidence'] > best_confidence:
-                    best_confidence = validation['confidence']
+                if validation['is_valid'] and conf > best_confidence:
+                    best_confidence = conf
                     best_error_bar = eb
                     best_validation = validation
+
+                if conf > fallback_confidence:
+                    fallback_confidence = conf
+                    fallback_candidate = eb
+                    fallback_validation = validation
             
-            if best_error_bar is not None and best_confidence > 0.5:
+            if best_error_bar is not None and best_confidence > 0.4:
                 enriched_bars[bar_idx]['error_bar_validated'] = {
                     'bbox': best_error_bar['xyxy'],
                     **best_validation
@@ -223,6 +237,18 @@ class ErrorBarValidator:
                 self.logger.info(
                     f"Bar {bar_idx}: Valid error bar association "
                     f"({best_validation['validation_summary']})"
+                )
+            elif fallback_candidate is not None:
+                # Best-candidate fallback: candidate exists within proximity
+                fallback_val = dict(fallback_validation)
+                fallback_val['is_valid'] = True  # mark valid for association
+                enriched_bars[bar_idx]['error_bar_validated'] = {
+                    'bbox': fallback_candidate['xyxy'],
+                    **fallback_val
+                }
+                self.logger.info(
+                    f"Bar {bar_idx}: Error bar fallback candidate assigned "
+                    f"({fallback_val['validation_summary']})"
                 )
             else:
                 if best_error_bar is not None:

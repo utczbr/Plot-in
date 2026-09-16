@@ -22,8 +22,7 @@ def categorize_ocr_records(result: Dict[str, Any]) -> Dict[str, List[Tuple[Dict[
     section_records: Dict[str, List[Tuple[Dict[str, Any], str]]] = {
         "chart_title": [],
         "axis_title": [],
-        "scale_label": [],
-        "tick_label": [],
+        "axis_labels": [],
         "legend": [],
         "data_label": [],
         "color_bar_label": [],
@@ -45,6 +44,7 @@ def categorize_ocr_records(result: Dict[str, Any]) -> Dict[str, List[Tuple[Dict[
     direct_mapping = {
         "chart_title": "chart_title",
         "axis_title": "axis_title",
+        "axis_labels": "axis_labels",
         "legend": "legend",
         "data_label": "data_label",
         "color_bar_label": "color_bar_label",
@@ -54,65 +54,37 @@ def categorize_ocr_records(result: Dict[str, Any]) -> Dict[str, List[Tuple[Dict[
     for detection_key, section_key in direct_mapping.items():
         _extend_section(section_key, detection_key, detections.get(detection_key, []))
 
-    # Prefer classifier outputs for scale/tick labels when available
+    # Also route any legacy scale_label/tick_label into axis_labels
+    for legacy_key in ("scale_label", "tick_label", "scale_labels", "tick_labels"):
+        if legacy_key in detections:
+            _extend_section("axis_labels", "axis_labels", detections.get(legacy_key, []))
+
+    # Collect from label_classification metadata if available
     label_classification = metadata.get("label_classification", {})
     if isinstance(label_classification, dict):
-        _extend_section(
-            "scale_label",
-            "axis_labels",
-            label_classification.get("scale_labels", label_classification.get("scale_label", [])),
-        )
-        _extend_section(
-            "tick_label",
-            "axis_labels",
-            label_classification.get("tick_labels", label_classification.get("tick_label", [])),
-        )
+        for k in ("scale_labels", "scale_label", "tick_labels", "tick_label", "axis_labels"):
+            _extend_section("axis_labels", "axis_labels", label_classification.get(k, []))
         _extend_section(
             "axis_title",
             "axis_title",
             label_classification.get("axis_titles", label_classification.get("axis_title", [])),
         )
 
-    has_classified_scale_tick = bool(section_records["scale_label"] or section_records["tick_label"])
-
-    # Fallback: split raw axis_labels into numeric (scale) and non-numeric (tick)
-    raw_axis_labels = detections.get("axis_labels", [])
-    if isinstance(raw_axis_labels, list) and not has_classified_scale_tick:
-        for item in raw_axis_labels:
-            if not isinstance(item, dict):
-                continue
-            text = str(item.get("text", "")).strip()
-            cleaned_value = item.get("cleaned_value")
-
-            looks_numeric = cleaned_value is not None
-            if not looks_numeric and text:
-                candidate = (
-                    text.replace(",", ".")
-                    .replace("%", "")
-                    .replace("$", "")
-                    .replace("€", "")
-                    .strip()
-                )
-                try:
-                    float(candidate)
-                    looks_numeric = True
-                except ValueError:
-                    looks_numeric = False
-
-            target_section = "scale_label" if looks_numeric else "tick_label"
-            _extend_section(target_section, "axis_labels", [item])
-
-    # Fallback: use extracted element tick labels for bar-like and box charts
-    if not section_records["tick_label"] and chart_type in {"bar", "histogram", "box"}:
+    # Fallback: use extracted element labels for bar-like and box charts
+    if not section_records["axis_labels"] and chart_type in {"bar", "histogram", "box"}:
         element_key = "bars" if chart_type != "box" else "elements"
         for element in result.get(element_key, []):
             if isinstance(element, dict):
                 label_text = element.get("label") or element.get("series") or element.get("x_label")
                 if label_text:
-                    section_records["tick_label"].append(({"text": str(label_text), "confidence": 1.0}, "extracted_element"))
+                    section_records["axis_labels"].append(({"text": str(label_text), "confidence": 1.0}, "extracted_element"))
 
     # Layout text from doclayout
     layout_items = metadata.get("layout_elements", [])
     _extend_section("layout_text", "doclayout", layout_items)
+
+    # Backward compatibility aliases
+    section_records["scale_label"] = section_records["axis_labels"]
+    section_records["tick_label"] = section_records["axis_labels"]
 
     return section_records

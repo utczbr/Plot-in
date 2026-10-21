@@ -2,17 +2,17 @@
 Factory for creating OCR engines based on mode and backend.
 
 Supported backends:
-- EasyOCR: easy, fast, optimized, precise modes
-- PaddleOCR: paddle_onnx, paddle_full modes
-- Unified: fast, optimized, precise modes using the new unified architecture
+- PaddleOCR: paddle_onnx, paddle_full modes (ONNX Runtime, default across all platforms)
+- Unified: unified_fast, unified_optimized, unified_precise modes using PaddleOCR
 """
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any
 
-from .engines.ocr_fast import FastOCREngine
-from .engines.ocr_optimized import OptimizedOCREngine
-from .engines.ocr_precise import PreciseOCREngine
 from .compat.unified_ocr_bridge import create_unified_ocr_engine
 from .orchestrator.unified_ocr_system_v2 import QualityMode
-from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _raise_optional_dependency_error(engine_name: str, exc: ModuleNotFoundError) -> None:
@@ -46,139 +46,115 @@ def _import_paddle_full_engine():
     return PaddleOCRFullPipeline
 
 
+def _resolve_default_paddle_models(models_dir: Optional[Path] = None) -> Dict[str, str]:
+    """Resolve default PaddleOCR model paths from standard project locations."""
+    if models_dir is None:
+        candidates = [
+            Path(__file__).resolve().parents[2] / "src" / "models",
+            Path(__file__).resolve().parents[1] / "models",
+            Path("src/models"),
+            Path("models"),
+        ]
+        for c in candidates:
+            if c.exists() and (c / "OCR").exists():
+                models_dir = c
+                break
+        if models_dir is None:
+            models_dir = candidates[0]
+
+    ocr_dir = models_dir / "OCR"
+    dict_candidates = [ocr_dir / "PP-OCRv5_server_rec.yml", ocr_dir / "PP-OCRv5_server_rec.yaml"]
+    dict_path = dict_candidates[0]
+    for dc in dict_candidates:
+        if dc.exists():
+            dict_path = dc
+            break
+
+    unwarp_candidates = [ocr_dir / "UVDoc.onnx", ocr_dir / "UVDoc .onnx"]
+    unwarp_path = unwarp_candidates[0]
+    for uc in unwarp_candidates:
+        if uc.exists():
+            unwarp_path = uc
+            break
+
+    return {
+        'det_model_path': str(ocr_dir / "PP-OCRv5_server_det.onnx"),
+        'rec_model_path': str(ocr_dir / "PP-OCRv5_server_rec.onnx"),
+        'dict_path': str(dict_path),
+        'cls_model_path': str(ocr_dir / "PP-LCNet_x1_0_textline_ori.onnx"),
+        'doc_ori_model_path': str(ocr_dir / "PP-LCNet_x1_0_doc_ori.onnx"),
+        'unwarp_model_path': str(unwarp_path),
+        'textline_ori_model_path': str(ocr_dir / "PP-LCNet_x1_0_textline_ori.onnx"),
+    }
+
+
 class OCREngineFactory:
     @staticmethod
     def create_engine(
-        mode: str,
+        mode: str = 'paddle_onnx',
         reader=None,
-        # PaddleOCR-specific parameters
         use_gpu: bool = False,
         **kwargs
     ):
         """
         Create an OCR engine based on the specified mode.
-        
-        EasyOCR modes (require 'reader' parameter):
-            - 'fast': Minimal preprocessing, fastest inference
-            - 'optimized': Balanced speed/accuracy with SIMD optimization
-            - 'precise': Maximum accuracy with multi-variant preprocessing
-        
-        PaddleOCR modes (require ONNX model paths in kwargs):
-            - 'paddle_onnx': PaddleOCR ONNX inference engine
-            - 'paddle_full': Full 5-model PaddleOCR pipeline
-        
-        Unified modes (new architecture):
-            - 'unified_fast': Fast unified OCR engine
-            - 'unified_optimized': Balanced unified OCR engine
-            - 'unified_precise': Precise unified OCR engine
-            
+        Standardized exclusively on PaddleOCR via ONNX Runtime.
+
+        Supported modes:
+            - 'paddle_onnx' (or 'Paddle'): Standard PaddleOCR ONNX inference engine (default)
+            - 'paddle_full' (or 'Paddle_docs'): Full 5-model PaddleOCR document pipeline
+            - 'unified_fast', 'unified_optimized', 'unified_precise': Unified OCR modes
+        Legacy modes ('fast', 'optimized', 'precise', 'EasyOCR') are automatically
+        redirected to 'paddle_onnx'.
+
         Args:
-            mode: OCR mode selector
-            reader: EasyOCR reader instance (for EasyOCR modes)
-            use_gpu: Enable GPU acceleration (for PaddleOCR modes)
-            **kwargs: Additional parameters for PaddleOCR engines
-        
+            mode: OCR mode selector (defaults to 'paddle_onnx')
+            reader: Ignored (retained for backward compatibility)
+            use_gpu: Enable GPU acceleration
+            **kwargs: Model paths and tuning parameters
+
         Returns:
             Initialized OCR engine instance
-        
-        Raises:
-            ValueError: If mode is unknown or required parameters missing
         """
-        # Handle new unified system modes
-        if mode.startswith('unified_'):
-            if mode == 'unified_fast':
+        normalized_mode = (mode or 'paddle_onnx').lower().strip()
+
+        # Handle unified system modes
+        if normalized_mode.startswith('unified_'):
+            if normalized_mode == 'unified_fast':
                 quality_mode = QualityMode.FAST
-            elif mode == 'unified_optimized':
+            elif normalized_mode == 'unified_optimized':
                 quality_mode = QualityMode.BALANCED
-            elif mode == 'unified_precise':
+            elif normalized_mode == 'unified_precise':
                 quality_mode = QualityMode.ACCURATE
             else:
-                raise ValueError(f"Unknown unified mode: {mode}")
-            
-            # For unified system, determine backend based on other kwargs
-            if 'det_session' in kwargs or 'paddle' in kwargs.get('backend', ''):
-                # Use PaddleOCR backend for unified system
-                paddle_params = {
-                    'det_session': kwargs.get('det_session'),
-                    'rec_session': kwargs.get('rec_session'),
-                    'character_dict': kwargs.get('character_dict', []),
-                    'cls_session': kwargs.get('cls_session')
-                }
-                return create_unified_ocr_engine(
-                    ocr_backend='paddle',
-                    quality_mode=quality_mode,
-                    enable_gpu=use_gpu,
-                    max_workers=kwargs.get('max_workers', 4),
-                    paddle_params=paddle_params
-                )
-            else:
-                # Use EasyOCR backend for unified system
-                if reader is None:
-                    raise ValueError("'reader' is required for unified EasyOCR mode")
-                return create_unified_ocr_engine(
-                    ocr_backend='easyocr',
-                    easyocr_reader=reader,
-                    quality_mode=quality_mode,
-                    enable_gpu=use_gpu,
-                    max_workers=kwargs.get('max_workers', 4)
-                )
-        
-        # Legacy modes (backward compatibility)
-        if mode == 'fast':
-            if reader is None:
-                raise ValueError("'reader' is required for fast mode")
-            return FastOCREngine(reader)
-        
-        elif mode == 'optimized':
-            if reader is None:
-                raise ValueError("'reader' is required for optimized mode")
-            return OptimizedOCREngine(reader)
-        
-        elif mode == 'precise':
-            if reader is None:
-                raise ValueError("'reader' is required for precise mode")
-            return PreciseOCREngine(reader)
-        
-        elif mode == 'paddle_onnx':
-            PaddleOCREngine = _import_paddle_onnx_engine()
+                quality_mode = QualityMode.BALANCED
 
-            # Validate required parameters for PaddleOCR
-            required = ['det_model_path', 'rec_model_path', 'dict_path']
-            if not all(kwargs.get(p) for p in required):
-                raise ValueError(
-                    f"PaddleOCR mode requires: {', '.join(required)}"
-                )
-            
-            return PaddleOCREngine(
-                det_model_path=kwargs['det_model_path'],
-                rec_model_path=kwargs['rec_model_path'],
-                dict_path=kwargs['dict_path'],
-                cls_model_path=kwargs.get('cls_model_path'),
-                use_gpu=use_gpu,
+            paddle_params = {
+                'det_session': kwargs.get('det_session'),
+                'rec_session': kwargs.get('rec_session'),
+                'character_dict': kwargs.get('character_dict', []),
+                'cls_session': kwargs.get('cls_session')
+            }
+            return create_unified_ocr_engine(
+                ocr_backend='paddle',
+                quality_mode=quality_mode,
+                enable_gpu=use_gpu,
                 max_workers=kwargs.get('max_workers', 4),
-                det_db_thresh=kwargs.get('det_db_thresh', 0.3),
-                det_db_box_thresh=kwargs.get('det_db_box_thresh', 0.6),
-                det_db_unclip_ratio=kwargs.get('det_db_unclip_ratio', 1.5),
-                rec_batch_size=kwargs.get('rec_batch_size', 6)
+                paddle_params=paddle_params
             )
 
-        elif mode == 'paddle_full':
+        # Handle full document orientation / unwarping pipeline
+        if normalized_mode in ('paddle_full', 'paddle_docs'):
             PaddleOCRFullPipeline = _import_paddle_full_engine()
+            defaults = _resolve_default_paddle_models()
 
-            # Validate required paths
-            required = ['doc_ori_model_path', 'unwarp_model_path', 'det_model_path',
-                        'textline_ori_model_path', 'rec_model_path', 'dict_path']
-            
-            if not all(kwargs.get(p) for p in required):
-                raise ValueError(f"paddle_full mode requires: {', '.join(required)}")
-            
             return PaddleOCRFullPipeline(
-                doc_ori_model_path=kwargs['doc_ori_model_path'],
-                unwarp_model_path=kwargs['unwarp_model_path'],
-                det_model_path=kwargs['det_model_path'],
-                textline_ori_model_path=kwargs['textline_ori_model_path'],
-                rec_model_path=kwargs['rec_model_path'],
-                dict_path=kwargs['dict_path'],
+                doc_ori_model_path=kwargs.get('doc_ori_model_path', defaults['doc_ori_model_path']),
+                unwarp_model_path=kwargs.get('unwarp_model_path', defaults['unwarp_model_path']),
+                det_model_path=kwargs.get('det_model_path', defaults['det_model_path']),
+                textline_ori_model_path=kwargs.get('textline_ori_model_path', defaults['textline_ori_model_path']),
+                rec_model_path=kwargs.get('rec_model_path', defaults['rec_model_path']),
+                dict_path=kwargs.get('dict_path', defaults['dict_path']),
                 use_gpu=use_gpu,
                 enable_doc_orientation=kwargs.get('enable_doc_orientation', True),
                 enable_unwarping=kwargs.get('enable_unwarping', True),
@@ -189,10 +165,26 @@ class OCREngineFactory:
                 rec_batch_size=kwargs.get('rec_batch_size', 6),
                 max_workers=kwargs.get('max_workers', 4)
             )
-        
-        else:
-            raise ValueError(
-                f"Unknown mode: {mode}. "
-                f"Supported modes: 'fast', 'optimized', 'precise', 'paddle_onnx', 'paddle_full', "
-                f"'unified_fast', 'unified_optimized', 'unified_precise'"
+
+        # Map legacy modes or unknown names to paddle_onnx with a log warning
+        if normalized_mode not in ('paddle_onnx', 'paddle'):
+            logger.info(
+                "Requested OCR mode '%s' redirected to default 'paddle_onnx' (EasyOCR and Tesseract removed).",
+                mode
             )
+
+        PaddleOCREngine = _import_paddle_onnx_engine()
+        defaults = _resolve_default_paddle_models()
+
+        return PaddleOCREngine(
+            det_model_path=kwargs.get('det_model_path', defaults['det_model_path']),
+            rec_model_path=kwargs.get('rec_model_path', defaults['rec_model_path']),
+            dict_path=kwargs.get('dict_path', defaults['dict_path']),
+            cls_model_path=kwargs.get('cls_model_path', defaults['cls_model_path']),
+            use_gpu=use_gpu,
+            max_workers=kwargs.get('max_workers', 4),
+            det_db_thresh=kwargs.get('det_db_thresh', 0.3),
+            det_db_box_thresh=kwargs.get('det_db_box_thresh', 0.6),
+            det_db_unclip_ratio=kwargs.get('det_db_unclip_ratio', 1.5),
+            rec_batch_size=kwargs.get('rec_batch_size', 6)
+        )

@@ -128,10 +128,7 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "Preset Loaded", f"'{preset_name}' preset has been loaded. Review and save.")
 
     def _update_ocr_accuracy_state(self, text):
-        if text in ["TesseractOCR"]:
-            self.ocr_accuracy_combo.setEnabled(True)
-        else:
-            self.ocr_accuracy_combo.setEnabled(False)
+        self.ocr_accuracy_combo.setEnabled(True)
 
     def _create_ocr_tab(self):
         """Create OCR settings tab."""
@@ -150,7 +147,7 @@ class SettingsDialog(QDialog):
         
         engine_layout.addWidget(QLabel("OCR Engine:"), 0, 0)
         self.ocr_engine_combo = QComboBox()
-        safe_combo_populate(self.ocr_engine_combo, ['Paddle', 'Paddle_docs', 'TesseractOCR'])
+        safe_combo_populate(self.ocr_engine_combo, ['Paddle', 'Paddle_docs'])
         engine_layout.addWidget(self.ocr_engine_combo, 0, 1)
 
         engine_layout.addWidget(QLabel("OCR Accuracy:"), 1, 0)
@@ -161,19 +158,18 @@ class SettingsDialog(QDialog):
         self.ocr_engine_combo.currentTextChanged.connect(self._update_ocr_accuracy_state)
         
         self.use_gpu_check = QCheckBox("Use GPU")
-        self.use_gpu_check.setChecked(self.settings['ocr_settings']['easyocr_gpu'])
+        self.use_gpu_check.setChecked(self.settings.get('ocr_settings', {}).get('use_gpu', False))
         self.use_gpu_check.setToolTip(
-            "Enable GPU acceleration for OCR. "
-            "Disabled on macOS by default (no CUDA support; MPS not yet integrated)."
+            "Enable GPU acceleration for OCR via ONNX Runtime."
         )
         engine_layout.addWidget(self.use_gpu_check, 2, 0, 1, 2)
         
         self.retry_suspicious_check = QCheckBox("Retry OCR on Suspicious Results")
-        self.retry_suspicious_check.setChecked(self.settings['ocr_settings']['retry_on_suspicious'])
+        self.retry_suspicious_check.setChecked(self.settings.get('ocr_settings', {}).get('retry_on_suspicious', True))
         engine_layout.addWidget(self.retry_suspicious_check, 3, 0, 1, 2)
         
         self.aggressive_preprocess_check = QCheckBox("Aggressive Preprocessing")
-        self.aggressive_preprocess_check.setChecked(self.settings['ocr_settings']['aggressive_preprocessing'])
+        self.aggressive_preprocess_check.setChecked(self.settings.get('ocr_settings', {}).get('aggressive_preprocessing', False))
         engine_layout.addWidget(self.aggressive_preprocess_check, 4, 0, 1, 2)
 
         self.use_doclayout_check = QCheckBox("Use DocLayout YOLO for text region detection")
@@ -220,7 +216,7 @@ class SettingsDialog(QDialog):
             label_widget.setToolTip(tooltip)
             whitelist_layout.addWidget(label_widget, row, 0)
             
-            input_widget = QLineEdit(self.settings['ocr_whitelists'][key])
+            input_widget = QLineEdit(self.settings.get('ocr_whitelists', {}).get(key, ''))
             input_widget.setPlaceholderText("Leave empty for default")
             input_widget.setToolTip(tooltip)
             whitelist_layout.addWidget(input_widget, row, 1)
@@ -238,7 +234,7 @@ class SettingsDialog(QDialog):
         self.scale_factor_spin = QDoubleSpinBox()
         self.scale_factor_spin.setRange(1.0, 5.0)
         self.scale_factor_spin.setSingleStep(0.5)
-        self.scale_factor_spin.setValue(self.settings['ocr_settings']['scale_factor'])
+        self.scale_factor_spin.setValue(self.settings.get('ocr_settings', {}).get('scale_factor', 3.0))
         self.scale_factor_spin.setToolTip("Upscale images before OCR (higher = better quality, slower)")
         advanced_layout.addWidget(self.scale_factor_spin, 0, 1)
         
@@ -246,15 +242,9 @@ class SettingsDialog(QDialog):
         self.contrast_ths_spin = QDoubleSpinBox()
         self.contrast_ths_spin.setRange(0.0, 1.0)
         self.contrast_ths_spin.setSingleStep(0.05)
-        self.contrast_ths_spin.setValue(self.settings['ocr_settings']['easyocr_contrast_ths'])
+        ocr_settings = self.settings.get('ocr_settings', {})
+        self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', ocr_settings.get('easyocr_contrast_ths', 0.1)))
         advanced_layout.addWidget(self.contrast_ths_spin, 1, 1)
-        
-        advanced_layout.addWidget(QLabel("Tesseract PSM Mode:"), 2, 0)
-        self.tesseract_psm_spin = QSpinBox()
-        self.tesseract_psm_spin.setRange(0, 13)
-        self.tesseract_psm_spin.setValue(self.settings['ocr_settings']['tesseract_psm'])
-        self.tesseract_psm_spin.setToolTip("Page Segmentation Mode (6 = assume uniform block of text)")
-        advanced_layout.addWidget(self.tesseract_psm_spin, 2, 1)
         
         scroll_layout.addWidget(advanced_group)
         scroll_layout.addStretch()
@@ -322,7 +312,8 @@ class SettingsDialog(QDialog):
         self.h_dist_factor_spin = QDoubleSpinBox()
         self.h_dist_factor_spin.setRange(0.5, 5.0)
         self.h_dist_factor_spin.setSingleStep(0.1)
-        self.h_dist_factor_spin.setValue(self.settings['bar_label_settings']['max_horizontal_distance_factor'])
+        bar_label_settings = self.settings.get('bar_label_settings', {})
+        self.h_dist_factor_spin.setValue(bar_label_settings.get('max_horizontal_distance_factor', 1.5))
         self.h_dist_factor_spin.setToolTip("Maximum horizontal distance (× bar width)")
         bar_label_layout.addWidget(self.h_dist_factor_spin, 0, 1)
         
@@ -330,12 +321,12 @@ class SettingsDialog(QDialog):
         self.score_thresh_spin = QDoubleSpinBox()
         self.score_thresh_spin.setRange(0.5, 10.0)
         self.score_thresh_spin.setSingleStep(0.1)
-        self.score_thresh_spin.setValue(self.settings['bar_label_settings']['score_threshold'])
+        self.score_thresh_spin.setValue(bar_label_settings.get('score_threshold', 2.0))
         self.score_thresh_spin.setToolTip("Maximum acceptable match score (lower = stricter)")
         bar_label_layout.addWidget(self.score_thresh_spin, 1, 1)
         
         self.sorted_assignment_check = QCheckBox("Use Position-Based Sorted Assignment")
-        self.sorted_assignment_check.setChecked(self.settings['bar_label_settings']['use_sorted_assignment'])
+        self.sorted_assignment_check.setChecked(bar_label_settings.get('use_sorted_assignment', True))
         self.sorted_assignment_check.setToolTip("Assign labels to bars based on sorted position (recommended)")
         bar_label_layout.addWidget(self.sorted_assignment_check, 2, 0, 1, 2)
         
@@ -356,14 +347,15 @@ class SettingsDialog(QDialog):
 
         grid.addWidget(QLabel("Calibration Method:"), 0, 0)
         self.calibration_method_combo = QComboBox()
-        safe_combo_populate(self.calibration_method_combo, ['Linear', 'Adaptive', 'PROSAC'])
+        safe_combo_populate(self.calibration_method_combo, ['Siegel (Robust)', 'Linear', 'Fast', 'PROSAC', 'Adaptive'])
         grid.addWidget(self.calibration_method_combo, 0, 1)
         
+        cal_settings = self.settings.get('calibration_settings', {})
         grid.addWidget(QLabel("Minimum R² for Good Calibration:"), 1, 0)
         self.min_r2_spin = QDoubleSpinBox()
         self.min_r2_spin.setRange(0.5, 1.0)
         self.min_r2_spin.setSingleStep(0.05)
-        self.min_r2_spin.setValue(self.settings['calibration_settings']['min_r_squared'])
+        self.min_r2_spin.setValue(cal_settings.get('min_r_squared', 0.95))
         self.min_r2_spin.setToolTip("Minimum R² value to consider calibration successful")
         grid.addWidget(self.min_r2_spin, 1, 1)
         
@@ -371,21 +363,21 @@ class SettingsDialog(QDialog):
         self.outlier_thresh_spin = QDoubleSpinBox()
         self.outlier_thresh_spin.setRange(1.0, 5.0)
         self.outlier_thresh_spin.setSingleStep(0.1)
-        self.outlier_thresh_spin.setValue(self.settings['calibration_settings']['outlier_threshold_std'])
+        self.outlier_thresh_spin.setValue(cal_settings.get('outlier_threshold_std', 2.0))
         self.outlier_thresh_spin.setToolTip("Number of standard deviations for outlier detection")
         grid.addWidget(self.outlier_thresh_spin, 2, 1)
         
         grid.addWidget(QLabel("Minimum Scale Labels Required:"), 3, 0)
         self.min_scale_labels_spin = QSpinBox()
         self.min_scale_labels_spin.setRange(2, 10)
-        self.min_scale_labels_spin.setValue(self.settings['calibration_settings']['min_scale_labels'])
+        self.min_scale_labels_spin.setValue(cal_settings.get('min_scale_labels', 2))
         grid.addWidget(self.min_scale_labels_spin, 3, 1)
         
         grid.addWidget(QLabel("Baseline Validation Tolerance:"), 4, 0)
         self.baseline_tol_spin = QDoubleSpinBox()
         self.baseline_tol_spin.setRange(0.05, 0.5)
         self.baseline_tol_spin.setSingleStep(0.05)
-        self.baseline_tol_spin.setValue(self.settings['calibration_settings']['baseline_validation_tolerance'])
+        self.baseline_tol_spin.setValue(cal_settings.get('baseline_validation_tolerance', 0.2))
         self.baseline_tol_spin.setToolTip("Tolerance for baseline position (fraction of image height)")
         grid.addWidget(self.baseline_tol_spin, 4, 1)
         
@@ -433,43 +425,45 @@ class SettingsDialog(QDialog):
         group = QGroupBox("Image Processing Parameters")
         grid = QGridLayout(group)
         
+        img_proc = self.settings.get('image_processing', {})
         # CLAHE settings
         grid.addWidget(QLabel("CLAHE Clip Limit:"), 0, 0)
         self.clahe_clip_spin = QDoubleSpinBox()
         self.clahe_clip_spin.setRange(0.5, 5.0)
         self.clahe_clip_spin.setSingleStep(0.1)
-        self.clahe_clip_spin.setValue(self.settings['image_processing']['clahe_clip_limit'])
+        self.clahe_clip_spin.setValue(img_proc.get('clahe_clip_limit', 1.0))
         self.clahe_clip_spin.setToolTip("Contrast limiting (lower = less enhancement)")
         grid.addWidget(self.clahe_clip_spin, 0, 1)
         
         grid.addWidget(QLabel("CLAHE Grid Size:"), 1, 0)
         self.clahe_grid_spin = QSpinBox()
         self.clahe_grid_spin.setRange(2, 16)
-        self.clahe_grid_spin.setValue(self.settings['image_processing']['clahe_grid_size'])
+        self.clahe_grid_spin.setValue(img_proc.get('clahe_grid_size', 8))
         grid.addWidget(self.clahe_grid_spin, 1, 1)
         
         # Bilateral filter
         grid.addWidget(QLabel("Bilateral Filter Diameter:"), 2, 0)
         self.bilateral_d_spin = QSpinBox()
         self.bilateral_d_spin.setRange(3, 15)
-        self.bilateral_d_spin.setValue(self.settings['image_processing']['bilateral_filter_d'])
+        self.bilateral_d_spin.setValue(img_proc.get('bilateral_filter_d', 5))
         grid.addWidget(self.bilateral_d_spin, 2, 1)
         
         # Performance
         perf_group = QGroupBox("Performance Settings")
         perf_layout = QGridLayout(perf_group)
+        perf_settings = self.settings.get('performance', {})
         
         perf_layout.addWidget(QLabel("Batch Processing Workers:"), 0, 0)
         self.batch_workers_spin = QSpinBox()
         self.batch_workers_spin.setRange(1, 16)
-        self.batch_workers_spin.setValue(self.settings['performance']['batch_workers'])
+        self.batch_workers_spin.setValue(perf_settings.get('batch_workers', 4))
         self.batch_workers_spin.setToolTip("Number of parallel processes for batch analysis")
         perf_layout.addWidget(self.batch_workers_spin, 0, 1)
         
         perf_layout.addWidget(QLabel("OCR Parallel Workers:"), 1, 0)
         self.ocr_workers_spin = QSpinBox()
         self.ocr_workers_spin.setRange(1, 16)
-        self.ocr_workers_spin.setValue(self.settings['performance']['ocr_workers'])
+        self.ocr_workers_spin.setValue(perf_settings.get('ocr_workers', 2))
         perf_layout.addWidget(self.ocr_workers_spin, 1, 1)
         
         layout.addWidget(group)
@@ -591,28 +585,29 @@ class SettingsDialog(QDialog):
         group = QGroupBox("Output Configuration")
         grid = QGridLayout(group)
         
+        out_settings = self.settings.get('output_settings', {})
         self.save_annotated_check = QCheckBox("Save Annotated Images")
-        self.save_annotated_check.setChecked(self.settings['output_settings']['save_annotated_image'])
+        self.save_annotated_check.setChecked(out_settings.get('save_annotated_image', True))
         grid.addWidget(self.save_annotated_check, 0, 0, 1, 2)
         
         self.save_json_check = QCheckBox("Save JSON Results")
-        self.save_json_check.setChecked(self.settings['output_settings']['save_json'])
+        self.save_json_check.setChecked(out_settings.get('save_json', True))
         grid.addWidget(self.save_json_check, 1, 0, 1, 2)
         
         self.include_debug_check = QCheckBox("Include Debug Information")
-        self.include_debug_check.setChecked(self.settings['output_settings']['include_debug_info'])
+        self.include_debug_check.setChecked(out_settings.get('include_debug_info', False))
         grid.addWidget(self.include_debug_check, 2, 0, 1, 2)
         
         grid.addWidget(QLabel("JSON Indentation:"), 3, 0)
         self.json_indent_spin = QSpinBox()
         self.json_indent_spin.setRange(0, 8)
-        self.json_indent_spin.setValue(self.settings['output_settings']['json_indent'])
+        self.json_indent_spin.setValue(out_settings.get('json_indent', 2))
         grid.addWidget(self.json_indent_spin, 3, 1)
         
         grid.addWidget(QLabel("Image Quality (0-100):"), 4, 0)
         self.image_quality_spin = QSpinBox()
         self.image_quality_spin.setRange(50, 100)
-        self.image_quality_spin.setValue(self.settings['output_settings']['image_quality'])
+        self.image_quality_spin.setValue(out_settings.get('image_quality', 95))
         grid.addWidget(self.image_quality_spin, 4, 1)
         
         layout.addWidget(group)
@@ -827,7 +822,8 @@ class SettingsDialog(QDialog):
         """Return current settings."""
         return self.settings
 
-    def _get_default_settings(self):
+    @staticmethod
+    def get_default_settings():
         """Get default settings."""
         return {
             'ocr_engine': 'Paddle',
@@ -836,7 +832,7 @@ class SettingsDialog(QDialog):
             'spatial_method': 'LYLLA',
             'scatter_subpixel_mode': 'gaussian',
             'bar_association_mode': 'metric_learning',
-            'calibration_method': 'PROSAC',
+            'calibration_method': 'Siegel (Robust)',
             'ocr_whitelists': {
                 'scale_label': '0123456789.,-eE+',
                 'axis_title': '',
@@ -847,13 +843,8 @@ class SettingsDialog(QDialog):
                 'other': ''
             },
             'ocr_settings': {
-                'easyocr_gpu': sys.platform != "darwin",
-                'easyocr_download_enabled': sys.platform != "darwin",
-                'easyocr_contrast_ths': 0.1,
-                'easyocr_adjust_contrast': 0.5,
-                'easyocr_min_size': 10,
-                'tesseract_psm': 6,
-                'tesseract_oem': 3,
+                'use_gpu': False,
+                'contrast_ths': 0.1,
                 'scale_factor': 3.0,
                 'retry_on_suspicious': True,
                 'aggressive_preprocessing': False,
@@ -915,13 +906,15 @@ class SettingsDialog(QDialog):
             'heatmap_mode': 'legacy',
         }
 
+    _get_default_settings = get_default_settings
+
     def _get_high_accuracy_preset(self):
         """High accuracy preset - slower but more accurate."""
         preset = self._get_default_settings()
         preset['ocr_engine'] = 'Paddle_docs'
         preset['ocr_accuracy'] = 'Precise'
         preset['spatial_method'] = 'LYLLA'
-        preset['calibration_method'] = 'PROSAC'
+        preset['calibration_method'] = 'Siegel (Robust)'
         preset['ocr_settings']['scale_factor'] = 4.0
         preset['ocr_settings']['retry_on_suspicious'] = True
         preset['ocr_settings']['aggressive_preprocessing'] = True
@@ -955,11 +948,11 @@ class SettingsDialog(QDialog):
         preset['ocr_engine'] = 'Paddle_docs'
         preset['ocr_accuracy'] = 'Precise'
         preset['spatial_method'] = 'LYLLA'
-        preset['calibration_method'] = 'PROSAC'
+        preset['calibration_method'] = 'Siegel (Robust)'
         preset['ocr_settings']['scale_factor'] = 5.0
         preset['ocr_settings']['retry_on_suspicious'] = True
         preset['ocr_settings']['aggressive_preprocessing'] = True
-        preset['ocr_settings']['easyocr_contrast_ths'] = 0.05
+        preset['ocr_settings']['contrast_ths'] = 0.05
         preset['image_processing']['clahe_clip_limit'] = 2.0
         preset['image_processing']['bilateral_filter_d'] = 7
         return preset
@@ -970,7 +963,7 @@ class SettingsDialog(QDialog):
         preset['ocr_engine'] = 'Paddle_docs'
         preset['ocr_accuracy'] = 'Precise'
         preset['spatial_method'] = 'LYLLA'
-        preset['calibration_method'] = 'PROSAC'
+        preset['calibration_method'] = 'Siegel (Robust)'
         preset['ocr_settings']['scale_factor'] = 5.0
         preset['ocr_settings']['retry_on_suspicious'] = True
         preset['ocr_settings']['aggressive_preprocessing'] = True
@@ -999,13 +992,12 @@ class SettingsDialog(QDialog):
         
         # OCR engine
         ocr_settings = self.settings.get('ocr_settings', {})
-        self.use_gpu_check.setChecked(ocr_settings.get('easyocr_gpu', True))
+        self.use_gpu_check.setChecked(ocr_settings.get('use_gpu', ocr_settings.get('easyocr_gpu', False)))
         self.retry_suspicious_check.setChecked(ocr_settings.get('retry_on_suspicious', True))
         self.aggressive_preprocess_check.setChecked(ocr_settings.get('aggressive_preprocessing', False))
         self.use_doclayout_check.setChecked(self.settings.get('use_doclayout_text', True))
         self.scale_factor_spin.setValue(ocr_settings.get('scale_factor', 3.0))
-        self.contrast_ths_spin.setValue(ocr_settings.get('easyocr_contrast_ths', 0.1))
-        self.tesseract_psm_spin.setValue(ocr_settings.get('tesseract_psm', 6))
+        self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', ocr_settings.get('easyocr_contrast_ths', 0.1)))
         
         # Detection thresholds
         detection_thresholds = self.settings.get('detection_thresholds', {})
@@ -1019,7 +1011,10 @@ class SettingsDialog(QDialog):
         self.sorted_assignment_check.setChecked(bar_label_settings.get('use_sorted_assignment', True))
         
         # Calibration
-        self.calibration_method_combo.setCurrentText(self.settings.get('calibration_method', 'PROSAC'))
+        cal_method = self.settings.get('calibration_method', 'Siegel (Robust)')
+        if cal_method in ('PROSAC', 'Adaptive', 'siegel', 'robust'):
+            cal_method = 'Siegel (Robust)'
+        self.calibration_method_combo.setCurrentText(cal_method)
         calibration_settings = self.settings.get('calibration_settings', {})
         self.min_r2_spin.setValue(calibration_settings.get('min_r_squared', 0.95))
         self.outlier_thresh_spin.setValue(calibration_settings.get('outlier_threshold_std', 2.0))
@@ -1076,14 +1071,13 @@ class SettingsDialog(QDialog):
         }
         
         # OCR engine settings
-        self.settings['ocr_settings']['easyocr_gpu'] = self.use_gpu_check.isChecked()
+        self.settings['ocr_settings']['use_gpu'] = self.use_gpu_check.isChecked()
         self.settings['ocr_settings']['retry_on_suspicious'] = self.retry_suspicious_check.isChecked()
         self.settings['ocr_settings']['aggressive_preprocessing'] = self.aggressive_preprocess_check.isChecked()
         self.settings['use_doclayout_text'] = self.use_doclayout_check.isChecked()
         self.settings['use_doclayout_regions'] = self.use_doclayout_regions_check.isChecked()
         self.settings['ocr_settings']['scale_factor'] = self.scale_factor_spin.value()
-        self.settings['ocr_settings']['easyocr_contrast_ths'] = self.contrast_ths_spin.value()
-        self.settings['ocr_settings']['tesseract_psm'] = self.tesseract_psm_spin.value()
+        self.settings['ocr_settings']['contrast_ths'] = self.contrast_ths_spin.value()
         
         # Detection thresholds
         self.settings['detection_thresholds'] = {

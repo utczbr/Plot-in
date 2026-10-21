@@ -13,7 +13,7 @@ from .environment import (
     resolve_python_for_install,
 )
 from .models import load_model_manifest, verify_or_download_models
-from .ocr import ensure_ocr_cache_dirs, predownload_easyocr_models
+from .ocr import ensure_ocr_cache_dirs
 from .platforms import PlatformInfo
 from .profiles import write_profile
 from .install_types import InstallOptions, InstallResult
@@ -28,9 +28,7 @@ def run_installation(options: InstallOptions, platform_info: PlatformInfo) -> In
         if not options.models_dir.is_absolute():
             options.models_dir = (STATE_ROOT / options.models_dir).resolve()
 
-        if options.easyocr_model_storage_dir is not None and not options.easyocr_model_storage_dir.is_absolute():
-            options.easyocr_model_storage_dir = (STATE_ROOT / options.easyocr_model_storage_dir).resolve()
-        if options.paddle_model_cache_dir is not None and not options.paddle_model_cache_dir.is_absolute():
+        if getattr(options, "paddle_model_cache_dir", None) is not None and not options.paddle_model_cache_dir.is_absolute():
             options.paddle_model_cache_dir = (STATE_ROOT / options.paddle_model_cache_dir).resolve()
 
         requirements = resolve_requirements(options, platform_info.os_name)
@@ -88,10 +86,6 @@ def run_installation(options: InstallOptions, platform_info: PlatformInfo) -> In
                     warnings=warnings,
                     metadata={"failures": " | ".join(summary.failures)},
                 )
-
-        predownload_easyocr_models(python_executable, options)
-        if options.predownload_ocr_models:
-            steps.append("EasyOCR pre-download executed")
 
         profile_path = write_profile(options)
         steps.append(f"Wrote installation profile: {profile_path}")

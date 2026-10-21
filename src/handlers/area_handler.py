@@ -119,8 +119,20 @@ class AreaHandler(CartesianExtractionHandler):
                 entry['data_label'] = point['data_label']
             if point.get('error_bar'):
                 entry['error_bar'] = point['error_bar']
+            if point.get('tick_label'):
+                entry['tick_label'] = point['tick_label']
 
             extracted.append(entry)
+
+        # Associate tick labels along the independent axis
+        from extractors.tick_label_associator import TickLabelAssociator
+        axis_lbls = getattr(self, '_axis_labels', None) or detections.get('axis_labels', [])
+        extracted = TickLabelAssociator.associate(
+            extracted, detections, orientation_enum.value, axis_labels=axis_lbls
+        )
+
+        from extractors.legend_associator import LegendAssociator
+        extracted = LegendAssociator.associate(extracted, detections)
 
         # Append series summary entries with AUC
         if isinstance(auc_info, list):

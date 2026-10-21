@@ -35,18 +35,9 @@ def create_profile_payload(options: InstallOptions) -> Dict[str, Any]:
     ocr_settings = dict(advanced_settings.get("ocr_settings", {}))
 
     ocr_settings["languages"] = list(options.ocr_languages)
-    # Keep runtime deterministic. Downloader is installer-owned unless explicitly wanted.
-    ocr_settings["easyocr_download_enabled"] = bool(options.predownload_ocr_models)
-
-    if options.easyocr_model_storage_dir:
-        ocr_settings["easyocr_model_storage_dir"] = str(options.easyocr_model_storage_dir)
 
     advanced_settings["ocr_engine"] = options.ocr_backend
     advanced_settings["ocr_settings"] = ocr_settings
-
-    if options.ocr_backend.lower() != "easyocr":
-        # Keep consistency with installer choice and avoid stale easyocr-only fields causing confusion.
-        advanced_settings["ocr_engine"] = "Paddle"
 
     payload: Dict[str, Any] = {
         "profile_name": options.profile_name,
@@ -63,8 +54,6 @@ def create_profile_payload(options: InstallOptions) -> Dict[str, Any]:
         "environment": {},
     }
 
-    if options.easyocr_model_storage_dir:
-        payload["environment"]["EASYOCR_MODULE_PATH"] = str(options.easyocr_model_storage_dir)
     if options.paddle_model_cache_dir:
         payload["environment"]["PADDLE_HOME"] = str(options.paddle_model_cache_dir)
 

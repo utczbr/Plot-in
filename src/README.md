@@ -57,7 +57,7 @@ This README is for engineers and agent contributors working on runtime behavior,
 | 3. Element detection | chart type + model + class map | runs model with per-type output parser (`bbox`/`pose`) | detections by class key | missing model -> empty detections; histogram fallback chain attempts lower confidence and bar model | `tests/pipelines_tests/test_chart_pipeline.py` |
 | 4. Text layout detection | image + optional doclayout model | optional doclayout text-region detection | `layout_text_regions` | model unavailable or disabled -> empty list | `services/text_layout_service.py` |
 | 5. Orientation | chart elements + chart type | orientation detection service (variance/aspect/spatial fallback) | `Orientation` enum | non-cartesian-like types default vertical in pipeline routing path | `services/orientation_detection_service.py` |
-| 6. OCR | axis labels + doclayout regions | batched OCR (PaddleOCR default across platforms; EasyOCR optional); dedupe doclayout overlap with axis labels | text/confidence annotated into detections | OCR exceptions logged; run continues | `chart_pipeline.py`, OCR engine factory |
+| 6. OCR | axis labels + doclayout regions | batched OCR (PaddleOCR via ONNX Runtime); dedupe doclayout overlap with axis labels | text/confidence annotated into detections | OCR exceptions logged; run continues | `chart_pipeline.py`, OCR engine factory |
 | 7. Handler orchestration | `HandlerContext` | chart-type handler executes extraction contract | `ExtractionResult` | handler errors return structured error result; pipeline returns `None` on fatal | orchestrator + handler tests |
 | 8. Result formatting/persistence | extraction result + detections | serialize to `PipelineResult`, attach provenance, save JSON/annotation | `*_analysis.json`, optional `*_annotated.png` | annotation write failure logged without stopping result | `chart_pipeline.py` |
 
@@ -118,7 +118,7 @@ python3 src/analysis.py \
   --models-dir ./src/models \
   --ocr Paddle \
   --ocr-accuracy Optimized \
-  --calibration PROSAC \
+  --calibration siegel \
   --annotated
 ```
 

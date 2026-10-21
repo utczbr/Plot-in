@@ -458,10 +458,31 @@ class RobustBarAssociator:
             
             enriched_bars.append(enriched_bar)
         
-        # Step 4: Resolve conflicts (multiple bars claiming same label)
+        # Step 4: Resolve conflicts (multiple bars claiming same label or error bar)
         # This is needed because multiple bars might have been assigned the same best label
         enriched_bars = self._resolve_conflicts(enriched_bars, tick_labels, orientation)
-        
+
+        # Resolve conflicts for error bars (ensure 1-to-1 association)
+        if error_bars:
+            eb_claims = {}
+            for bar_idx, b in enumerate(enriched_bars):
+                eb = b.get('associated_error_bar')
+                if eb is not None:
+                    eb_id = id(eb)
+                    bar_cx = (b['xyxy'][0] + b['xyxy'][2]) / 2.0
+                    bar_cy = (b['xyxy'][1] + b['xyxy'][3]) / 2.0
+                    eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
+                    eb_cy = (eb['xyxy'][1] + eb['xyxy'][3]) / 2.0
+                    dist = abs(eb_cx - bar_cx) if orientation == 'vertical' else abs(eb_cy - bar_cy)
+                    if eb_id not in eb_claims or dist < eb_claims[eb_id][1]:
+                        eb_claims[eb_id] = (bar_idx, dist)
+            for bar_idx, b in enumerate(enriched_bars):
+                eb = b.get('associated_error_bar')
+                if eb is not None:
+                    eb_id = id(eb)
+                    if eb_claims.get(eb_id, (None, None))[0] != bar_idx:
+                        b['associated_error_bar'] = None
+
         return enriched_bars
     
     def _resolve_conflicts(

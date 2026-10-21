@@ -31,7 +31,7 @@ flowchart LR
 - **Multi-Format Support**: Processes raw image files (`.png`, `.jpg`, `.bmp`, `.tiff`) and multi-page PDF documents (`.pdf`).
 - **Comprehensive Chart Coverage**: Handlers for 8 distinct chart types (`bar`, `line`, `scatter`, `box`, `histogram`, `heatmap`, `pie`, `area`).
 - **Deep Learning Vision Engine**: ONNX Runtime object detection & keypoint pose estimation for precise geometric element parsing.
-- **Advanced Baseline Calibration**: Automatic axis detection, tick mark alignment, and subpixel coordinate transformation using PROSAC / RANSAC.
+- **Advanced Baseline Calibration**: Automatic axis detection, tick mark alignment, and subpixel coordinate transformation using Siegel repeated medians / LMedS.
 - **Dual Interface**: Full-featured CLI for batch server processing and a modern PyQt6 GUI with interactive visual annotation editing.
 - **Protocol Validation & Auditing**: Exports standardized protocol CSVs with complete provenance tracking and quality metrics (Lin's CCC, Cohen's Kappa).
 
@@ -133,7 +133,7 @@ print("Extracted Elements:", len(result["elements"]))
 
 - **Core & Pipeline**: Python 3.11+, NumPy, SciPy, OpenCV, Pillow
 - **Computer Vision & ML**: ONNX Runtime, YOLO (Detection, Pose & DocLayout)
-- **OCR Engines**: PaddleOCR (default), EasyOCR (optional)
+- **OCR Engines**: PaddleOCR (via ONNX Runtime, CPU/CUDA/CoreML)
 - **GUI Desktop**: PyQt6
 - **Testing & Quality**: Pytest, Hypothesis, Black, Flake8, Pre-commit
 

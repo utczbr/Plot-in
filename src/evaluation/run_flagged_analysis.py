@@ -62,7 +62,7 @@ def run_flagged_pipeline(
     advanced_settings: Optional[Dict[str, Any]] = None,
     ocr_backend: str = 'Paddle',
     ocr_accuracy: str = 'Optimized',
-    calibration_method: str = 'PROSAC',
+    calibration_method: str = 'siegel',
     models_dir: str = 'src/models',
     annotated: bool = False,
     input_type: str = 'auto',
@@ -101,17 +101,16 @@ def run_flagged_pipeline(
         return []
 
     # OCR engine
-    if ocr_backend == 'Paddle':
-        ocr_engine = OCREngineFactory.create_engine(
-            'paddle_onnx',
-            None,
-            det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
-            rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
-            dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
-            cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx'),
-        )
-    else:
-        ocr_engine = OCREngineFactory.create_engine(ocr_accuracy.lower(), None)
+    doc_path = str(models_dir_path / 'OCR' / 'UVDoc.onnx') if ocr_backend == 'Paddle_docs' else None
+    ocr_engine = OCREngineFactory.create_engine(
+        'paddle_onnx',
+        None,
+        det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
+        rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
+        dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
+        cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx'),
+        doc_model_path=doc_path,
+    )
 
     calibration_engine = CalibrationFactory.create(calibration_method)
     pipeline = ChartAnalysisPipeline(
@@ -178,17 +177,17 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--ocr", default="Paddle", choices=["Paddle", "EasyOCR"],
-        help="OCR engine"
+        "--ocr", default="Paddle", choices=["Paddle", "Paddle_docs"],
+        help="OCR engine (Paddle or Paddle_docs)"
     )
     parser.add_argument(
         "--ocr-accuracy", default="Optimized",
         choices=["Fast", "Optimized", "Precise"],
-        help="OCR accuracy mode (EasyOCR only)"
+        help="OCR accuracy mode (legacy parameter, PaddleONNX used automatically)"
     )
     parser.add_argument(
-        "--calibration", default="PROSAC",
-        help="Calibration method (PROSAC, RANSAC, LINEAR)"
+        "--calibration", default="siegel",
+        help="Calibration method (siegel, robust, fast, linear, prosac)"
     )
     parser.add_argument("--annotated", action="store_true", help="Save annotated images")
     parser.add_argument(

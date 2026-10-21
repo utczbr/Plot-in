@@ -37,6 +37,7 @@ class CalibrationResult:
     inliers: Optional[np.ndarray] = None
     is_inverted: bool = False
     coordinate_system: str = 'image'  # 'image' or 'data'
+    scale_type: str = 'linear'  # 'linear' or 'log'
 
 
 class BaseCalibration(ABC):

@@ -42,14 +42,10 @@ gui = [
     "PyQt6-Qt6>=6.6,<7",
     "PyQt6-sip>=13.6",
 ]
-# EasyOCR engine (pulls torch as a transitive dependency)
-ocr-easyocr = [
-    "easyocr>=1.7",
+# Development, training & testing
+dev = [
     "torch>=2.1,<3",
     "torchvision>=0.16",
-]
-# Development & testing
-dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "pytest-mock>=3.12",
@@ -61,7 +57,7 @@ dev = [
     "pre-commit>=3.6",
 ]
 # All extras combined
-all = ["plotin[gui,ocr-easyocr,dev]"]
+all = ["plotin[gui,dev]"]
 
 [project.scripts]
 plotin = "analysis:main"

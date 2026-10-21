@@ -93,8 +93,9 @@ class LineHandler(CartesianExtractionHandler):
         
         # Transform result to Handler format
         extracted = []
-        for point in result.get('data_points', []):
-            x1, y1, x2, y2 = point['xyxy']
+        data_points = result.get('data_points', []) if isinstance(result, dict) else (result if isinstance(result, list) else [])
+        for point in data_points:
+            x1, y1, x2, y2 = point.get('xyxy') or point.get('bbox', [0, 0, 0, 0])
             
             # Calculate position (center)
             if orientation_enum == Orientation.VERTICAL:
@@ -106,7 +107,7 @@ class LineHandler(CartesianExtractionHandler):
                 'type': 'line_segment',
                 'bbox': [x1, y1, x2, y2],
                 'position': pos,
-                'value': point['estimated_value'],
+                'value': point.get('estimated_value', point.get('value')),
                 'x_value': point.get('x_value'),
                 'series_id': point.get('series_id', 0),
                 'orientation': orientation_enum.value,
@@ -116,14 +117,38 @@ class LineHandler(CartesianExtractionHandler):
                 entry['data_label'] = point['data_label']
             if point.get('error_bar'):
                 entry['error_bar'] = point['error_bar']
+            if point.get('tick_label'):
+                entry['tick_label'] = point['tick_label']
             extracted.append(entry)
             
+        # 1-to-1 error bar association for points without error bars
         error_bars = detections.get('error_bar', [])
-        for point in extracted:
-            px = (point['bbox'][0] + point['bbox'][2]) / 2
-            nearest = min(error_bars, key=lambda e: abs((e['xyxy'][0]+e['xyxy'][2])/2 - px), default=None)
-            if nearest:
-                point['error_bar'] = {'bbox': nearest['xyxy'], 'margin': None}  # calibrate separately
+        if error_bars:
+            eb_pairs = []
+            for pt_idx, point in enumerate(extracted):
+                if point.get('error_bar'):
+                    continue
+                px = (point['bbox'][0] + point['bbox'][2]) / 2.0
+                for eb_idx, eb in enumerate(error_bars):
+                    eb_x = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
+                    dist = abs(eb_x - px)
+                    if dist < 25.0:
+                        eb_pairs.append((dist, pt_idx, eb_idx))
+            eb_pairs.sort(key=lambda x: x[0])
+            assigned_pts = set()
+            assigned_ebs = set()
+            for dist, pt_idx, eb_idx in eb_pairs:
+                if pt_idx not in assigned_pts and eb_idx not in assigned_ebs:
+                    extracted[pt_idx]['error_bar'] = {'bbox': error_bars[eb_idx]['xyxy'], 'margin': None}
+                    assigned_pts.add(pt_idx)
+                    assigned_ebs.add(eb_idx)
                 
+        # Associate tick labels along the independent axis
+        from extractors.tick_label_associator import TickLabelAssociator
+        axis_lbls = getattr(self, '_axis_labels', None) or detections.get('axis_labels', [])
+        extracted = TickLabelAssociator.associate(
+            extracted, detections, orientation_enum.value, axis_labels=axis_lbls
+        )
+
         from extractors.legend_associator import LegendAssociator
         return LegendAssociator.associate(extracted, detections)

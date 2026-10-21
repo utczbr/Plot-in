@@ -24,22 +24,6 @@ from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
 from pipelines.chart_pipeline import ChartAnalysisPipeline
 
-# Catch OSError as well as ImportError: on Windows, easyocr transitively imports
-# torch, and if the torch DLL fails to load (missing MSVC Redistributable,
-# CUDA/cuDNN mismatch, etc.) Python raises:
-#   OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed.
-# We catch any Exception here so the app can still start and use Paddle instead.
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-except (ImportError, OSError, Exception):  # noqa: BLE001
-    EASYOCR_AVAILABLE = False
-    logging.warning(
-        "EasyOCR could not be loaded (possibly a broken torch/CUDA installation). "
-        "OCR will fall back to Paddle."
-    )
-
-
 def _resolve_models_dir(models_dir: str) -> Path:
     requested = Path(models_dir).expanduser()
     if requested.is_absolute():
@@ -54,34 +38,9 @@ def _resolve_models_dir(models_dir: str) -> Path:
             return candidate
     return candidates[-1]
 
-
-def _create_easyocr_reader(languages: List[str]):
-    if not EASYOCR_AVAILABLE:
-        raise RuntimeError("EasyOCR is not installed.")
-
-    # On macOS default to CPU first for better out-of-box compatibility.
-    env_gpu = os.environ.get("EASYOCR_GPU")
-    if env_gpu is not None:
-        normalized = env_gpu.strip().lower()
-        gpu_attempts = [normalized in {"1", "true", "yes", "on"}]
-    else:
-        # macOS: EasyOCR hard-codes torch.device('cuda') internally; MPS not supported upstream.
-        # When EasyOCR adds MPS support, change to: [True, False]
-        gpu_attempts = [False] if sys.platform == "darwin" else [True, False]
-
-    last_error = None
-    for use_gpu in gpu_attempts:
-        try:
-            return easyocr.Reader(languages, gpu=use_gpu)
-        except Exception as exc:
-            last_error = exc
-            logging.warning("EasyOCR initialization failed with gpu=%s: %s", use_gpu, exc)
-
-    raise RuntimeError(f"Unable to initialize EasyOCR: {last_error}")
-
 def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'Paddle',
                           ocr_accuracy: str = 'Optimized',
-                          calibration_method: str = 'PROSAC', models_dir: str = 'models',
+                          calibration_method: str = 'siegel', models_dir: str = 'models',
                           annotated: bool = False, languages: Optional[List[str]] = None,
                           input_type: str = 'auto',
                           context_path: Optional[str] = None,
@@ -106,32 +65,18 @@ def run_analysis_pipeline(input_dir: str, output_dir: str, ocr_backend: str = 'P
         logging.error("No models could be loaded. Exiting.")
         return []
 
-    easyocr_reader = None
-    if ocr_backend == 'EasyOCR':
-        try:
-            easyocr_reader = _create_easyocr_reader(languages)
-        except Exception as e:
-            logging.error("Error initializing EasyOCR: %s", e)
-            return []
-
     # 2. Configure OCR Engine
-    if ocr_backend == 'Paddle':
-        engine_mode = 'paddle_onnx'
-        ocr_engine = OCREngineFactory.create_engine(
-            engine_mode,
-            easyocr_reader,
-            det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
-            rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
-            dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
-            cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx')
-        )
-    elif ocr_backend == 'EasyOCR':
-        accuracy_to_mode = {'Fast': 'fast', 'Optimized': 'optimized', 'Precise': 'precise'}
-        engine_mode = accuracy_to_mode.get(ocr_accuracy, 'optimized')
-        ocr_engine = OCREngineFactory.create_engine(engine_mode, easyocr_reader)
-    else:
-        engine_mode = ocr_backend
-        ocr_engine = OCREngineFactory.create_engine(engine_mode, easyocr_reader)
+    engine_mode = 'paddle_full' if ocr_backend == 'Paddle_docs' else 'paddle_onnx'
+    ocr_engine = OCREngineFactory.create_engine(
+        engine_mode,
+        det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
+        rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
+        dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
+        cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx'),
+        doc_ori_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_doc_ori.onnx'),
+        unwarp_model_path=str(models_dir_path / 'OCR' / 'UVDoc.onnx'),
+        textline_ori_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx'),
+    )
     
     calibration_engine = CalibrationFactory.create(calibration_method)
     
@@ -254,11 +199,11 @@ def main():
         help='Models directory (default: src/models)'
     )
     parser.add_argument('--profile', default=None, help='Optional install profile name')
-    parser.add_argument('--ocr', default=None, choices=['Paddle', 'EasyOCR'], help='OCR engine')
+    parser.add_argument('--ocr', default='Paddle', choices=['Paddle', 'Paddle_docs'], help='OCR engine (default: Paddle)')
     parser.add_argument('--ocr-accuracy', default='Optimized', choices=['Fast', 'Optimized', 'Precise'], help='OCR accuracy')
-    parser.add_argument('--calibration', default='PROSAC', 
-                        choices=['Linear', 'PROSAC', 'neural', 'log', 'visual', 'fast'],
-                        help='Calibration method (neural recommended for log-scale/non-linear axes)')
+    parser.add_argument('--calibration', default='siegel', 
+                        choices=['Linear', 'PROSAC', 'neural', 'log', 'visual', 'fast', 'siegel', 'Siegel', 'robust'],
+                        help='Calibration method (default: siegel; neural recommended for log-scale/non-linear axes)')
     parser.add_argument('--annotated', action='store_true', help='Save annotated images')
     parser.add_argument(
         '--heatmap-mode', default='legacy',
@@ -287,7 +232,7 @@ def main():
         or str(Path(__file__).resolve().parent / 'models')
     )
 
-    default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+    default_ocr = 'Paddle'
     ocr_backend = args.ocr or runtime_cfg.get("ocr_backend") or default_ocr
     if args.language:
         languages = [lang.strip() for lang in args.language.split(',') if lang.strip()]

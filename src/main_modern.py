@@ -1,13 +1,10 @@
 # ---------------------------------------------------------------------------
-# CRITICAL: Pre-import onnxruntime BEFORE torch / easyocr.
-#
-# On Windows, the torch CPU build ships its own MSVC runtime DLLs and adds
-# torch/lib/ to the DLL search path on import.  If onnxruntime is imported
-# *after* torch, it picks up torch's incompatible DLLs and crashes with:
-#   ImportError: DLL load failed while importing onnxruntime_pybind11_state
-#
-# By importing onnxruntime first (before `import analysis` pulls in easyocr
-# → torch), onnxruntime binds to the system DLLs and both libraries coexist.
+# Pre-import onnxruntime early to bind cleanly to system C++ runtime DLLs.
+try:
+    import onnxruntime as _ort  # noqa: F401
+except (ImportError, OSError):
+    _ort = None  # type: ignore[assignment]
+
 # If onnxruntime itself is missing or broken, we silently skip here and let
 # the lazy import in model_manager.py surface the error later in the GUI.
 # ---------------------------------------------------------------------------
@@ -56,7 +53,7 @@ try:
         QCheckBox, QSplitter, QProgressBar, QProgressDialog, QGridLayout, QGroupBox,
         QDialog, QSizePolicy, QComboBox, QTableWidget, QTableWidgetItem
     )
-    from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QTimer, QMutex, PYQT_VERSION_STR, QSize
+    from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QTimer, PYQT_VERSION_STR, QSize
     from PyQt6.QtGui import (
         QPixmap,
         QImage,
@@ -80,10 +77,9 @@ except ModuleNotFoundError as exc:
 
 import multiprocessing
 import threading
-from collections import OrderedDict
-from contextlib import contextmanager
 import os
-from PIL import Image, ImageDraw, ImageQt
+from collections import defaultdict
+from PIL import Image, ImageDraw
 import numpy as np
 import json
 from pathlib import Path
@@ -95,19 +91,17 @@ from services.service_container import create_service_container
 
 # Import from new modular structure
 from core.model_manager import ModelManager
-from models.config import MODE_CONFIGS, MODELS_CONFIG
+from models.config import MODELS_CONFIG
 from core.install_profile import (
     apply_profile_environment,
     load_install_profile,
     merge_dicts,
 )
 from ocr.ocr_factory import OCREngineFactory
-from calibration.calibration_factory import CalibrationFactory
 from utils import sanitize_for_json
 import analysis  # Keep for backward compatibility where needed
 
 from visual.settings_dialog import SettingsDialog, save_settings_to_file, load_settings_from_file
-from visual.profiling import PerformanceMonitor, timed
 from visual.pie_geometry import extract_slice_overlay_points
 from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 
@@ -131,39 +125,29 @@ class TableEditCommand(QUndoCommand):
         self.changes = changes
         self._first_run = True
 
-    def undo(self):
+    def _apply(self, idx):
         self.table.blockSignals(True)
         try:
-            for row, col, old_val, new_val in self.changes:
+            for row, col, *vals in self.changes:
                 item = self.table.item(row, col)
                 if item:
-                    item.setText(old_val)
-                    self.table._current_data[(row, col)] = old_val
+                    item.setText(vals[idx])
+                    self.table._current_data[(row, col)] = vals[idx]
         finally:
             self.table.blockSignals(False)
         self.table._is_editing_undo = True
-        if self.changes:
-            self.table.cellChanged.emit(self.changes[-1][0], self.changes[-1][1])
+        for row, col, *_ in self.changes:
+            self.table.cellChanged.emit(row, col)
         self.table._is_editing_undo = False
+
+    def undo(self):
+        self._apply(0)
 
     def redo(self):
         if self._first_run:
             self._first_run = False
             return
-            
-        self.table.blockSignals(True)
-        try:
-            for row, col, old_val, new_val in self.changes:
-                item = self.table.item(row, col)
-                if item:
-                    item.setText(new_val)
-                    self.table._current_data[(row, col)] = new_val
-        finally:
-            self.table.blockSignals(False)
-        self.table._is_editing_undo = True
-        if self.changes:
-            self.table.cellChanged.emit(self.changes[-1][0], self.changes[-1][1])
-        self.table._is_editing_undo = False
+        self._apply(1)
 
 
 class MultiSelectTableWidget(QTableWidget):
@@ -176,11 +160,11 @@ class MultiSelectTableWidget(QTableWidget):
         self._current_data = {}
         self._is_editing_undo = False
         self.cellChanged.connect(self._on_cell_changed)
-        
+
     def setItem(self, row, col, item):
         super().setItem(row, col, item)
         self._current_data[(row, col)] = item.text()
-        
+
     def setRowCount(self, rows):
         if rows == 0:
             self._undo_stack.clear()
@@ -190,172 +174,99 @@ class MultiSelectTableWidget(QTableWidget):
     def _on_cell_changed(self, row, col):
         if self._is_editing_undo:
             return
-        
         item = self.item(row, col)
         if not item:
             return
-        new_text = item.text()
-        old_text = self._current_data.get((row, col), "")
-        
+        new_text, old_text = item.text(), self._current_data.get((row, col), "")
         if new_text != old_text:
-            cmd = TableEditCommand(self, [(row, col, old_text, new_text)], "Edit Cell")
             self._is_editing_undo = True
-            self._undo_stack.push(cmd)  # automatically calls redo(), but first_run skips logic
+            self._undo_stack.push(TableEditCommand(self, [(row, col, old_text, new_text)], "Edit Cell"))
             self._is_editing_undo = False
             self._current_data[(row, col)] = new_text
 
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.StandardKey.Copy):
             self._copy_selection()
-            return
-        if event.matches(QKeySequence.StandardKey.Paste):
+        elif event.matches(QKeySequence.StandardKey.Paste):
             self._paste_selection()
-            return
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._delete_selection()
-            return
-        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
+        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
             if self._undo_stack.canUndo():
                 self._undo_stack.undo()
-            return
-        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y:
+        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y:
             if self._undo_stack.canRedo():
                 self._undo_stack.redo()
-            return
-        super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
+
+    def _apply_and_push(self, changes, desc):
+        self.blockSignals(True)
+        for r, c, _, new in changes:
+            self.item(r, c).setText(new)
+            self._current_data[(r, c)] = new
+        self.blockSignals(False)
+        self._is_editing_undo = True
+        self._undo_stack.push(TableEditCommand(self, changes, desc))
+        self._is_editing_undo = False
+        for r, c, *_ in changes:
+            self.cellChanged.emit(r, c)
 
     def _copy_selection(self):
         selected = self.selectedRanges()
         if not selected:
             return
-        rows = set()
-        cols = set()
-        for r in selected:
-            for row in range(r.topRow(), r.bottomRow() + 1):
-                rows.add(row)
-            for col in range(r.leftColumn(), r.rightColumn() + 1):
-                cols.add(col)
-        rows = sorted(rows)
-        cols = sorted(cols)
-        lines = []
-        for row in rows:
-            cells = []
-            for col in cols:
-                item = self.item(row, col)
-                cells.append(item.text() if item else "")
-            lines.append("\t".join(cells))
+        rows = sorted({r for rng in selected for r in range(rng.topRow(), rng.bottomRow() + 1)})
+        cols = sorted({c for rng in selected for c in range(rng.leftColumn(), rng.rightColumn() + 1)})
+        lines = ["\t".join(getattr(self.item(r, c), "text", lambda: "")() for c in cols) for r in rows]
         QApplication.clipboard().setText("\n".join(lines))
 
     def _paste_selection(self):
         text = QApplication.clipboard().text()
-        if not text:
-            return
-        rows_data = text.split("\n")
         current = self.currentItem()
-        if not current:
+        if not text or not current:
             return
-        start_row = current.row()
-        start_col = current.column()
-        
+        start_r, start_c = current.row(), current.column()
         changes = []
-        for r_offset, row_text in enumerate(rows_data):
-            cells = row_text.split("\t")
-            for c_offset, cell_text in enumerate(cells):
-                target_row = start_row + r_offset
-                target_col = start_col + c_offset
-                if target_row < self.rowCount() and target_col < self.columnCount():
-                    item = self.item(target_row, target_col)
-                    if item and (item.flags() & Qt.ItemFlag.ItemIsEditable):
-                        old_text = item.text()
-                        if old_text != cell_text:
-                            changes.append((target_row, target_col, old_text, cell_text))
-                            
+        for r_off, row_text in enumerate(text.split("\n")):
+            for c_off, cell_text in enumerate(row_text.split("\t")):
+                r, c = start_r + r_off, start_c + c_off
+                if r < self.rowCount() and c < self.columnCount():
+                    item = self.item(r, c)
+                    if item and (item.flags() & Qt.ItemFlag.ItemIsEditable) and item.text() != cell_text:
+                        changes.append((r, c, item.text(), cell_text))
         if changes:
-            self.blockSignals(True)
-            for r, c, old, new in changes:
-                self.item(r, c).setText(new)
-                self._current_data[(r, c)] = new
-            self.blockSignals(False)
-            
-            cmd = TableEditCommand(self, changes, "Paste")
-            self._is_editing_undo = True
-            self._undo_stack.push(cmd)
-            self._is_editing_undo = False
-            # Emit for every changed cell (not just the last one) so any
-            # listener that syncs the underlying data model — e.g. the
-            # protocol table's row_dict sync — picks up ALL pasted cells,
-            # not only the final one in the batch.
-            for r, c, _old, _new in changes:
-                self.cellChanged.emit(r, c)
+            self._apply_and_push(changes, "Paste")
 
     def _delete_selection(self):
-        changes = []
-        for item in self.selectedItems():
-            if item.flags() & Qt.ItemFlag.ItemIsEditable:
-                old = item.text()
-                if old != "":
-                    changes.append((item.row(), item.column(), old, ""))
-        
+        changes = [
+            (it.row(), it.column(), it.text(), "")
+            for it in self.selectedItems()
+            if (it.flags() & Qt.ItemFlag.ItemIsEditable) and it.text()
+        ]
         if changes:
-            self.blockSignals(True)
-            for r, c, old, new in changes:
-                self.item(r, c).setText(new)
-                self._current_data[(r, c)] = new
-            self.blockSignals(False)
-            
-            cmd = TableEditCommand(self, changes, "Delete")
-            self._is_editing_undo = True
-            self._undo_stack.push(cmd)
-            self._is_editing_undo = False
-            # Emit for every deleted cell (not just the last one) so any
-            # listener that syncs the underlying data model — e.g. the
-            # protocol table's row_dict sync — picks up ALL deleted cells,
-            # not only the final one in the multi-selection.
-            for r, c, _old, _new in changes:
-                self.cellChanged.emit(r, c)
+            self._apply_and_push(changes, "Delete")
 
 
 def _extract_calibration_r2(calibration_entry: Any) -> Optional[float]:
-    if calibration_entry is None:
+    if not calibration_entry:
         return None
-    if isinstance(calibration_entry, dict):
-        value = calibration_entry.get("r2", calibration_entry.get("r_squared"))
-    else:
-        value = getattr(calibration_entry, "r2", getattr(calibration_entry, "r_squared", None))
+    val = calibration_entry.get("r2", calibration_entry.get("r_squared")) if isinstance(calibration_entry, dict) else getattr(calibration_entry, "r2", getattr(calibration_entry, "r_squared", None))
     try:
-        return float(value) if value is not None else None
+        return float(val) if val is not None else None
     except (TypeError, ValueError):
         return None
 
 
-def _resolve_baseline_coord(
-    baselines: Any,
-    orientation: str,
-) -> Optional[float]:
-    if not isinstance(baselines, list):
+def _resolve_baseline_coord(baselines: Any, orientation: str) -> Optional[float]:
+    if not isinstance(baselines, list) or not baselines:
         return None
-
     axis_id = "y" if str(orientation).lower() == "vertical" else "x"
-
-    selected = None
-    for baseline in baselines:
-        if not isinstance(baseline, dict):
-            continue
-        if baseline.get("axis_id") == axis_id:
-            selected = baseline
-            break
-
-    if selected is None and baselines:
-        first = baselines[0]
-        if isinstance(first, dict):
-            selected = first
-
-    if not selected:
-        return None
-
-    value = selected.get("value")
+    entry = next((b for b in baselines if isinstance(b, dict) and b.get("axis_id") == axis_id), None)
+    if entry is None and isinstance(baselines[0], dict):
+        entry = baselines[0]
     try:
-        return float(value) if value is not None else None
+        return float(entry.get("value")) if entry and "value" in entry else None
     except (TypeError, ValueError):
         return None
 
@@ -470,34 +381,20 @@ def partition_assets_by_confidence(
     """Partition assets into (normal_indices, low_conf_indices) for exclusive sidebar display."""
     from services.confidence_extractor import extract_confidence_from_analysis_json
 
-    normal_indices: List[int] = []
-    low_conf_indices: List[int] = []
-
-    for i, asset in enumerate(assets):
-        file_path = str(getattr(asset, 'image_path', asset))
-        is_low = False
-        has_confidence = False
-
-        # 1. Real post-analysis confidence from benchmark_cache JSON
-        json_path = benchmark_cache.get(file_path)
+    def _is_low(asset: Any) -> bool:
+        path = str(getattr(asset, 'image_path', asset))
+        json_path = benchmark_cache.get(path)
         if json_path:
-            conf_info = extract_confidence_from_analysis_json(json_path)
-            if conf_info is not None:
-                has_confidence = True
-                is_low = bool(conf_info.get("is_low_confidence", False))
+            info = extract_confidence_from_analysis_json(json_path)
+            if info is not None:
+                return bool(info.get("is_low_confidence", False))
+        info = getattr(asset, 'confidence_info', None)
+        return bool(info.get("is_low_confidence", False)) if isinstance(info, dict) else False
 
-        # 2. Preliminary confidence_info attached to asset
-        if not has_confidence and hasattr(asset, 'confidence_info') and asset.confidence_info:
-            conf_dict = asset.confidence_info
-            has_confidence = True
-            is_low = bool(conf_dict.get("is_low_confidence", False))
-
-        if is_low:
-            low_conf_indices.append(i)
-        else:
-            normal_indices.append(i)
-
-    return normal_indices, low_conf_indices
+    low = [i for i, a in enumerate(assets) if _is_low(a)]
+    low_set = set(low)
+    normal = [i for i in range(len(assets)) if i not in low_set]
+    return normal, low
 
 
 class ResolveWorker(QThread):
@@ -544,10 +441,10 @@ class ResolveWorker(QThread):
 
 class OCRLoaderThread(QThread):
     """
-    Background thread for loading the EasyOCR model to prevent UI freezing.
+    Background worker for verifying OCR readiness (PaddleOCR ONNX).
     """
-    ocr_ready = pyqtSignal(object)  # Emits the initialized reader
-    error_occurred = pyqtSignal(str) # Emits error message
+    ocr_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -556,29 +453,8 @@ class OCRLoaderThread(QThread):
 
     def run(self):
         try:
-            import easyocr
-            languages = self.settings.get('ocr_settings', {}).get('languages', ['en', 'pt', 'ar'])
-            use_gpu = self.settings.get('ocr_settings', {}).get('easyocr_gpu', True)
-            download_enabled = self.settings.get('ocr_settings', {}).get(
-                'easyocr_download_enabled',
-                sys.platform != "darwin",
-            )
-
-            # Optional override for troubleshooting in controlled environments.
-            env_download = os.environ.get("EASYOCR_DOWNLOAD_ENABLED")
-            if env_download is not None:
-                download_enabled = env_download.strip().lower() in {"1", "true", "yes", "on"}
-            
-            # This is the heavy blocking call
-            reader = easyocr.Reader(
-                languages,
-                gpu=use_gpu,
-                download_enabled=download_enabled,
-            )
-            
             if not self._cancel_event.is_set():
-                self.ocr_ready.emit(reader)
-                
+                self.ocr_ready.emit(None)
         except Exception as e:
             if not self._cancel_event.is_set():
                 self.error_occurred.emit(str(e))
@@ -629,9 +505,7 @@ class ModernAnalysisThread(QThread):
             # Ensure models are loaded
             self.context.model_manager.load_models(self.models_dir)
 
-            # Note: EasyOCR reader is set globally by OCRLoaderThread now.
-            # We assume it's available in the AnalysisManager since "Run" button
-            # is only enabled when OCR is ready.
+            # OCR engine (PaddleOCR ONNX) is handled directly by AnalysisManager.
 
             analysis_manager.set_advanced_settings(self.advanced_settings)
 
@@ -680,8 +554,8 @@ class BatchAnalysisThread(QThread):
         input_path,
         output_path,
         models_dir,
-        easyocr_reader,
-        conf,
+        easyocr_reader=None,
+        conf=0.6,
         advanced_settings=None,
         context: Optional["ApplicationContext"] = None,
         output_stems=None,
@@ -726,76 +600,12 @@ class BatchAnalysisThread(QThread):
             self.status_updated.emit(f"Batch error: {str(e)}")
 
 
-class ImageScrollArea(QScrollArea):
-    def __init__(self, parent_app):
-        super().__init__()
-        self.parent_app = parent_app
-        self.setWidgetResizable(False)
-        self.setMinimumSize(500, 200)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._drag_active = False
-        self._drag_origin = None
-
-    def wheelEvent(self, event):
-        if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
-            if event.angleDelta().y() > 0:
-                self.parent_app.zoom_in()
-            else:
-                self.parent_app.zoom_out()
-            event.accept()
-        else:
-            super().wheelEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.widget() is not None:
-            needs_pan = (
-                self.widget().width() > self.viewport().width()
-                or self.widget().height() > self.viewport().height()
-            )
-            if needs_pan:
-                self._drag_active = True
-                self._drag_origin = event.position().toPoint()
-                self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._drag_active and self._drag_origin is not None:
-            current_pos = event.position().toPoint()
-            delta = current_pos - self._drag_origin
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
-            self._drag_origin = current_pos
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._drag_active:
-            self._drag_active = False
-            self._drag_origin = None
-            self.viewport().unsetCursor()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-
 class ModernChartAnalysisApp(QMainWindow):
     def __init__(self, context: Optional[ApplicationContext] = None):
         super().__init__()
         self.context = context or ApplicationContext.get_instance()
         self._is_macos = sys.platform == "darwin"
-
-        # Add explicit cleanup registry
-        self._resource_registry = []
-        self._cleanup_scheduled = False
         self._orphaned_threads = []
-        
-        # Add performance monitor
-        self.perf_monitor = PerformanceMonitor()
         
         self.extraction_thread = None
         self.base_path = Path(__file__).parent.resolve()
@@ -815,12 +625,8 @@ class ModernChartAnalysisApp(QMainWindow):
         self.advanced_settings_file = self._state_root / "config" / "advanced_settings.json"
         self.easyocr_reader = None  # Initialize as None, will be set during processing
 
-
-
-        # NEW: Unified thread safety from context (replaces 5 old locks)
+        # Thread safety and StateManager from context
         self.thread_safety = self.context.thread_safety
-        
-        # NEW: State manager for immutable state with undo/redo
         self.state_manager = self.context.state_manager
         self.state_manager.state_changed.connect(self._on_state_changed)
 
@@ -828,13 +634,12 @@ class ModernChartAnalysisApp(QMainWindow):
         self.setStyleSheet(stylesheet)
 
         self.setWindowTitle("Plot-in")
-        # Use sizeHint to allow proper DPI scaling
         screen = QGuiApplication.primaryScreen()
         screen_size = screen.size()
         window_width = min(1400, int(screen_size.width() * 0.8))
         window_height = min(900, int(screen_size.height() * 0.8))
         self.resize(window_width, window_height)
-        self.setMinimumSize(1000, 600)  # Reduced minimum size for smaller screens
+        self.setMinimumSize(1000, 600)
 
         self.image_files = []
         self._resolved_assets = []
@@ -847,21 +652,18 @@ class ModernChartAnalysisApp(QMainWindow):
         self.analysis_results_widgets = {}
         self.data_tab_bindings: Dict[Tuple[int, int], Dict[str, Any]] = {}
         self.data_row_overlay_map: Dict[int, Dict[str, Any]] = {}
+        self.protocol_row_overlay_map: Dict[int, Dict[str, Any]] = {}
         self.data_tab_page_state: Dict[str, int] = {}
         self.data_tab_sort_state: Dict[str, Tuple[int, Qt.SortOrder]] = {}
         self.visibility_checks = {}
         self.zoom_level = 1.0
         self.highlighted_bbox = None
 
-        # ── New canvas (Phase 1) ──
-        import os
-        self._use_legacy_canvas: bool = bool(os.environ.get('PLOTIN_LEGACY_CANVAS'))
-        self._det_scene: Optional[Any] = None          # DetectionScene instance (new canvas)
-        self._det_canvas_view: Optional[Any] = None     # DetectionCanvasView instance (new canvas)
-
-        # ── Editor state (Phase 2) ──
-        self._editor_state: Optional[Any] = None       # EditorStateManager
-        self._editor_toolbar: Optional[Any] = None     # EditorToolbar widget
+        # ── Canvas and Editor ──
+        self._det_scene: Optional[Any] = None
+        self._det_canvas_view: Optional[Any] = None
+        self._editor_state: Optional[Any] = None
+        self._editor_toolbar: Optional[Any] = None
         self.hover_widgets: Dict[str, Any] = {}
         self.base_image_with_detections: Optional[Any] = None
         self.analysis_thread: Optional[Any] = None
@@ -871,24 +673,15 @@ class ModernChartAnalysisApp(QMainWindow):
         self.ocr_section_widgets = {}
         self.view_checkboxes_pool = {}
 
-        # NEW: Async OCR Loader
         self.ocr_loader_thread = None
         self.ocr_ready = False
 
-        # NEW: Smart pixmap cache with memory bounds (replaces unbounded OrderedDict)
-        from core.pixmap_cache import SmartPixmapCache
-        self.pixmap_cache = SmartPixmapCache(
-            max_memory_mb=150,
-            thread_safety_manager=self.thread_safety
-        )
         runtime_state = getattr(self.state_manager, "_runtime_state", None)
         if runtime_state is None:
             runtime_state = {}
             self.state_manager._runtime_state = runtime_state
         self.highlight_cache = runtime_state.setdefault("highlight_cache", {})
         self.current_pixmap = None
-        # Benchmark result cache: image_path_str → json_path_str
-        # Pre-warmed at file-list build time; updated after Save and batch complete.
         self._benchmark_result_cache: Dict[str, str] = {}
         self._file_list_buttons: List[QPushButton] = []
         
@@ -931,7 +724,7 @@ class ModernChartAnalysisApp(QMainWindow):
         self._sidebar_saved_width = 280
 
         self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self._delayed_update_image)
+        self.update_timer.timeout.connect(self.update_displayed_image)
         self.update_timer.setSingleShot(True)
 
         self.file_list_frame = None
@@ -946,7 +739,7 @@ class ModernChartAnalysisApp(QMainWindow):
         self.load_config()
         self.load_advanced_settings()
 
-        # Configure OCR readiness without forcing heavy EasyOCR preload at startup.
+        # Configure OCR readiness state (PaddleOCR ONNX).
         self._configure_ocr_startup_state(self.advanced_settings)
         # self.load_heavy_models()
 
@@ -1172,16 +965,8 @@ class ModernChartAnalysisApp(QMainWindow):
     def load_advanced_settings(self):
         loaded_settings = load_settings_from_file(self.advanced_settings_file)
         if loaded_settings:
-            # Compatibility migration: EasyOCR GPU is unstable on many macOS setups.
-            if sys.platform == "darwin":
-                ocr_settings = loaded_settings.setdefault("ocr_settings", {})
-                if ocr_settings.get("easyocr_gpu", False):
-                    ocr_settings["easyocr_gpu"] = False
-                    perf_settings = loaded_settings.setdefault("performance", {})
-                    perf_settings["use_gpu"] = False
-                # Prevent hour-long first-run stalls when EasyOCR weights must be downloaded.
-                # Users can override with EASYOCR_DOWNLOAD_ENABLED=1.
-                ocr_settings.setdefault("easyocr_download_enabled", False)
+            if loaded_settings.get("ocr_engine") not in ("Paddle", "Paddle_docs"):
+                loaded_settings["ocr_engine"] = "Paddle"
             profile_settings = {}
             if isinstance(self.install_profile, dict):
                 profile_settings = self.install_profile.get("advanced_settings", {})
@@ -1228,20 +1013,12 @@ class ModernChartAnalysisApp(QMainWindow):
             self.apply_advanced_settings()
     
     def on_settings_changed(self, new_settings):
-        # Check if OCR settings that require re-initialization have changed
         default_ocr = 'Paddle'
         old_ocr_engine = self.advanced_settings.get('ocr_engine', default_ocr) if self.advanced_settings else default_ocr
         new_ocr_engine = new_settings.get('ocr_engine', default_ocr)
-        old_ocr_settings = self.advanced_settings.get('ocr_settings', {}) if self.advanced_settings else {}
-        new_ocr_settings = new_settings.get('ocr_settings', {})
         
-        if old_ocr_engine != new_ocr_engine or \
-           old_ocr_settings.get('easyocr_gpu') != new_ocr_settings.get('easyocr_gpu') or \
-           old_ocr_settings.get('languages') != new_ocr_settings.get('languages'):
-            if new_ocr_engine == 'EasyOCR':
-                self._start_ocr_loading(new_settings)
-            else:
-                self._configure_ocr_startup_state(new_settings)
+        if old_ocr_engine != new_ocr_engine:
+            self._configure_ocr_startup_state(new_settings)
 
         self.advanced_settings = new_settings
         self.update_settings_tooltip()
@@ -1249,93 +1026,36 @@ class ModernChartAnalysisApp(QMainWindow):
         self.update_status("Settings updated. Some changes may require reprocessing an image.")
 
     def _configure_ocr_startup_state(self, settings):
-        """Set OCR readiness state without forcing EasyOCR model preload."""
-        default_ocr = 'Paddle'
-        ocr_engine_name = (settings or {}).get('ocr_engine', default_ocr)
-        if ocr_engine_name != 'EasyOCR':
-            self.ocr_ready = True
-            self.run_batch_btn.setEnabled(True)
-            self.update_status("✅ OCR engine configured (Paddle mode).")
-            return
-
-        if not analysis.EASYOCR_AVAILABLE:
-            self.ocr_ready = False
-            self.run_batch_btn.setEnabled(True)
-            self.update_status("⚠️ EasyOCR not available.")
-            return
-
-        # Lazy-load EasyOCR only when user runs analysis.
-        self.ocr_ready = False
+        """Set OCR readiness state for PaddleOCR."""
+        self.ocr_ready = True
         self.run_batch_btn.setEnabled(True)
-        self.update_status("ℹ️ EasyOCR selected. Model will load on first analysis run.")
+        self.update_status("✅ OCR engine configured (Paddle mode).")
 
     def _start_ocr_loading(self, settings):
-        """Start async loading of OCR engine."""
-        if self.ocr_loader_thread and self.ocr_loader_thread.isRunning():
-            # If already loading, keep current worker to avoid multiple heavy downloads.
-            return
-
-        default_ocr = 'Paddle'
-        ocr_engine_name = (settings or {}).get('ocr_engine', default_ocr)
-        needs_easyocr = ocr_engine_name == 'EasyOCR'
-
-        if not needs_easyocr:
-            # Paddle pipeline does not require preloading EasyOCR.
-            self.ocr_ready = True
-            self.run_batch_btn.setEnabled(True)
-            self.update_status("✅ OCR engine configured (Paddle mode).")
-            return
-
-        if not analysis.EASYOCR_AVAILABLE:
-            self.ocr_ready = False
-            self.run_batch_btn.setEnabled(True)
-            self.update_status("⚠️ EasyOCR not available.")
-            return
-
-        self.ocr_ready = False
-        self.run_batch_btn.setEnabled(False) # Disable run buttons
-        self.update_status("Loading OCR engine...")
-        
-        self.ocr_loader_thread = OCRLoaderThread(settings, self)
-        self.ocr_loader_thread.ocr_ready.connect(self._on_ocr_loaded)
-        self.ocr_loader_thread.error_occurred.connect(self._on_ocr_load_error)
-        self.ocr_loader_thread.start()
+        """Configure OCR engine state (PaddleOCR ONNX)."""
+        self.ocr_ready = True
+        self.run_batch_btn.setEnabled(True)
+        self.update_status("✅ OCR engine configured (Paddle mode).")
 
     def _on_ocr_loaded(self, reader):
         """Handle successful OCR load."""
-        self.easyocr_reader = reader
-        
-        # Update context
-        self.context.analysis_manager.set_easyocr_reader(reader)
-        
         self.ocr_ready = True
         self.run_batch_btn.setEnabled(True)
         self.update_status("OCR engine loaded.")
-        
-        # Explicit clean old resources if needed
-        gc.collect()
 
         if getattr(self, '_auto_run_after_ocr', False):
             self._auto_run_after_ocr = False
             if getattr(self, '_auto_run_is_re_extract', False):
                 self._auto_run_is_re_extract = False
-                # Re-invoke apply to use manual detections from the editor.
                 self._on_editor_apply()
             elif self.current_image_index >= 0:
                 self.load_image_for_assisted_analysis()
 
     def _on_ocr_load_error(self, message: str):
-        """Handle OCR preload errors without leaving the GUI stuck."""
+        """Handle OCR preload errors."""
         self.ocr_ready = False
         self.run_batch_btn.setEnabled(True)
-        lower_message = str(message).lower()
-        if "download_enabled" in lower_message or "missing" in lower_message:
-            self.update_status(
-                "OCR load error: EasyOCR model weights not available locally. "
-                "Switch to Paddle for immediate runs."
-            )
-        else:
-            self.update_status(f"OCR load error: {message}")
+        self.update_status(f"OCR load error: {message}")
         logging.error("OCR preload failed: %s", message)
 
     def apply_advanced_settings(self):
@@ -1356,9 +1076,9 @@ class ModernChartAnalysisApp(QMainWindow):
         if button is None or not self.advanced_settings:
             return
 
-        default_ocr = 'Paddle' if sys.platform == 'darwin' else 'EasyOCR'
+        default_ocr = 'Paddle'
         ocr_engine = self.advanced_settings.get('ocr_engine', default_ocr)
-        gpu_enabled = self.advanced_settings.get('ocr_settings', {}).get('easyocr_gpu', True)
+        gpu_enabled = self.advanced_settings.get('ocr_settings', {}).get('use_gpu', False)
         doclayout_enabled = self.advanced_settings.get('use_doclayout_text', True)
 
         thresholds = self.advanced_settings.get('detection_thresholds', {})
@@ -1381,8 +1101,7 @@ Click to configure advanced options."""
         if not hasattr(self, 'settings_indicator') or self.settings_indicator is None:
             return
         
-        dialog = SettingsDialog()
-        default_settings = dialog.get_settings()
+        default_settings = SettingsDialog.get_default_settings()
         
         if self.advanced_settings and self.advanced_settings != default_settings:
             self.settings_indicator.setText("●")
@@ -1568,56 +1287,27 @@ Click to configure advanced options."""
         self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         right_layout.addWidget(self.vertical_splitter)
 
-        if self._use_legacy_canvas:
-            # ── Legacy canvas (QLabel + QPixmap inside QScrollArea) ──
-            self.display_frame = ImageScrollArea(self)
-            self.image_label = QLabel("Select an input folder to begin analysis")
-            self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.image_label.setSizePolicy(
-                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-            )
-            self.image_label.setScaledContents(False)
-            self.image_label.setMinimumSize(200, 200)
-            self.image_label.setMaximumSize(16777215, 16777215)
-            image_label_style = (
-                "QLabel {"
-                "    font-size: 12px; color: #888888;"
-                "    background-color: #3a3a3a;"
-                "    border: 2px dashed #555555;"
-                "    border-radius: 6px; padding: 15px;"
-                "}"
-            )
-            self.image_label.setStyleSheet(image_label_style)
-            self.display_frame.setWidget(self.image_label)
-            self.vertical_splitter.addWidget(self.display_frame)
-        else:
-            # ── New canvas (QGraphicsView + DetectionScene) ──
-            from visual.detection_scene import DetectionScene, DetectionCanvasView
-            self._det_scene = DetectionScene()
-            self._det_canvas_view = DetectionCanvasView(self._det_scene, self)
-            self._det_canvas_view.setMinimumSize(200, 200)
-            # Wire click-to-highlight from scene to table sync
-            self._det_canvas_view.bbox_clicked.connect(self._on_scene_bbox_clicked)
-            # Wire editor signals
-            self._det_scene.item_edited.connect(self._on_scene_item_edited)
-            self._det_scene.item_deleted.connect(self._on_scene_item_deleted)
-            self._det_scene.item_class_changed.connect(self._on_scene_item_class_changed)
-            self._det_scene.item_created.connect(self._on_scene_item_created)
-            # Phase 5: keypoint edit signals for undo/redo
-            self._det_scene.keypoint_moved.connect(self._on_scene_keypoint_moved)
-            self._det_scene.keypoint_created.connect(self._on_scene_keypoint_created)
-            self._det_scene.keypoint_deleted.connect(self._on_scene_keypoint_deleted)
-            self._det_scene.slice_created.connect(self._on_scene_slice_created)
-            # Phase 7: sync class dropdown with selected box in Edit mode
-            self._det_scene.box_selected.connect(self._on_scene_box_selected)
-            # Status messages from canvas
-            self._det_canvas_view.status_message.connect(self._on_canvas_status_message)
-            self._det_canvas_view.mode_exit_requested.connect(self._on_canvas_mode_exit)
-            
-            # Legacy references (set to None — guarded by _use_legacy_canvas)
-            self.display_frame = self._det_canvas_view  # for layout compatibility
-            self.image_label = None
-            self.vertical_splitter.addWidget(self._det_canvas_view)
+        # ── Canvas (QGraphicsView + DetectionScene) ──
+        from visual.detection_scene import DetectionScene, DetectionCanvasView
+        self._det_scene = DetectionScene()
+        self._det_canvas_view = DetectionCanvasView(self._det_scene, self)
+        self._det_canvas_view.setMinimumSize(200, 200)
+        self._det_canvas_view.bbox_clicked.connect(self._on_scene_bbox_clicked)
+        self._det_scene.item_edited.connect(self._on_scene_item_edited)
+        self._det_scene.item_deleted.connect(self._on_scene_item_deleted)
+        self._det_scene.item_class_changed.connect(self._on_scene_item_class_changed)
+        self._det_scene.item_created.connect(self._on_scene_item_created)
+        self._det_scene.keypoint_moved.connect(self._on_scene_keypoint_moved)
+        self._det_scene.keypoint_created.connect(self._on_scene_keypoint_created)
+        self._det_scene.keypoint_deleted.connect(self._on_scene_keypoint_deleted)
+        self._det_scene.slice_created.connect(self._on_scene_slice_created)
+        self._det_scene.box_selected.connect(self._on_scene_box_selected)
+        self._det_canvas_view.status_message.connect(self._on_canvas_status_message)
+        self._det_canvas_view.mode_exit_requested.connect(self._on_canvas_mode_exit)
+        
+        self.display_frame = self._det_canvas_view
+        self.image_label = None
+        self.vertical_splitter.addWidget(self._det_canvas_view)
 
         self.bottom_container = QWidget()
         self.bottom_container.setMinimumHeight(200)
@@ -1782,46 +1472,9 @@ Click to configure advanced options."""
         self.bottom_container_layout.addWidget(self.results_tab_widget)
 
         # OCR sections are merged into the Data tab (no separate OCR tab)
-        self._create_bars_tab()
+        self._create_data_tab()
         self._create_view_tab()
         self._create_protocol_tab()
-
-    def _create_ocr_tab(self):
-        ocr_tab = QWidget()
-        ocr_layout = QVBoxLayout(ocr_tab)
-        ocr_layout.setContentsMargins(4, 4, 4, 4)
-
-        ocr_scroll = QScrollArea()
-        ocr_scroll.setWidgetResizable(True)
-        self.ocr_scroll_area = ocr_scroll
-
-        self.ocr_content_widget = QWidget()
-        self.ocr_content_layout = QVBoxLayout(self.ocr_content_widget)
-        self.ocr_content_layout.setSpacing(8)
-        self.ocr_content_layout.setContentsMargins(8, 8, 8, 8)
-        
-        self.ocr_sections = {}
-        section_order = [
-            ("chart_title", "Chart Title"),
-            ("axis_title", "Axis Titles"),
-            ("axis_labels", "Axis Labels"),
-            ("legend", "Legend"),
-            ("data_label", "Data Labels"),
-            ("other", "Other Text"),
-            ("layout_text", "Layout Text (DocLayout)")
-        ]
-        
-        for section_key, section_title in section_order:
-            section_group = self._create_ocr_section(section_title, section_key)
-            self.ocr_sections[section_key] = section_group
-            self.ocr_content_layout.addWidget(section_group)
-            section_group.setVisible(False)
-        
-        self.ocr_content_layout.addStretch()
-        ocr_scroll.setWidget(self.ocr_content_widget)
-        ocr_layout.addWidget(ocr_scroll)
-        
-        self.results_tab_widget.addTab(ocr_tab, "OCR")
 
     def _create_ocr_section(self, title, section_key):
         group = QGroupBox(title)
@@ -1836,10 +1489,6 @@ Click to configure advanced options."""
         }
         
         return group
-
-    def _create_bars_tab(self):
-        # Compatibility wrapper for legacy call sites.
-        self._create_data_tab()
 
     def _create_data_tab(self):
         data_tab = QWidget()
@@ -1964,26 +1613,25 @@ Click to configure advanced options."""
         view_layout = QVBoxLayout(view_tab)
         view_layout.setContentsMargins(4, 4, 4, 4)
 
-        # ── Editor toolbar (Phase 2) — only for new canvas ──
-        if not self._use_legacy_canvas:
-            from visual.editor_toolbar import EditorToolbar
-            from visual.detection_editor_state import EditorStateManager
+        # ── Editor toolbar (Phase 2) ──
+        from visual.editor_toolbar import EditorToolbar
+        from visual.detection_editor_state import EditorStateManager
 
-            self._editor_state = EditorStateManager(self)
-            self._editor_toolbar = EditorToolbar(self, scale_fn=self._scaled_ui_px)
-            view_layout.addWidget(self._editor_toolbar)
+        self._editor_state = EditorStateManager(self)
+        self._editor_toolbar = EditorToolbar(self, scale_fn=self._scaled_ui_px)
+        view_layout.addWidget(self._editor_toolbar)
 
-            # Connect toolbar → canvas mode
-            self._editor_toolbar.mode_changed.connect(self._on_editor_mode_changed)
-            self._editor_toolbar.undo_requested.connect(self._on_editor_undo)
-            self._editor_toolbar.redo_requested.connect(self._on_editor_redo)
-            self._editor_toolbar.apply_requested.connect(self._on_editor_apply)
-            self._editor_toolbar.reset_requested.connect(self._on_editor_reset)
-            self._editor_toolbar.create_class_changed.connect(self._on_editor_class_dropdown_changed)
-            self._editor_toolbar.chart_type_changed.connect(self._on_toolbar_chart_type_changed)
+        # Connect toolbar → canvas mode
+        self._editor_toolbar.mode_changed.connect(self._on_editor_mode_changed)
+        self._editor_toolbar.undo_requested.connect(self._on_editor_undo)
+        self._editor_toolbar.redo_requested.connect(self._on_editor_redo)
+        self._editor_toolbar.apply_requested.connect(self._on_editor_apply)
+        self._editor_toolbar.reset_requested.connect(self._on_editor_reset)
+        self._editor_toolbar.create_class_changed.connect(self._on_editor_class_dropdown_changed)
+        self._editor_toolbar.chart_type_changed.connect(self._on_toolbar_chart_type_changed)
 
-            # Connect editor state → toolbar status
-            self._editor_state.edit_count_changed.connect(self._on_editor_count_changed)
+        # Connect editor state → toolbar status
+        self._editor_state.edit_count_changed.connect(self._on_editor_count_changed)
 
         view_scroll = QScrollArea()
         view_scroll.setWidgetResizable(True)
@@ -2038,6 +1686,9 @@ Click to configure advanced options."""
         self.protocol_table.setColumnCount(len(PROTOCOL_COLUMNS))
         self.protocol_table.setHorizontalHeaderLabels(PROTOCOL_COLUMNS)
         self.protocol_table.setAlternatingRowColors(False)
+        self.protocol_table.setMouseTracking(True)
+        self.protocol_table.cellEntered.connect(self._on_protocol_table_cell_entered)
+        self.protocol_table.viewport().installEventFilter(self)
         self.protocol_table.horizontalHeader().setStretchLastSection(True)
         self.protocol_table.cellChanged.connect(self._on_protocol_cell_changed)
         proto_layout.addWidget(self.protocol_table)
@@ -2052,77 +1703,17 @@ Click to configure advanced options."""
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
 
-    def _register_resource(self, resource, cleanup_fn):
-        """Track resources for guaranteed cleanup"""
-        self._resource_registry.append((resource, cleanup_fn))
-        
-    @contextmanager
-    def safe_model_access(self):
-        """Context manager for model access (NEW: uses ThreadSafetyManager)"""
-        with self.thread_safety.model_access():
-            yield self.context.model_manager
-            
-    def update_image_safe(self, pixmap):
-        """Thread-safe image updates (NEW: uses ThreadSafetyManager)"""
-        with self.thread_safety.ui_update():
-            self.current_pixmap = pixmap
-            # Schedule UI update on main thread
-            QTimer.singleShot(0, lambda: self._apply_pixmap_to_ui(pixmap))
-            
     def _apply_pixmap_to_ui(self, pixmap):
-        """Must run on main thread"""
-        if self._use_legacy_canvas:
-            if self.image_label and pixmap is not None:
-                self._set_image_pixmap(pixmap)
-        else:
-            # New canvas: load the pixmap into the scene
-            if self._det_scene and pixmap is not None:
-                self._det_scene.load_image(pixmap)
+        if self._det_scene and pixmap is not None:
+            self._det_scene.load_image(pixmap)
 
     def _set_image_placeholder(self, message: str):
-        if not self._use_legacy_canvas:
-            # New canvas: just clear the scene (placeholder text not needed)
-            if self._det_scene:
-                self._det_scene.clear()
-            return
-        if not self.image_label:
-            return
-        self.image_label.clear()
-        self.image_label.setPixmap(QPixmap())
-        self.image_label.setText(message)
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMinimumSize(200, 200)
-        self.image_label.setMaximumSize(16777215, 16777215)
-        self.image_label.resize(200, 200)
-        placeholder_style = (
-            "QLabel {"
-            "    font-size: 12px;"
-            "    color: #888888;"
-            "    background-color: #3a3a3a;"
-            "    border: 2px dashed #555555;"
-            "    border-radius: 6px;"
-            "    padding: 15px;"
-            "}"
-        )
-        self.image_label.setStyleSheet(placeholder_style)
+        if self._det_scene:
+            self._det_scene.clear()
 
     def _set_image_pixmap(self, pixmap: QPixmap):
-        if not self._use_legacy_canvas:
-            if self._det_scene and pixmap is not None:
-                self._det_scene.load_image(pixmap)
-            return
-        if not self.image_label:
-            return
-        self.image_label.setText("")
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setStyleSheet(
-            "QLabel { background-color: #2f2f2f; border: none; padding: 0px; }"
-        )
-        self.image_label.setPixmap(pixmap)
-        self.image_label.resize(pixmap.size())
-        self.image_label.setMinimumSize(pixmap.size())
-        self.image_label.setMaximumSize(pixmap.size())
-        self.image_label.adjustSize()
+        if self._det_scene and pixmap is not None:
+            self._det_scene.load_image(pixmap)
 
     # ── New canvas: scene ↔ table click sync ──
     def _on_scene_bbox_clicked(self, class_name: str, xyxy: list):
@@ -2145,14 +1736,32 @@ Click to configure advanced options."""
                             self.ocr_scroll_area.ensureWidgetVisible(parent_widget)
                         break
 
+        def _is_bbox_match(b1, b2, tol=1.5):
+            if not b1 or not b2 or len(b1) != 4 or len(b2) != 4:
+                return False
+            try:
+                return all(abs(float(x) - float(y)) <= tol for x, y in zip(b1, b2))
+            except (ValueError, TypeError):
+                return False
+
         # 2. Sync with Data table
         if hasattr(self, 'data_row_overlay_map') and hasattr(self, 'data_table'):
             for row, overlay in self.data_row_overlay_map.items():
-                if isinstance(overlay, dict) and tuple(overlay.get("bbox", [])) == tuple(xyxy):
+                if isinstance(overlay, dict) and _is_bbox_match(overlay.get("bbox"), xyxy):
                     self.data_table.selectRow(row)
                     item = self.data_table.item(row, 0)
                     if item:
                         self.data_table.scrollToItem(item)
+                    break
+
+        # 3. Sync with Protocol (Results) table
+        if hasattr(self, 'protocol_row_overlay_map') and hasattr(self, 'protocol_table'):
+            for row, overlay in self.protocol_row_overlay_map.items():
+                if isinstance(overlay, dict) and _is_bbox_match(overlay.get("bbox"), xyxy):
+                    self.protocol_table.selectRow(row)
+                    item = self.protocol_table.item(row, 0)
+                    if item:
+                        self.protocol_table.scrollToItem(item)
                     break
 
     def _get_active_ocr_engine(self):
@@ -2166,23 +1775,17 @@ Click to configure advanced options."""
             ocr_backend = settings.get('ocr_engine', 'Paddle')
             models_dir_path = Path(self.models_dir_edit.text()) if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else Path('src/models')
 
-            if ocr_backend == 'Paddle':
-                engine_mode = 'paddle_onnx'
-                self._active_ocr_engine = OCREngineFactory.create_engine(
-                    engine_mode,
-                    self.easyocr_reader,
-                    det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
-                    rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
-                    dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
-                    cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx')
-                )
-            elif ocr_backend == 'EasyOCR':
-                ocr_accuracy = settings.get('ocr_accuracy', 'Optimized')
-                accuracy_to_mode = {'Fast': 'fast', 'Optimized': 'optimized', 'Precise': 'precise'}
-                engine_mode = accuracy_to_mode.get(ocr_accuracy, 'optimized')
-                self._active_ocr_engine = OCREngineFactory.create_engine(engine_mode, self.easyocr_reader)
-            else:
-                self._active_ocr_engine = OCREngineFactory.create_engine(ocr_backend, self.easyocr_reader)
+            engine_mode = 'paddle_full' if ocr_backend == 'Paddle_docs' else 'paddle_onnx'
+            self._active_ocr_engine = OCREngineFactory.create_engine(
+                engine_mode,
+                det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
+                rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
+                dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
+                cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx'),
+                doc_ori_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_doc_ori.onnx'),
+                unwarp_model_path=str(models_dir_path / 'OCR' / 'UVDoc.onnx'),
+                textline_ori_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx')
+            )
             return self._active_ocr_engine
         except Exception as exc:
             logging.warning("Could not create active OCR engine for re-OCR: %s", exc)
@@ -2455,16 +2058,6 @@ Click to configure advanced options."""
             logging.warning("_on_editor_apply: no scene or analysis result available")
             return
 
-        # Guard: if EasyOCR is selected but not yet loaded, start OCR loading first.
-        ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "Paddle")
-        if ocr_engine == "EasyOCR" and not self.ocr_ready:
-            self._auto_run_after_ocr = True
-            self._auto_run_is_re_extract = True
-            if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
-                self._start_ocr_loading(self.advanced_settings)
-            self.update_status("⏳ Waiting for EasyOCR to finish loading, re-extract will start automatically...")
-            return
-
         # Block re-extract if any pie slices are incomplete
         if hasattr(self._det_scene, "get_incomplete_slices"):
             incomplete = self._det_scene.get_incomplete_slices()
@@ -2562,12 +2155,6 @@ Click to configure advanced options."""
         self.analysis_thread.status_updated.connect(self.update_status)
         self.analysis_thread.progress_updated.connect(self.progress_bar.setValue)
         self.analysis_thread.analysis_complete.connect(self._on_analysis_complete)
-
-        # Ensure EasyOCR reader is available on the analysis manager for re-extract.
-        # The reader may have been loaded before the analysis manager was configured.
-        if self.easyocr_reader and self.context.analysis_manager._easyocr_reader is None:
-            self.context.analysis_manager.set_easyocr_reader(self.easyocr_reader)
-            logging.debug("Propagated EasyOCR reader to analysis manager for re-extract.")
 
         if self._editor_toolbar:
             self._editor_toolbar.setEnabled(False)
@@ -2768,27 +2355,8 @@ Click to configure advanced options."""
         return float(np.clip(fit_zoom, 0.1, 1.0))
     
     def _on_state_changed(self, new_state):
-        """
-        React to state changes (NEW: StateManager callback).
-        
-        Updates UI to reflect new immutable state. This is the single
-        point where state changes trigger UI updates.
-        """
-        from core.app_state import AppState
-        
-        # Sync zoom level from state
         if new_state.canvas.zoom_level != self.zoom_level:
             self.zoom_level = new_state.canvas.zoom_level
-            # Update displayed image will be called by zoom methods
-        
-        # Future: sync other state properties here
-        # - visibility_checks from new_state.visualization
-        # - current_image_path from new_state.current_image_path
-        # - etc.
-
-    def show_performance_report(self):
-        """Show performance report to user"""
-        self.perf_monitor.report()
 
     def cleanup_resources(self):
         if hasattr(self, "highlight_timer"):
@@ -2836,9 +2404,6 @@ Click to configure advanced options."""
             if img:
                 self._close_pil_image_safely(img)
         self.highlight_cache.clear()
-        
-        # Clear pixmap cache
-        self._clear_pixmap_cache()
         
         gc.collect()
 
@@ -3196,17 +2761,12 @@ Click to configure advanced options."""
         self._finish_populate_file_list(assets)
 
     def _generate_unique_stems(self, file_paths: list) -> dict:
-        stem_counts = {}
-        unique_stems = {}
+        counts, stems = defaultdict(int), {}
         for p in file_paths:
-            base_stem = Path(p).stem
-            if base_stem not in stem_counts:
-                stem_counts[base_stem] = 0
-                unique_stems[p] = base_stem
-            else:
-                stem_counts[base_stem] += 1
-                unique_stems[p] = f"{base_stem}_{stem_counts[base_stem]}"
-        return unique_stems
+            s = Path(p).stem
+            stems[p] = f"{s}_{counts[s]}" if counts[s] else s
+            counts[s] += 1
+        return stems
 
     def _finish_populate_file_list(self, assets):
         """Populate the file list UI from resolved assets with exclusive low-confidence partitioning."""
@@ -3226,35 +2786,15 @@ Click to configure advanced options."""
 
         if not self.image_files:
             failures = getattr(self, '_pdf_failures', [])
-            if failures:
-                detail = "\n".join(f"• {p.name}: {reason}" for p, reason in failures)
-            else:
-                detail = "No charts found"
+            detail = "\n".join(f"• {p.name}: {reason}" for p, reason in failures) if failures else "No charts found"
             label = QLabel(detail)
             label.setStyleSheet("QLabel { color: #ff6b6b; }")
             self.file_list_layout.addWidget(label)
             return
 
-        # Pre-warm the benchmark cache by scanning ALL *_analysis.json files in the
-        # output directory and reading their embedded 'original_image_path' field.
+        # Pre-warm the benchmark cache
         self._benchmark_result_cache.clear()
-        output_path = Path(self.output_path_edit.text())
-        if output_path.is_dir():
-            abs_path_to_json: dict = {}
-            for json_file in sorted(output_path.glob("*_analysis.json")):
-                try:
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    orig = data.get('original_image_path')
-                    if orig:
-                        abs_path_to_json[str(Path(orig).resolve())] = str(json_file)
-                except Exception:
-                    pass
-
-            for file_path in self.image_files:
-                abs_path = str(Path(file_path).resolve())
-                if abs_path in abs_path_to_json:
-                    self._benchmark_result_cache[file_path] = abs_path_to_json[abs_path]
+        self._refresh_cache_from_output_dir()
 
         normal_indices, low_conf_indices = partition_assets_by_confidence(
             self._resolved_assets, self._benchmark_result_cache
@@ -3263,49 +2803,62 @@ Click to configure advanced options."""
         self._file_list_buttons = {}
         image_icon_px = self._scaled_icon_px(13)
 
-        # 1. Populate normal file list
-        for i in normal_indices:
+        def _create_file_list_button(i: int, is_low_conf: bool) -> QPushButton:
             file_path = self.image_files[i]
             base_name = os.path.basename(file_path)
-            display_name = base_name if len(base_name) <= 25 else base_name[:22] + "..."
-            btn = QPushButton(display_name)
-
+            asset = self._resolved_assets[i]
             is_cached = file_path in self._benchmark_result_cache
-            icon_name = "check-solid-full.svg" if is_cached else "image-solid-full.svg"
-            icon_color = "#4ec9b0" if is_cached else "#bfbfbf"
+            conf_pct = 0.0
+
+            if is_low_conf:
+                json_path = self._benchmark_result_cache.get(file_path)
+                if json_path:
+                    from services.confidence_extractor import extract_confidence_from_analysis_json
+                    c_info = extract_confidence_from_analysis_json(json_path)
+                    if c_info:
+                        conf_pct = c_info["average"] * 100.0
+                elif getattr(asset, 'confidence_info', None):
+                    conf_pct = asset.confidence_info.get('average', 0.0) * 100.0
+                display_name = f"[{conf_pct:.0f}%] {base_name}" if conf_pct > 0 else base_name
+                icon_name = "warning-solid.svg" if hasattr(self, 'has_icon') and self.has_icon("warning-solid.svg") else "image-solid-full.svg"
+                icon_color = "#e5c07b"
+                border_col, hover_bg, hover_border, text_col, bg_col = "#5a4520", "#2b2314", "#e5c07b", "#e5c07b", "#1e1910"
+            else:
+                display_name = base_name
+                icon_name = "check-solid-full.svg" if is_cached else "image-solid-full.svg"
+                icon_color = "#4ec9b0" if is_cached else "#bfbfbf"
+                border_col, hover_bg, hover_border, text_col, bg_col = "#454545", "#2f2f2f", "#007acc", "#d4d4d4", "transparent"
+
+            if len(display_name) > 25:
+                display_name = display_name[:22] + "..."
+
+            btn = QPushButton(display_name)
             btn.setIcon(self.get_icon(icon_name, color=icon_color, size=image_icon_px))
             btn.setIconSize(QSize(image_icon_px, image_icon_px))
             btn.setFlat(True)
 
-            asset = self._resolved_assets[i]
             base_tooltip = f"[PDF p.{asset.page_index}] {base_name}" if asset.source_document else base_name
+            if is_low_conf and conf_pct > 0:
+                base_tooltip += f"\nConfidence: {conf_pct:.1f}%"
             btn.setToolTip(base_tooltip + (" ✓ Results cached" if is_cached else ""))
 
-            btn_style = (
-                "QPushButton {"
-                "    text-align: left;"
-                "    padding: 4px 8px;"
-                "    border: 1px solid #454545;"
-                "    border-radius: 3px;"
-                "    margin: 1px;"
-                "    font-size: 9px;"
-                "    color: #d4d4d4;"
-                "}"
-                "QPushButton:hover {"
-                "    background-color: #2f2f2f;"
-                "    border-color: #007acc;"
-                "}"
+            btn.setStyleSheet(
+                f"QPushButton {{ text-align: left; padding: 4px 8px; border: 1px solid {border_col}; "
+                f"border-radius: 3px; margin: 1px; font-size: 9px; color: {text_col}; background-color: {bg_col}; }} "
+                f"QPushButton:hover {{ background-color: {hover_bg}; border-color: {hover_border}; }}"
             )
-            btn.setStyleSheet(btn_style)
+            btn._is_low_conf = is_low_conf
             btn.clicked.connect(lambda checked, idx=i: self.load_image_by_index(idx))
             self._file_list_buttons[i] = btn
-            self.file_list_layout.addWidget(btn)
+            return btn
+
+        # 1. Populate normal file list
+        for i in normal_indices:
+            self.file_list_layout.addWidget(_create_file_list_button(i, False))
 
         # 2. Populate low-confidence list
         self._low_conf_count = len(low_conf_indices)
 
-        # If all items are low-confidence (normal list is empty), auto-expand the low-confidence
-        # section so the user sees all extracted images in the sidebar rather than an empty list.
         if not normal_indices and low_conf_indices:
             self.low_conf_scroll.setVisible(True)
             info_label = QLabel(f"All {len(low_conf_indices)} item(s) in Low Confidence (<60%) tab below:")
@@ -3321,56 +2874,7 @@ Click to configure advanced options."""
             self.low_conf_layout.addWidget(placeholder)
         else:
             for i in low_conf_indices:
-                file_path = self.image_files[i]
-                asset = self._resolved_assets[i]
-                base_name = os.path.basename(file_path)
-
-                # Get confidence percentages for tooltip / button label
-                conf_pct = 0.0
-                json_path = self._benchmark_result_cache.get(file_path)
-                if json_path:
-                    from services.confidence_extractor import extract_confidence_from_analysis_json
-                    c_info = extract_confidence_from_analysis_json(json_path)
-                    if c_info:
-                        conf_pct = c_info["average"] * 100.0
-                elif hasattr(asset, 'confidence_info') and asset.confidence_info:
-                    conf_pct = asset.confidence_info.get('average', 0.0) * 100.0
-
-                display_name = f"[{conf_pct:.0f}%] {base_name}" if conf_pct > 0 else base_name
-                if len(display_name) > 26:
-                    display_name = display_name[:23] + "..."
-
-                btn = QPushButton(display_name)
-                icon_name = "warning-solid.svg" if hasattr(self, 'has_icon') and self.has_icon("warning-solid.svg") else "image-solid-full.svg"
-                btn.setIcon(self.get_icon(icon_name, color="#e5c07b", size=image_icon_px))
-                btn.setIconSize(QSize(image_icon_px, image_icon_px))
-                btn.setFlat(True)
-
-                is_cached = file_path in self._benchmark_result_cache
-                base_tooltip = f"[PDF p.{asset.page_index}] {base_name}" if asset.source_document else base_name
-                if conf_pct > 0:
-                    base_tooltip += f"\nConfidence: {conf_pct:.1f}%"
-                btn.setToolTip(base_tooltip + (" ✓ Results cached" if is_cached else ""))
-
-                btn.setStyleSheet(
-                    "QPushButton {"
-                    "    text-align: left;"
-                    "    padding: 4px 8px;"
-                    "    border: 1px solid #5a4520;"
-                    "    border-radius: 3px;"
-                    "    margin: 1px;"
-                    "    font-size: 9px;"
-                    "    color: #e5c07b;"
-                    "    background-color: #1e1910;"
-                    "}"
-                    "QPushButton:hover {"
-                    "    background-color: #2b2314;"
-                    "    border-color: #e5c07b;"
-                    "}"
-                )
-                btn.clicked.connect(lambda checked, idx=i: self.load_image_by_index(idx))
-                self._file_list_buttons[i] = btn
-                self.low_conf_layout.addWidget(btn)
+                self.low_conf_layout.addWidget(_create_file_list_button(i, True))
 
         # If no image is currently selected/displayed and images are loaded, load the first one
         if self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
@@ -3378,17 +2882,6 @@ Click to configure advanced options."""
 
     def start_batch_analysis_thread(self):
         if not self.validate_paths():
-            return
-
-        if (self.advanced_settings or {}).get("ocr_engine", "Paddle") == "EasyOCR" and not self.ocr_ready:
-            if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
-                self._start_ocr_loading(self.advanced_settings)
-            QMessageBox.information(
-                self,
-                "OCR Loading",
-                "EasyOCR is still loading/downloading models.\n"
-                "Please wait, or switch OCR Engine to Paddle in Settings for immediate runs.",
-            )
             return
 
         if self.is_processing or (self.batch_thread and self.batch_thread.isRunning()):
@@ -3664,85 +3157,19 @@ Click to configure advanced options."""
     def highlight_selected_file(self, selected_index):
         if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
             return
-
-        selected_style_normal = (
-            "QPushButton {"
-            "    text-align: left;"
-            "    padding: 4px 8px;"
-            "    border: 2px solid #4a90e2;"
-            "    border-radius: 3px;"
-            "    margin: 1px;"
-            "    background-color: #4a90e2;"
-            "    color: white;"
-            "    font-weight: bold;"
-            "    font-size: 9px;"
-            "}"
-        )
-        normal_style_normal = (
-            "QPushButton {"
-            "    text-align: left;"
-            "    padding: 4px 8px;"
-            "    border: 1px solid #454545;"
-            "    border-radius: 3px;"
-            "    margin: 1px;"
-            "    font-size: 9px;"
-            "    color: #d4d4d4;"
-            "}"
-            "QPushButton:hover {"
-            "    background-color: #2f2f2f;"
-            "    border-color: #007acc;"
-            "}"
-        )
-        selected_style_low = (
-            "QPushButton {"
-            "    text-align: left;"
-            "    padding: 4px 8px;"
-            "    border: 2px solid #e5c07b;"
-            "    border-radius: 3px;"
-            "    margin: 1px;"
-            "    background-color: #5a4520;"
-            "    color: white;"
-            "    font-weight: bold;"
-            "    font-size: 9px;"
-            "}"
-        )
-        normal_style_low = (
-            "QPushButton {"
-            "    text-align: left;"
-            "    padding: 4px 8px;"
-            "    border: 1px solid #5a4520;"
-            "    border-radius: 3px;"
-            "    margin: 1px;"
-            "    font-size: 9px;"
-            "    color: #e5c07b;"
-            "    background-color: #1e1910;"
-            "}"
-            "QPushButton:hover {"
-            "    background-color: #2b2314;"
-            "    border-color: #e5c07b;"
-            "}"
-        )
-
         for i, btn in self._file_list_buttons.items():
             if not isinstance(btn, QPushButton):
                 continue
-            is_low_conf = False
-            if hasattr(self, '_resolved_assets') and i < len(self._resolved_assets):
-                asset = self._resolved_assets[i]
-                file_path = str(asset.image_path)
-                json_path = getattr(self, '_benchmark_result_cache', {}).get(file_path)
-                if json_path:
-                    from services.confidence_extractor import extract_confidence_from_analysis_json
-                    c_info = extract_confidence_from_analysis_json(json_path)
-                    if c_info:
-                        is_low_conf = bool(c_info.get("is_low_confidence", False))
-                elif hasattr(asset, 'confidence_info') and asset.confidence_info:
-                    is_low_conf = bool(asset.confidence_info.get("is_low_confidence", False))
-
-            if i == selected_index:
-                btn.setStyleSheet(selected_style_low if is_low_conf else selected_style_normal)
-            else:
-                btn.setStyleSheet(normal_style_low if is_low_conf else normal_style_normal)
+            is_sel = (i == selected_index)
+            is_low = getattr(btn, "_is_low_conf", False)
+            bg = ("#5a4520" if is_low else "#4a90e2") if is_sel else ("#1e1910" if is_low else "transparent")
+            color = "white" if is_sel else ("#e5c07b" if is_low else "#d4d4d4")
+            border = f"2px solid {color}" if is_sel else f"1px solid {'#5a4520' if is_low else '#454545'}"
+            btn.setStyleSheet(
+                f"QPushButton {{ text-align: left; padding: 4px 8px; border: {border}; "
+                f"border-radius: 3px; margin: 1px; font-size: 9px; color: {color}; "
+                f"background-color: {bg}; font-weight: {'bold' if is_sel else 'normal'}; }}"
+            )
 
     def _clear_display(self):
         self.cleanup_image_resources()
@@ -3773,13 +3200,6 @@ Click to configure advanced options."""
         self._clear_display()
         if not self.validate_paths():
             self.update_status("❌ Cannot load image. Check paths")
-            return
-
-        if (self.advanced_settings or {}).get("ocr_engine", "Paddle") == "EasyOCR" and not self.ocr_ready:
-            self._auto_run_after_ocr = True
-            if not (self.ocr_loader_thread and self.ocr_loader_thread.isRunning()):
-                self._start_ocr_loading(self.advanced_settings)
-            self.update_status("⏳ Waiting for EasyOCR to finish loading, analysis will start automatically...")
             return
 
         self.current_image_path = self.image_files[self.current_image_index]
@@ -3910,9 +3330,6 @@ Click to configure advanced options."""
             
         if self._editor_toolbar:
             self._editor_toolbar.setEnabled(True)
-            
-        # Show performance report
-        self.show_performance_report()
 
     def _clear_all_results(self):
         for section_key, section_info in self.ocr_section_widgets.items():
@@ -3943,6 +3360,7 @@ Click to configure advanced options."""
         self.analysis_results_widgets.clear()
         self.visibility_checks.clear()
 
+        self.protocol_row_overlay_map.clear()
         if hasattr(self, 'protocol_table'):
             self.protocol_table.blockSignals(True)
             self.protocol_table.setRowCount(0)
@@ -4106,10 +3524,6 @@ Click to configure advanced options."""
             self.data_content_widget.setUpdatesEnabled(True)
             self.data_content_widget.update()
 
-    def _populate_bars_tab(self):
-        # Compatibility wrapper for legacy call sites.
-        self._populate_data_tab()
-
     def _go_to_prev_data_page(self):
         if not self.current_analysis_result:
             return
@@ -4179,6 +3593,21 @@ Click to configure advanced options."""
         else:
             self.on_widget_hover_leave()
 
+    def _on_protocol_table_cell_entered(self, row: int, col: int):
+        overlay = self.protocol_row_overlay_map.get(row)
+        if not overlay and hasattr(self, "protocol_table"):
+            item = self.protocol_table.item(row, col) or self.protocol_table.item(row, 0)
+            if item:
+                candidate = item.data(Qt.ItemDataRole.UserRole + 1)
+                if isinstance(candidate, dict):
+                    overlay = candidate
+        bbox = overlay.get("bbox") if isinstance(overlay, dict) else None
+        class_name = overlay.get("class_name") if isinstance(overlay, dict) else None
+        if bbox:
+            self.on_widget_hover_enter(bbox, class_name or "other")
+        else:
+            self.on_widget_hover_leave()
+
     def _on_data_cell_changed(self, row: int, col: int):
         """Handle user edit in Data tab — flush to result and mark protocol row corrected."""
         binding = self.data_tab_bindings.get((row, col))
@@ -4198,6 +3627,12 @@ Click to configure advanced options."""
         if (
             hasattr(self, "data_table")
             and watched == self.data_table.viewport()
+            and event.type() == QEvent.Type.Leave
+        ):
+            self.on_widget_hover_leave()
+        elif (
+            hasattr(self, "protocol_table")
+            and watched == self.protocol_table.viewport()
             and event.type() == QEvent.Type.Leave
         ):
             self.on_widget_hover_leave()
@@ -4528,7 +3963,7 @@ Click to configure advanced options."""
             else:
                 grid_checkbox = QCheckBox()
                 grid_checkbox.stateChanged.connect(self.schedule_image_update)
-                if not self._use_legacy_canvas and self._det_scene:
+                if self._det_scene:
                     grid_checkbox.stateChanged.connect(
                         lambda state: self._det_scene.set_grid_visible(state == Qt.CheckState.Checked.value)
                     )
@@ -4582,8 +4017,7 @@ Click to configure advanced options."""
         else:
             checkbox = QCheckBox()
             checkbox.stateChanged.connect(self.schedule_image_update)
-            # New canvas: also route visibility to scene directly
-            if not self._use_legacy_canvas and self._det_scene:
+            if self._det_scene:
                 _cn = class_name  # capture for closure
                 checkbox.stateChanged.connect(
                     lambda state, cn=_cn: self._det_scene.set_class_visible(cn, state == Qt.CheckState.Checked.value)
@@ -4676,12 +4110,33 @@ Click to configure advanced options."""
             'reviewed':  QColor('#4CAF50'),
         }
 
+        self.protocol_row_overlay_map.clear()
+        overlay_class_map = {
+            'bar': 'bar',
+            'histogram': 'bar',
+            'pie': 'slice',
+            'box': 'box_plot',
+            'line': 'data_point',
+            'scatter': 'data_point',
+            'area': 'data_point',
+            'heatmap': 'cell',
+        }
+        default_overlay_class = overlay_class_map.get(chart_type, 'other')
+
         for r_idx, row_dict in enumerate(filtered_rows):
+            bbox = row_dict.get('bbox')
+            overlay_data = None
+            if bbox:
+                overlay_data = {'bbox': bbox, 'class_name': default_overlay_class}
+                self.protocol_row_overlay_map[r_idx] = overlay_data
+
             for c_idx, (col_id, col_label, _) in enumerate(active_cols):
                 raw  = row_dict.get(col_id, '')
                 text = '' if raw is None else str(raw)
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, id(row_dict))
+                if overlay_data:
+                    item.setData(Qt.ItemDataRole.UserRole + 1, overlay_data)
 
                 if col_id in PROTOCOL_READONLY:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -4858,23 +4313,17 @@ Click to configure advanced options."""
                     except:
                         pass
             self.highlight_cache.clear()
-        
-        # CRITICAL FIX: Properly clear pixmap cache
-        self._clear_pixmap_cache()
-        
+
         # Clear current displayed pixmap
         if hasattr(self, 'current_pixmap'):
             self.current_pixmap = None
-        
+
         # Force Qt to process pending deletions
         from PyQt6.QtWidgets import QApplication
         QApplication.processEvents()
-        
+
         # Schedule image update
         self.update_timer.start(100)
-
-    def _delayed_update_image(self):
-        self.update_displayed_image()
 
     def _setup_navigation_controls(self):
         self.nav_frame = QFrame()
@@ -5077,151 +4526,9 @@ Click to configure advanced options."""
             return None
 
 
-    def _create_base_image_with_detections(self):
-        img = self.original_pil_image.copy()
-        draw = ImageDraw.Draw(img)
-        
-        if not self.current_analysis_result:
-            return img
-        
-        for class_name, items in self.current_analysis_result['detections'].items():
-            checkbox = self.visibility_checks.get(class_name)
-            if checkbox and checkbox.isChecked():
-                color_set = self.colors.get(class_name, {"normal": (128, 128, 128)})
-                for item in items:
-                    if class_name == "slice":
-                        pie_overlay = extract_slice_overlay_points(item, expected_keypoints=5)
-                        if pie_overlay is not None:
-                            center_pt, arc_pts = pie_overlay
-                            draw.line([center_pt, arc_pts[0]], fill=color_set["normal"], width=1)
-                            draw.line([center_pt, arc_pts[-1]], fill=color_set["normal"], width=1)
-                            draw.line(arc_pts, fill=color_set["normal"], width=1)
-                            continue
-
-                    bbox = item.get('xyxy')
-                    if bbox:
-                        draw.rectangle(bbox, outline=color_set["normal"], width=1)
-        
-        # Check for new key first, with fallback to old key for backward compatibility
-        baseline_coord = (self.current_analysis_result.get('baseline_coord') or 
-                         self.current_analysis_result.get('scale_info', {}).get('baseline_y_coord'))
-        if baseline_coord is not None:
-            y = int(baseline_coord)
-            draw.line([(0, y), (img.width, y)], fill=(0, 0, 0), width=2)
-        
-        return img
-
     def update_displayed_image(self, highlight_bbox=None, highlight_class=None, force_refresh: bool = False):
-        """Update displayed image with proper memory management and scaling."""
-        if not self._use_legacy_canvas:
-            # ── New canvas path: update scene detections + highlight ──
-            self._update_scene_display(highlight_bbox, highlight_class)
-            return
-
-        # ── Legacy canvas path (original code) ──
-        if self.original_pil_image is None:
-            return
-        
-        cache_key = f"{self.current_image_path}_{self.zoom_level}_{highlight_bbox}"
-        
-        if not force_refresh:
-            cached_pixmap = self._get_cached_pixmap(cache_key)
-            if cached_pixmap:
-                self._set_image_pixmap(cached_pixmap)
-                return
-        
-        img_to_show = None
-        
-        try:
-            original_width, original_height = self.original_pil_image.size
-            # Qt6 handles DPI scaling automatically - no manual scaling needed
-            new_width = int(original_width * self.zoom_level)
-            new_height = int(original_height * self.zoom_level)
-            
-            # Clamp to reasonable maximum (Qt handles DPI automatically)
-            max_dimension = 4000
-            if new_width > max_dimension or new_height > max_dimension:
-                scale_factor = min(max_dimension / new_width, max_dimension / new_height)
-                new_width = int(new_width * scale_factor)
-                new_height = int(new_height * scale_factor)
-            
-            if new_width <= 0 or new_height <= 0:
-                return
-            
-            # Create image with scaling applied
-            img_to_show = self.create_image_with_highlight(
-                highlight_bbox, 
-                highlight_class,
-                target_size=(new_width, new_height)
-            )
-            
-            if img_to_show is None:
-                return
-            
-            # Convert to NumPy array
-            # See _update_scene_display for why we keep a named reference to
-            # the buffer and force a deep-copy via .copy() immediately —
-            # QImage's raw-buffer constructor does not take ownership of the
-            # data, and an unreferenced temporary buffer can be garbage
-            # collected out from under it, causing a hard crash.
-            np_array = np.ascontiguousarray(np.array(img_to_show))
-            height, width, channel = np_array.shape
-            bytes_per_line = 3 * width
-            
-            q_image = QImage(np_array.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).copy()
-            pixmap = QPixmap.fromImage(q_image)
-            
-            # Ensure this is run on the main thread
-            if threading.current_thread() is threading.main_thread():
-                self._set_image_pixmap(pixmap)
-            else:
-                # Schedule to run on main thread
-                QTimer.singleShot(0, lambda pm=pixmap: self._set_image_pixmap(pm))
-
-            self._cache_pixmap(cache_key, pixmap)
-            
-        except Exception as e:
-            logging.error(f"Image display error: {e}", exc_info=True)
-            self.update_status(f"❌ Display error: {e}")
-        
-        finally:
-            if img_to_show is not None:
-                del img_to_show
-            gc.collect()
-
-    def _cache_pixmap(self, key: str, pixmap: QPixmap):
-        """
-        Cache pixmap using SmartPixmapCache (NEW: automatic LRU eviction).
-        
-        Args:
-            key: Unique identifier (e.g., "image_path_zoom_level_highlighted")
-            pixmap: QPixmap to cache
-        """
-        # NEW: SmartPixmapCache handles locking, eviction, and memory tracking automatically
-        self.pixmap_cache.insert(key, pixmap)
-    
-    def _get_cached_pixmap(self, key: str) -> QPixmap:
-        """
-        Retrieve cached pixmap (NEW: uses SmartPixmapCache).
-        
-        Args:
-            key: Cache key
-        
-        Returns:
-            Cached QPixmap or None if not found
-        """
-        # NEW: SmartPixmapCache handles locking and LRU updates automatically
-        return self.pixmap_cache.get(key)
-    
-    def _clear_pixmap_cache(self):
-        """Clear all cached pixmaps (NEW: uses SmartPixmapCache)."""
-        # NEW: SmartPixmapCache handles gc.collect() automatically
-        self.pixmap_cache.clear()
-        logging.debug("Cleared pixmap cache")
-        from PyQt6.QtCore import QCoreApplication
-        QCoreApplication.processEvents()
-        
-        gc.collect()
+        """Update displayed image on detection scene."""
+        self._update_scene_display(highlight_bbox, highlight_class)
 
     def _apply_highlight(self):
         """Apply pending highlight with thread safety."""
@@ -5287,38 +4594,16 @@ Click to configure advanced options."""
         return None
 
     def reset_zoom(self):
-        if not self._use_legacy_canvas and self._det_canvas_view:
+        if self._det_canvas_view:
             self._det_canvas_view.fit_to_view()
-            return
-        if self.original_pil_image is not None:
-            self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
-        else:
-            self.zoom_level = 1.0
-        self.update_displayed_image(self.highlighted_bbox, self.get_class_for_bbox(self.highlighted_bbox))
 
     def zoom_in(self):
-        """Zoom in (NEW: uses StateManager for undo/redo support)"""
-        if not self._use_legacy_canvas and self._det_canvas_view:
+        if self._det_canvas_view:
             self._det_canvas_view.zoom_in()
-            return
-        # Update state (creates history entry for undo)
-        state = self.state_manager.get_state()
-        new_canvas = state.canvas.zoom_by(1.2)
-        self.state_manager.update(canvas=new_canvas)
-        # Note: _on_state_changed() will update self.zoom_level and UI
-        self.update_displayed_image(self.highlighted_bbox, self.get_class_for_bbox(self.highlighted_bbox))
 
     def zoom_out(self):
-        """Zoom out (NEW: uses StateManager for undo/redo support)"""
-        if not self._use_legacy_canvas and self._det_canvas_view:
+        if self._det_canvas_view:
             self._det_canvas_view.zoom_out()
-            return
-        # Update state (creates history entry for undo)
-        state = self.state_manager.get_state()
-        new_canvas = state.canvas.zoom_by(0.8)
-        self.state_manager.update(canvas=new_canvas)
-        # Note: _on_state_changed() will update self.zoom_level and UI
-        self.update_displayed_image(self.highlighted_bbox, self.get_class_for_bbox(self.highlighted_bbox))
 
     def keyPressEvent(self, event: QKeyEvent):
         """Handle keyboard shortcuts (NEW: includes undo/redo)"""
@@ -5572,12 +4857,9 @@ Click to configure advanced options."""
         self._recalibration_thread = thread
 
         from PyQt6.QtCore import QObject
-        if not isinstance(self, QObject):
-            thread.run()
-        else:
-            thread.start()
-            if not hasattr(self, 'isVisible') or not self.isVisible():
-                thread.wait(1000)
+        (thread.run if not isinstance(self, QObject) else thread.start)()
+        if not getattr(self, 'isVisible', lambda: False)():
+            thread.wait(1000)
 
     def _on_recalibration_complete(self, refreshed):
         previous_result = getattr(self, '_pending_recalibration_previous', {})

@@ -117,8 +117,7 @@ This document is the runtime truth for the chart-analysis pipeline. It is scoped
 - Inputs:
   - `axis_labels` detections
   - Optional doclayout detections (`layout_text_regions`)
-- Core stage:
-  - PaddleOCR is configured as the active default OCR engine across all operating systems (`install.py`, `main_modern.py`, `advanced_settings.json`). EasyOCR is available as an optional backend.
+  - PaddleOCR (via ONNX Runtime) is the sole OCR engine across all platforms (`install.py`, `main_modern.py`, `advanced_settings.json`). EasyOCR and Tesseract have been removed.
   - `_process_ocr` merges axis labels with non-duplicate doclayout text regions.
   - Uses `TextLayoutService.merge_with_axis_labels` with IoU dedupe.
 - Outputs:

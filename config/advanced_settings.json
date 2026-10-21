@@ -5,7 +5,7 @@
   "spatial_method": "LYLLA",
   "scatter_subpixel_mode": "otsu",
   "bar_association_mode": "metric_learning",
-  "calibration_method": "PROSAC",
+  "calibration_method": "siegel",
   "ocr_whitelists": {
     "scale_label": "0123456789.,-eE+",
     "axis_title": "",
@@ -16,21 +16,14 @@
     "other": ""
   },
   "ocr_settings": {
-    "easyocr_gpu": true,
-    "easyocr_download_enabled": false,
-    "easyocr_contrast_ths": 0.0,
-    "easyocr_adjust_contrast": 0.5,
-    "easyocr_min_size": 10,
-    "tesseract_psm": 6,
-    "tesseract_oem": 3,
+    "use_gpu": false,
     "scale_factor": 3.0,
     "retry_on_suspicious": true,
     "aggressive_preprocessing": false,
     "languages": [
       "en",
       "pt"
-    ],
-    "easyocr_model_storage_dir": ""
+    ]
   },
   "detection_thresholds": {
     "classification": 0.8,

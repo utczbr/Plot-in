@@ -1,5 +1,11 @@
 -r requirements.txt
 
+# Deep Learning & Training (Optional / Dev Only)
+torch==2.1.2+cpu; sys_platform != "darwin"
+torchvision==0.16.2+cpu; sys_platform != "darwin"
+torch>=2.1.0,<2.6; sys_platform == "darwin"
+torchvision>=0.16.0; sys_platform == "darwin"
+
 # Data Science & Training
 pandas==2.1.4
 matplotlib==3.7.5

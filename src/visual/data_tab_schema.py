@@ -158,6 +158,7 @@ def _columns_for_chart(chart_type: str) -> List[DataTabColumnSpec]:
     if chart_type == "line":
         return [
             DataTabColumnSpec("index", "#", value_type="int"),
+            DataTabColumnSpec("label", "Label", editable=True),
             DataTabColumnSpec("value", "Value", editable=True, value_type="float"),
             DataTabColumnSpec("position", "Position", editable=True, value_type="float"),
             DataTabColumnSpec("confidence", "Conf.", value_type="float"),
@@ -194,6 +195,7 @@ def _columns_for_chart(chart_type: str) -> List[DataTabColumnSpec]:
         return [
             DataTabColumnSpec("kind", "Kind"),
             DataTabColumnSpec("index", "#", value_type="int"),
+            DataTabColumnSpec("label", "Label", editable=True),
             DataTabColumnSpec("position", "Position", editable=True, value_type="float"),
             DataTabColumnSpec("value", "Value", editable=True, value_type="float"),
             DataTabColumnSpec("confidence", "Conf.", value_type="float"),
@@ -222,11 +224,11 @@ def _editable_fields_for_chart(chart_type: str, row_kind: str = "element") -> Li
         "bar": ["label", "value", "pixel_size", "error_bar"],
         "histogram": ["label", "value", "pixel_size", "error_bar"],
         "pie": ["label", "value", "percent", "angle"],
-        "line": ["value", "position"],
+        "line": ["label", "value", "position"],
         "scatter": ["x", "y"],
         "box": ["label", "whisker_low", "q1", "median", "q3", "whisker_high", "outliers"],
         "heatmap": ["row_label", "col_label", "value"],
-        "area": ["position", "value"],
+        "area": ["label", "position", "value"],
     }
     return mapping.get(chart_type, ["value"])
 
@@ -309,8 +311,15 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
                 "confidence": _safe_float(element.get("confidence")),
             }
         elif chart_type == "line":
+            tick_label = element.get("tick_label")
+            label_text = ""
+            if isinstance(tick_label, dict):
+                label_text = str(tick_label.get("text", "")).strip()
+            elif isinstance(tick_label, str):
+                label_text = tick_label.strip()
             row_values = {
                 "index": idx,
+                "label": label_text,
                 "value": _value_or_estimated(element),
                 "position": _safe_float(element.get("position")),
                 "confidence": _safe_float(element.get("confidence", element.get("conf"))),
@@ -335,6 +344,8 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
             label_text = ""
             if isinstance(tick_label, dict):
                 label_text = str(tick_label.get("text", "")).strip()
+            elif isinstance(tick_label, str):
+                label_text = tick_label.strip()
             row_values = {
                 "label": label_text,
                 "whisker_low": _safe_float(element.get("whisker_low")),
@@ -354,9 +365,16 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
                 "confidence": _safe_float(element.get("confidence")),
             }
         elif chart_type == "area":
+            tick_label = element.get("tick_label")
+            label_text = ""
+            if isinstance(tick_label, dict):
+                label_text = str(tick_label.get("text", "")).strip()
+            elif isinstance(tick_label, str):
+                label_text = tick_label.strip()
             row_values = {
                 "kind": "summary" if row_kind == "summary" else "point",
                 "index": idx,
+                "label": label_text,
                 "position": _safe_float(element.get("position")),
                 "value": _value_or_estimated(element),
                 "confidence": _safe_float(element.get("confidence", element.get("conf"))),
@@ -487,6 +505,15 @@ def _apply_pie_field(target: Dict[str, Any], field: str, parsed: Any) -> None:
 
 
 def _apply_line_area_field(target: Dict[str, Any], field: str, parsed: Any) -> None:
+    if field == "label":
+        new_label = str(parsed).strip()
+        target["label"] = new_label
+        tick_label = target.get("tick_label")
+        if isinstance(tick_label, dict):
+            tick_label["text"] = new_label
+        else:
+            target["tick_label"] = new_label
+        return
     if field == "value":
         numeric = _safe_float(parsed)
         if "value" in target:

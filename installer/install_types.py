@@ -10,7 +10,7 @@ class InstallOptions:
     purpose: str = "user"  # user | developer
     install_scope: str = "local"  # local | user | global
     interface_mode: str = "gui"  # gui | cli
-    ocr_backend: str = "EasyOCR"  # EasyOCR | Paddle
+    ocr_backend: str = "Paddle"  # Paddle | Paddle_docs
     ocr_languages: List[str] = field(default_factory=lambda: ["en", "pt"])
     predownload_ocr_models: bool = False
     include_test_tools: bool = False

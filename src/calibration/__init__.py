@@ -1,9 +1,9 @@
 """
 Initialization for calibration module.
-Exports CalibrationFactory for external use.
+Exports CalibrationFactory and RobustSiegelCalibration for external use.
 """
 
 from .calibration_factory import CalibrationFactory
-from .config import CalibrationConfig, CalibrationConfigFactory
+from .calibration_siegel import RobustSiegelCalibration
 
-__all__ = ["CalibrationFactory", "CalibrationConfig", "CalibrationConfigFactory"]
+__all__ = ["CalibrationFactory", "RobustSiegelCalibration"]

@@ -216,8 +216,8 @@ def _register_backend_services(container: ServiceContainer):
     )
 
     container.register(
-        'easyocr_reader',
-        lambda c: _create_easyocr_reader(c),
+        'ocr_engine',
+        lambda c: _create_ocr_engine(c),
         singleton=True
     )
 
@@ -237,22 +237,13 @@ def _register_ui_services(container: ServiceContainer):
     )
 
 
-def _create_easyocr_reader(container: ServiceContainer):
-    """Lazy EasyOCR bootstrap to avoid import-time hard dependency."""
-    try:
-        import easyocr
-    except ImportError as exc:
-        raise RuntimeError(
-            "easyocr is required to create 'easyocr_reader'. Install easyocr to enable OCR services."
-        ) from exc
+def _create_ocr_engine(container: ServiceContainer):
+    """Create PaddleOCR engine via OCREngineFactory."""
+    from ocr.ocr_factory import OCREngineFactory
 
     ocr_cfg = container.get_config('ocr', {})
     use_gpu = ocr_cfg.get('use_gpu', False) if isinstance(ocr_cfg, dict) else False
-    languages = ocr_cfg.get('languages', ['en']) if isinstance(ocr_cfg, dict) else ['en']
-    if not isinstance(languages, list) or not languages:
-        languages = ['en']
-
-    return easyocr.Reader(languages, gpu=use_gpu)
+    return OCREngineFactory.create_engine(mode='paddle_onnx', use_gpu=use_gpu)
 
 
 def _create_data_manager():

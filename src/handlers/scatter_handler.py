@@ -88,6 +88,12 @@ class ScatterHandler(CartesianExtractionHandler):
             
         self.logger.info(f"Extracted {len(extracted)} scatter points")
         
+        from extractors.tick_label_associator import TickLabelAssociator
+        axis_lbls = getattr(self, '_axis_labels', None) or detections.get('axis_labels', [])
+        extracted = TickLabelAssociator.associate(
+            extracted, detections, orientation_enum.value, axis_labels=axis_lbls
+        )
+
         from extractors.legend_associator import LegendAssociator
         return LegendAssociator.associate(extracted, detections)
 

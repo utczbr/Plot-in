@@ -34,7 +34,7 @@ class TestHeatmapExpertPipeline(unittest.TestCase):
         # Lattice returns cells
         # Colorbar returns colorbars
         # Text returns axis labels
-        def mock_run(model, img, conf, class_map, nms_threshold=None):
+        def mock_run(model, img, conf, class_map, nms_threshold=None, **kwargs):
             if class_map == CLASS_MAP_HEATMAP_MACRO:
                 return [{'xyxy': [10, 10, 80, 80], 'cls': 0, 'conf': 0.9}] # chart
             elif class_map == CLASS_MAP_HEATMAP_LATTICE:

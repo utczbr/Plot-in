@@ -124,6 +124,8 @@ def _extract_group(element: Dict[str, Any]) -> str:
         text = tick.get('text', '')
         if isinstance(text, str) and text.strip():
             return text.strip()
+    elif isinstance(tick, str) and tick.strip():
+        return tick.strip()
     # Fallback to bar_label for bar charts
     bar_label = element.get('bar_label', '')
     if isinstance(bar_label, str) and bar_label.strip():
@@ -132,6 +134,14 @@ def _extract_group(element: Dict[str, Any]) -> str:
     pie_label = element.get('label', '')
     if isinstance(pie_label, str) and pie_label.strip():
         return pie_label.strip()
+    # Fallback to x_value for numeric independent axes (line, scatter, etc.)
+    x_val = element.get('x_value')
+    if x_val is not None:
+        try:
+            fv = float(x_val)
+            return f"{fv:.4g}"
+        except (TypeError, ValueError):
+            return str(x_val).strip()
     return ''
 
 
@@ -294,6 +304,7 @@ def build_protocol_rows(
             'review_status': 'auto',
             'notes': '',
             '_original': None,
+            'bbox': element.get('bbox') or element.get('xyxy'),
             # Scatter
             'value_x': scatter_x,
             # Pie

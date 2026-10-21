@@ -12,7 +12,6 @@ class OCRSettings:
     gpu: bool = False
     scale_factor: float = 2.0
     contrast_threshold: float = 0.3
-    tesseract_psm: int = 6
     retry_on_suspicious: bool = True
     aggressive_preprocessing: bool = False
     whitelists: Dict[str, str] = field(default_factory=dict)

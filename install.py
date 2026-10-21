@@ -44,13 +44,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--purpose", choices=["user", "developer"], default="user")
     parser.add_argument("--install-scope", choices=["local", "user", "global"], default="local")
     parser.add_argument("--interface-mode", choices=["gui", "cli"], default="gui")
-    parser.add_argument("--ocr-backend", choices=["EasyOCR", "Paddle"], default="Paddle")
+    parser.add_argument("--ocr-backend", choices=["Paddle", "Paddle_docs"], default="Paddle")
     parser.add_argument("--ocr-languages", default="en,pt", help="Comma-separated language codes")
     parser.add_argument("--predownload-ocr-models", action="store_true")
     parser.add_argument("--include-test-tools", action="store_true")
     parser.add_argument("--auto-install-python", action="store_true")
     parser.add_argument("--models-dir", default="src/models")
-    parser.add_argument("--easyocr-cache-dir", default=str(Path.home() / ".EasyOCR"))
+    parser.add_argument("--easyocr-cache-dir", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--paddle-cache-dir", default=str(Path.home() / ".paddle"))
     parser.add_argument("--profile", default="default")
     parser.add_argument("--verbose", action="store_true")
@@ -124,7 +124,6 @@ def _collect_options(args: argparse.Namespace) -> InstallOptions:
     options.include_test_tools = args.include_test_tools
     options.auto_install_python = args.auto_install_python
     options.models_dir = Path(args.models_dir).expanduser()
-    options.easyocr_model_storage_dir = Path(args.easyocr_cache_dir).expanduser()
     options.paddle_model_cache_dir = Path(args.paddle_cache_dir).expanduser()
     options.profile_name = args.profile
     options.use_gui_installer = False

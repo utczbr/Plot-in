@@ -142,18 +142,14 @@ def baseline_from_scale_zero(
     try:
         axis_type = "y" if is_vertical else "x"
 
-        mode = (calibration_mode or "prosac").lower()
-        if mode == "fast":
+        mode = (calibration_mode or "siegel").lower()
+        if mode in ("fast", "linear"):
             engine = CalibrationFactory.create("fast", use_weights=True)
-        elif mode == "ransac":
-            engine = CalibrationFactory.create("ransac", max_trials=300, residual_threshold=3.0)
-        elif mode in ("prosac", "precise"):
-            engine = CalibrationFactory.create("prosac", max_trials=500, lo_iters=2)
-        elif mode == "optimized":
-            engine = CalibrationFactory.create("prosac", max_trials=400)
+        elif mode in ("prosac", "precise", "ransac", "adaptive", "siegel", "robust", "optimized"):
+            engine = CalibrationFactory.create("siegel")
         else:
-            log.warning("Unknown calibration mode '%s', using prosac", calibration_mode)
-            engine = CalibrationFactory.create("prosac")
+            log.warning("Unknown calibration mode '%s', using siegel", calibration_mode)
+            engine = CalibrationFactory.create("siegel")
 
         result = engine.calibrate(usable, axis_type)
 

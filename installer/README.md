@@ -25,9 +25,8 @@ This directory contains the cross-platform installer implementation.
 3. Supports install scope (`local` default, `user`, `global`)
 4. Attempts a fast bulk download of model files from Hugging Face Hub.
 5. Verifies model files via strict SHA-256 manifest (`installer/model_manifest.json`), falling back to individual Hugging Face file downloads if missing or corrupted.
-6. Optionally pre-downloads EasyOCR weights
-7. Writes runtime profile to `config/install_profiles/<name>.json`
-8. Activates profile via `config/install_profile_manifest.json`
+6. Writes runtime profile to `config/install_profiles/<name>.json`
+7. Activates profile via `config/install_profile_manifest.json`
 
 ## Debian global installs
 
@@ -122,10 +121,8 @@ xattr -cr /path/to/chart-analysis-installer-macos.app
 
 ### OCR Backends
 
-- **EasyOCR:** Works on macOS (CPU only). GPU/MPS acceleration is not supported by EasyOCR upstream.
-- **Paddle:** Uses ONNX Runtime models directly — no `paddlepaddle` dependency required.
+- **PaddleOCR:** Uses ONNX Runtime models directly — no `paddlepaddle` or PyTorch dependency required.
 
 ### Performance
 
-- ONNX models use CoreML acceleration on Apple Silicon when `CoreMLExecutionProvider` is available.
-- EasyOCR falls back to CPU (no MPS support upstream).
+- ONNX models use CoreML acceleration on Apple Silicon when `CoreMLExecutionProvider` is available, and CPU/CUDA on other platforms.

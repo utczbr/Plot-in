@@ -1345,18 +1345,51 @@ class DetectionScene(QGraphicsScene):
         if bbox is None:
             return
 
-        # Find matching item
+        def _bbox_match(b1, b2, tol=1.5):
+            if b1 is None or b2 is None:
+                return False
+            if len(b1) != 4 or len(b2) != 4:
+                return False
+            try:
+                return all(abs(float(x) - float(y)) <= tol for x, y in zip(b1, b2))
+            except (ValueError, TypeError):
+                return False
+
+        aliases = {
+            "line": {"line", "data_point"},
+            "scatter": {"scatter", "data_point"},
+            "area": {"area", "data_point"},
+            "data_point": {"data_point", "line", "scatter", "area"},
+            "pie": {"pie", "slice", "pie_slice"},
+            "pie_slice": {"pie", "slice", "pie_slice"},
+            "slice": {"pie", "slice", "pie_slice"},
+            "box": {"box", "box_plot"},
+            "box_plot": {"box", "box_plot"},
+        }
+        allowed_classes = None
+        if class_name and class_name not in ("other", ""):
+            allowed_classes = aliases.get(class_name, {class_name})
+
+        # Find matching item: prefer match on class + bbox; fallback to bbox alone
+        candidate = None
         from visual.detection_editor_state import _item_is_alive
         for item in list(self._rect_items):
             if not _item_is_alive(item):
                 self._rect_items.remove(item)  # prune stale wrappers
                 continue
             det_bbox = item.detection.get("xyxy")
-            if det_bbox == bbox and (class_name is None or item.class_name == class_name):
-                item.set_highlighted(True)
-                self._highlighted_item = item
-                self.item_highlighted.emit(item.class_name, list(det_bbox))
-                break
+            if _bbox_match(det_bbox, bbox):
+                if allowed_classes is None or item.class_name in allowed_classes:
+                    candidate = item
+                    break
+                elif candidate is None:
+                    candidate = item
+
+        if candidate is not None:
+            candidate.set_highlighted(True)
+            self._highlighted_item = candidate
+            det_bbox = candidate.detection.get("xyxy")
+            self.item_highlighted.emit(candidate.class_name, list(det_bbox) if det_bbox else list(bbox))
 
     def clear_highlight(self) -> None:
         """Remove any active highlight."""

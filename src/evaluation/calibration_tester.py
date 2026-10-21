@@ -21,7 +21,7 @@ class CalibrationTester:
         self.analysis_script = self.src_dir / "analysis.py"
         self.evaluation_script = self.src_dir / "scripts" / "run_evaluation.py"
         self.calibration_methods = [
-            ("PROSAC", "PROSAC"),
+            ("Siegel", "siegel"),
             ("Linear", "Linear"),
             ("Fast", "fast"),
         ]

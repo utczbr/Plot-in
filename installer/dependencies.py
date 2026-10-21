@@ -50,11 +50,9 @@ def resolve_requirements(options: InstallOptions, os_name: str) -> List[str]:
     if options.purpose == "developer" or options.include_test_tools:
         specs.extend(_collect_specs_from_file(REQUIREMENTS_DEV, seen=set()))
 
-    excluded_names = set()
+    excluded_names = {"easyocr"}
     if options.interface_mode == "cli":
         excluded_names.update(EXCLUDED_IN_CLI)
-    if options.ocr_backend.lower() != "easyocr":
-        excluded_names.update({"easyocr", "torch", "torchvision", "torchaudio"})
 
     deduped: List[str] = []
     seen_names = set()
@@ -120,8 +118,8 @@ def install_requirements(
             run_command(cmd)
         except RuntimeError as exc:
             logging.warning(
-                "torch installation failed (non-fatal, easyocr may install "
-                "a compatible version automatically): %s", exc,
+                "torch installation failed (non-fatal, optional deep learning features "
+                "may be unavailable): %s", exc,
             )
 
     # ── 2. Install everything else in chunks ─────────────────────────────

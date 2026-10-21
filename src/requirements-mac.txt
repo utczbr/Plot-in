@@ -17,10 +17,7 @@ scipy==1.11.4
 # hdbscan==0.8.33
 
 # OCR Engines
-easyocr==1.7.1
-# Constrain torch pulled by EasyOCR: tested range for macOS arm64/x86_64 wheels.
-# Upper bound tracks EasyOCR 1.7.x compat; bump after testing with newer versions.
-torch>=2.1,<2.6
+# PaddleOCR: uses ONNX Runtime models (onnxruntime), no paddlepaddle or torch dependency required.
 
 # Data Processing
 Pillow==10.1.0
@@ -35,10 +32,9 @@ PyQt6==6.6.1
 PyQt6-Qt6==6.6.1
 PyQt6-sip==13.6.0
 
-# Development Tools (separate file)
-# See requirements-dev.txt
+# Development & Training Tools (separate file)
+# See requirements-dev.txt (includes PyTorch, training utilities, and test suites)
 
 # Known Issues:
-# - EasyOCR requires CUDA 11.x for GPU support
 # - PyMuPDF may require additional system libraries on Linux
 # - ONNX Runtime GPU requires CUDA 11.x and cuDNN 8.x

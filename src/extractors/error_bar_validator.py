@@ -180,80 +180,66 @@ class ErrorBarValidator:
     ) -> List[Dict]:
         """
         Associate error bars with bars and compute validation scores.
+        Enforces 1-to-1 matching so each error bar is associated with at most one bar.
         
         Returns:
             List of enriched bars with validated error bar associations
         """
         enriched_bars = [dict(bar) for bar in bars]
-        
+        if not bars or not error_bars:
+            return enriched_bars
+
+        # Collect candidate pairs: (bar_idx, eb_idx, confidence, distance, validation, is_primary)
+        candidates = []
         for bar_idx, bar in enumerate(bars):
             bar_cx = (bar['xyxy'][0] + bar['xyxy'][2]) / 2.0
             bar_cy = (bar['xyxy'][1] + bar['xyxy'][3]) / 2.0
-            
-            best_error_bar = None
-            best_confidence = 0.0
-            best_validation = None
+            if orientation == 'vertical':
+                bar_span = abs(bar['xyxy'][2] - bar['xyxy'][0])
+            else:
+                bar_span = abs(bar['xyxy'][3] - bar['xyxy'][1])
+            max_dist = max(bar_span * 1.5, 40.0)
 
-            fallback_candidate = None
-            fallback_confidence = 0.0
-            fallback_validation = None
-            
-            for eb in error_bars:
+            for eb_idx, eb in enumerate(error_bars):
                 eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
                 eb_cy = (eb['xyxy'][1] + eb['xyxy'][3]) / 2.0
-                
-                # Compute proximity
-                if orientation == 'vertical':
-                    distance = abs(eb_cx - bar_cx)
-                    bar_span = abs(bar['xyxy'][2] - bar['xyxy'][0])
-                else:
-                    distance = abs(eb_cy - bar_cy)
-                    bar_span = abs(bar['xyxy'][3] - bar['xyxy'][1])
-                
-                max_dist = max(bar_span * 1.5, 40.0)
-                # Skip if too far
+                distance = abs(eb_cx - bar_cx) if orientation == 'vertical' else abs(eb_cy - bar_cy)
                 if distance > max_dist:
                     continue
-                
-                # Compute validation and confidence
+
                 validation = self.compute_confidence_score(eb, bar, orientation)
                 conf = validation.get('confidence', 0.0)
-                
-                if validation['is_valid'] and conf > best_confidence:
-                    best_confidence = conf
-                    best_error_bar = eb
-                    best_validation = validation
+                is_valid = validation.get('is_valid', False)
 
-                if conf > fallback_confidence:
-                    fallback_confidence = conf
-                    fallback_candidate = eb
-                    fallback_validation = validation
-            
-            if best_error_bar is not None and best_confidence > 0.4:
-                enriched_bars[bar_idx]['error_bar_validated'] = {
-                    'bbox': best_error_bar['xyxy'],
-                    **best_validation
-                }
-                self.logger.info(
-                    f"Bar {bar_idx}: Valid error bar association "
-                    f"({best_validation['validation_summary']})"
-                )
-            elif fallback_candidate is not None:
-                # Best-candidate fallback: candidate exists within proximity
-                fallback_val = dict(fallback_validation)
-                fallback_val['is_valid'] = True  # mark valid for association
-                enriched_bars[bar_idx]['error_bar_validated'] = {
-                    'bbox': fallback_candidate['xyxy'],
-                    **fallback_val
-                }
-                self.logger.info(
-                    f"Bar {bar_idx}: Error bar fallback candidate assigned "
-                    f"({fallback_val['validation_summary']})"
-                )
-            else:
-                if best_error_bar is not None:
-                    self.logger.warning(
-                        f"Bar {bar_idx}: Error bar rejected (low confidence={best_confidence:.2f})"
-                    )
-        
+                if is_valid and conf > 0.4:
+                    candidates.append((bar_idx, eb_idx, conf, distance, validation, True))
+                elif conf > 0.3 and distance <= bar_span * 0.8:
+                    candidates.append((bar_idx, eb_idx, conf, distance, validation, False))
+
+        # Sort candidates: primary matches first, then highest confidence, then shortest distance
+        candidates.sort(key=lambda c: (1 if c[5] else 0, c[2], -c[3]), reverse=True)
+
+        assigned_bars = set()
+        assigned_ebs = set()
+
+        for bar_idx, eb_idx, conf, dist, validation, is_primary in candidates:
+            if bar_idx in assigned_bars or eb_idx in assigned_ebs:
+                continue
+
+            eb = error_bars[eb_idx]
+            val_to_store = dict(validation)
+            if not is_primary:
+                val_to_store['is_valid'] = True
+
+            enriched_bars[bar_idx]['error_bar_validated'] = {
+                'bbox': eb['xyxy'],
+                **val_to_store
+            }
+            assigned_bars.add(bar_idx)
+            assigned_ebs.add(eb_idx)
+            self.logger.info(
+                f"Bar {bar_idx}: {'Valid' if is_primary else 'Fallback'} error bar association "
+                f"with error_bar {eb_idx} ({val_to_store.get('validation_summary', '')})"
+            )
+
         return enriched_bars

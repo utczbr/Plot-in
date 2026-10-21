@@ -19,18 +19,8 @@ scipy==1.11.4
 # after installing Microsoft C++ Build Tools.
 # hdbscan==0.8.33
 
-# Deep Learning
-# torch+cpu must be listed BEFORE easyocr so pip resolves easyocr's torch
-# dependency against the CPU wheel rather than the default CUDA build.
-# On Windows/Linux without a GPU the CUDA wheel fails with:
-#   OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed.
-# The CPU wheel has no CUDA/cuDNN dependency and works everywhere.
-torch==2.1.2+cpu; sys_platform != "darwin"
-torchvision==0.16.2+cpu; sys_platform != "darwin"
-
 # OCR Engines
-easyocr==1.7.1
-# PaddleOCR: uses ONNX Runtime models, no paddlepaddle dependency required.
+# PaddleOCR: uses ONNX Runtime models (onnxruntime), no paddlepaddle or torch dependency required.
 
 # Data Processing
 Pillow==10.1.0
@@ -45,10 +35,9 @@ PyQt6==6.6.1
 PyQt6-Qt6==6.6.1
 PyQt6-sip==13.6.0
 
-# Development Tools (separate file)
-# See requirements-dev.txt
+# Development & Training Tools (separate file)
+# See requirements-dev.txt (includes PyTorch, training utilities, and test suites)
 
 # Known Issues:
-# - EasyOCR requires CUDA 11.x for GPU support
 # - PyMuPDF may require additional system libraries on Linux
 # - ONNX Runtime GPU requires CUDA 11.x and cuDNN 8.x

@@ -149,3 +149,37 @@ def test_autocorrect_box_statistics_keeps_none_values():
     element = {"whisker_low": 1.0, "q1": None, "median": 3.0, "q3": 4.0, "whisker_high": 5.0}
     autocorrect_box_statistics(element)
     assert element["q1"] is None
+
+
+def test_issue_a_bar_schema_reads_bars():
+    from visual.data_tab_schema import _build_rows
+    result = {
+        "chart_type": "bar",
+        "bars": [{"confidence": 0.9, "value": 10.0}],
+        "elements": [],
+    }
+    rows = _build_rows(result, "bar")
+    assert len(rows) == 1
+    assert rows[0].values["value"] == 10.0
+
+
+def test_issue_h_x_order_tabulation():
+    from visual.data_tab_schema import _build_rows
+    result = {
+        "chart_type": "bar",
+        "bars": [
+            {"xyxy": [50, 10, 60, 20], "value": 2},
+            {"xyxy": [10, 10, 20, 20], "value": 1},
+        ],
+    }
+    rows = _build_rows(result, "bar")
+    assert rows[0].values["value"] == 1.0
+    assert rows[1].values["value"] == 2.0
+
+
+def test_issue_b_safe_float_non_ascii():
+    from visual.data_tab_schema import _safe_float
+    assert _safe_float("१२३") is not None
+    assert _safe_float("123.45") == 123.45
+    assert _safe_float(None) is None
+

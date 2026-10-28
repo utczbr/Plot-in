@@ -172,15 +172,6 @@ class TestConventionsAndFactory(_Quiet):
         _, _, _, r2 = RobustLinearEngine().fit_line(np.arange(5.0), np.full(5, 7.0), np.ones(5))
         self.assertEqual(r2, 0.0)
 
-    def test_factory_keeps_legacy_kwargs_working(self):
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter('always')
-            eng = CalibrationFactory.create('prosac', max_trials=500, lo_iters=2,
-                                            early_termination_ratio=0.85, convergence_threshold=1e-8)
-        self.assertIsInstance(eng, RobustSiegelCalibration)
-        with self.assertRaises(ValueError):
-            CalibrationFactory.create('fast', max_trials=1)
-
     def test_factory_creates_siegel_and_aliases(self):
         for alias in ('siegel', 'robust', 'Siegel (Robust)', 'PROSAC', 'Adaptive'):
             eng = CalibrationFactory.create(alias)

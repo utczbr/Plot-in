@@ -21,14 +21,6 @@ from visual.editor_toolbar import EditorToolbar  # noqa: E402
 from main_modern import ModernChartAnalysisApp  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 def test_editor_toolbar_chart_type_init_and_signals(qapp):
     toolbar = EditorToolbar()
     

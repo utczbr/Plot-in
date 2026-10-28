@@ -15,7 +15,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from extractors.base_extractor import BaseExtractor
-from extractors.series_linker import skeletonize_mask, fit_anchor_guided_curve
+from extractors.series_linker import (
+    skeletonize_mask,
+    fit_anchor_guided_curve,
+    find_skeleton_junctions,
+    estimate_endpoint_tangent_pca,
+    compute_cielab_color_distance,
+)
 from utils.geometry_utils import find_closest_element
 
 logger = logging.getLogger(__name__)
@@ -84,8 +90,33 @@ class LineSegExtractor(BaseExtractor):
             if len(skel_x) == 0:
                 continue
 
+            junctions, endpoints = find_skeleton_junctions(skel)
+
             # 2. Map skeleton coordinates to full image coordinates
             global_skel_pts = np.column_stack([skel_x + sx1, skel_y + sy1]).astype(float)
+
+            # Resolve multi-segment tracklets when endpoints > 2 (occlusion/branching)
+            endpoint_tangents = []
+            cielab_color_dist = None
+            if len(endpoints) > 2 and len(global_skel_pts) >= 2:
+                for ep in endpoints:
+                    g_ep = ep.astype(float) + np.array([sx1, sy1], dtype=float)
+                    tangent = estimate_endpoint_tangent_pca(global_skel_pts, g_ep)
+                    endpoint_tangents.append(tangent.tolist())
+
+                if img is not None and getattr(img, 'size', 0) > 0 and len(endpoints) >= 2:
+                    h_img, w_img = img.shape[:2]
+                    ep0_y = int(np.clip(endpoints[0][1] + sy1, 0, h_img - 1))
+                    ep0_x = int(np.clip(endpoints[0][0] + sx1, 0, w_img - 1))
+                    ep1_y = int(np.clip(endpoints[1][1] + sy1, 0, h_img - 1))
+                    ep1_x = int(np.clip(endpoints[1][0] + sx1, 0, w_img - 1))
+                    cielab_color_dist = compute_cielab_color_distance(
+                        img[ep0_y, ep0_x], img[ep1_y, ep1_x]
+                    )
+
+            # Record in input series_det dict as well
+            series_det['junction_count'] = int(len(junctions))
+            series_det['endpoint_count'] = int(len(endpoints))
 
             # 3. Anchor-Guided Spline Curve Fitting (w=1.0 for skel, w=50.0 for markers)
             curve_pts = fit_anchor_guided_curve(
@@ -99,11 +130,19 @@ class LineSegExtractor(BaseExtractor):
             if len(curve_pts) == 0:
                 continue
 
-            series_curves.append({
+            curve_metadata = {
                 'series_id': series_idx,
                 'confidence': conf,
                 'curve_pts': curve_pts,
-            })
+                'junction_count': int(len(junctions)),
+                'endpoint_count': int(len(endpoints)),
+            }
+            if endpoint_tangents:
+                curve_metadata['endpoint_tangents'] = endpoint_tangents
+            if cielab_color_dist is not None:
+                curve_metadata['cielab_color_dist'] = cielab_color_dist
+
+            series_curves.append(curve_metadata)
 
             # 4. Generate discrete data points from the continuous curve
             # If categorical X-axis labels exist, snap curve evaluation to label centers
@@ -131,19 +170,13 @@ class LineSegExtractor(BaseExtractor):
             for pt_idx, (px, py) in enumerate(sample_pts):
                 estimated_val = None
                 pixel_dist = 0
-                if scale_model is not None and baseline_coord is not None:
+                if baseline_coord is not None:
                     pixel_dist = abs(baseline_coord - py)
-                    try:
-                        val_center = float(scale_func(py))
-                        val_base = float(scale_func(baseline_coord))
-                        estimated_val = abs(val_base - val_center)
-                    except Exception:
-                        estimated_val = pixel_dist
-                elif scale_model is not None:
+                if scale_model is not None:
                     try:
                         estimated_val = float(scale_func(py))
                     except Exception:
-                        estimated_val = py
+                        estimated_val = pixel_dist if baseline_coord is not None else py
                 else:
                     estimated_val = py
 

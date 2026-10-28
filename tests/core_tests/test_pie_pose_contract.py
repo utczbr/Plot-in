@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from core.class_maps import CLASS_MAP_PIE_POSE, CLASS_MAP_PIE
-from core.config import MODELS_CONFIG
+from models.config import MODELS_CONFIG
 
 
 def test_pie_model_config_is_pose_with_5_keypoints():

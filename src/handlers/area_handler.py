@@ -10,7 +10,7 @@ per series relative to the baseline.
 """
 from typing import List, Dict
 
-from handlers.base_handler import CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
 
 

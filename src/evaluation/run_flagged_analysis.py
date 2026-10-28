@@ -61,7 +61,6 @@ def run_flagged_pipeline(
     output_dir: str,
     advanced_settings: Optional[Dict[str, Any]] = None,
     ocr_backend: str = 'Paddle',
-    ocr_accuracy: str = 'Optimized',
     calibration_method: str = 'siegel',
     models_dir: str = 'src/models',
     annotated: bool = False,
@@ -181,11 +180,6 @@ def main() -> int:
         help="OCR engine (Paddle or Paddle_docs)"
     )
     parser.add_argument(
-        "--ocr-accuracy", default="Optimized",
-        choices=["Fast", "Optimized", "Precise"],
-        help="OCR accuracy mode (legacy parameter, PaddleONNX used automatically)"
-    )
-    parser.add_argument(
         "--calibration", default="siegel",
         help="Calibration method (siegel, robust, fast, linear, prosac)"
     )
@@ -221,7 +215,6 @@ def main() -> int:
         output_dir=args.output,
         advanced_settings=advanced_settings or None,
         ocr_backend=args.ocr,
-        ocr_accuracy=args.ocr_accuracy,
         calibration_method=args.calibration,
         models_dir=args.models_dir,
         annotated=args.annotated,

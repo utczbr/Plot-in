@@ -7,6 +7,16 @@ import numpy as np
 from typing import Optional, Tuple
 
 
+_UNICODE_MINUS_TRANS = str.maketrans({
+    '\u2212': '-',  # Mathematical minus '−'
+    '\u2013': '-',  # En-dash '–'
+    '\u2014': '-',  # Em-dash '—'
+    '\u2015': '-',  # Horizontal bar '―'
+    '\ufe63': '-',  # Small hyphen-minus
+    '\uff0d': '-',  # Fullwidth hyphen-minus
+})
+
+
 class OCRValidator:
     """Context-aware OCR validation with optimized performance"""
     __slots__ = ('char_corrections', 'numeric_pattern', 'alpha_pattern', '_correction_trans', '_compiled_patterns')
@@ -54,7 +64,7 @@ class OCRValidator:
             return "", 0.0
 
         # Apply context-independent corrections first
-        cleaned = self._basic_cleaning(text)
+        cleaned = self._basic_cleaning(text, context_type)
 
         # Apply context-specific validation
         final_text, confidence = self._validate_by_context(cleaned, context_type, original_text)
@@ -65,16 +75,48 @@ class OCRValidator:
 
         return final_text.strip(), min(1.0, max(0.0, confidence))
 
-    def _basic_cleaning(self, text: str) -> str:
+    def _should_apply_digit_corrections(self, text: str) -> bool:
+        """Return True only when lookalike digit substitution won't corrupt words or category IDs."""
+        stripped = re.sub(r'[\s\$\%\€\£\+\-\.,]', '', text)
+        if not stripped:
+            return False
+        allowed_alpha = set(self.char_corrections.keys()) | {'e', 'E'}
+        if any(c.isalpha() and c not in allowed_alpha for c in stripped):
+            return False
+        if all(c.isalpha() or c == '|' for c in stripped):
+            return len(stripped) == 1 and stripped in ('O', 'o', 'I', 'l', '|')
+        if re.match(r'^[BSZbsz]\d+$', stripped):
+            return False
+        return True
+
+    def _basic_cleaning(self, text: str, context_type: str = 'default') -> str:
         """Apply general OCR corrections."""
-        # Apply character substitutions using translation table (fastest method)
-        corrected = text.translate(self._correction_trans)
+        normalized = text.translate(_UNICODE_MINUS_TRANS)
+        # Apply digit substitutions unconditionally for 'scale', and selectively for mixed contexts
+        if context_type == 'scale':
+            corrected = normalized.translate(self._correction_trans)
+        elif (
+            context_type not in ('title', 'chart_title', 'axis_title', 'legend')
+            and self._should_apply_digit_corrections(normalized)
+        ):
+            corrected = normalized.translate(self._correction_trans)
+        else:
+            corrected = normalized
         
         # Remove excessive whitespace
         corrected = re.sub(r'\s+', ' ', corrected).strip()
         
         # Remove invalid characters at start/end that are common OCR errors (preserving currency and percent)
+        before_strip = corrected
         corrected = re.sub(r'^[^\w\s\-\_\.\$\%\€\£]+|[^\w\s\-\_\.\$\%\€\£]+$', '', corrected).strip()
+
+        # Restore a closing bracket that balances an unmatched opener (e.g. "Time (s)")
+        for opener, closer in (('(', ')'), ('[', ']')):
+            if (
+                before_strip.endswith(closer)
+                and corrected.count(opener) > corrected.count(closer)
+            ):
+                corrected += closer
         
         return corrected
 
@@ -82,9 +124,9 @@ class OCRValidator:
         """Apply context-specific validation and confidence scoring."""
         if context_type == 'scale':
             return self._validate_scale(text, original)
-        elif context_type == 'title':
+        elif context_type in ('title', 'chart_title', 'axis_title', 'legend'):
             return self._validate_title(text)
-        elif context_type == 'tick':
+        elif context_type in ('tick', 'tick_label', 'axis_labels', 'axis_label', 'data_label'):
             return self._validate_tick(text, original)
         else:
             return self._validate_default(text)
@@ -191,86 +233,116 @@ class OCRValidator:
         
         return combined_confidence
 
-    def validate_numeric(self, text: str, context: str = None, min_confidence: float = 0.5) -> tuple:
-        """Validate if text is numeric based on content."""
+    def validate_numeric(
+        self,
+        text: str,
+        expected_range: Optional[Tuple[float, float]] = None,
+        context: str = 'scale',
+        min_confidence: float = 0.5,
+    ) -> Tuple[Optional[float], float]:
+        """Validate and clean numeric OCR result with optimized processing."""
         if not text:
-            return "", 0.0
-        
-        # Clean the text first
-        cleaned = self._basic_cleaning(text)
-        
-        # Check if it's mostly numeric
-        numeric_chars = sum(c.isdigit() or c in '.,+-eE%' for c in cleaned)
-        total_chars = len(cleaned)
-        
-        if total_chars == 0:
-            return "", 0.0
-            
-        numeric_ratio = numeric_chars / total_chars
-        confidence = numeric_ratio if numeric_ratio >= min_confidence else 0.0
-        return cleaned, confidence
+            return None, 0.0
 
-    def validate_alphanumeric(self, text: str, context: str = None, min_confidence: float = 0.5) -> tuple:
-        """Validate if text is alphanumeric based on content."""
+        text = text.strip()
         if not text:
-            return "", 0.0
-        
-        clean_text = text.strip()
-        if len(clean_text) == 0:
-            return "", 0.0
-            
-        alphanumeric_chars = sum(c.isalnum() or c.isspace() for c in clean_text)
-        total_chars = len(clean_text)
-        
-        if total_chars == 0:
-            return "", 0.0
-            
-        alphanumeric_ratio = alphanumeric_chars / total_chars
-        confidence = alphanumeric_ratio if alphanumeric_ratio >= min_confidence else 0.0
-        return clean_text, confidence
+            return None, 0.0
 
-    def clean_numeric(self, text: str, context: str = None) -> tuple:
-        """Clean text for numeric validation."""
-        if not text:
-            return "", 0.0
-        
-        # Remove common non-numeric characters that might be around numbers
-        cleaned = re.sub(r'[^\d.,+\-*/=%<>{}[\]()\s]', '', text)
-        cleaned = cleaned.strip()
-        
-        # Calculate confidence based on how much of the original text remains after cleaning
-        if len(text) > 0:
-            confidence = len(cleaned) / len(text)  # How much of original text survived cleaning
+        original_text = text
+        text = text.translate(_UNICODE_MINUS_TRANS).replace(' ', '').replace('\n', '')
+        if ',' in text and '.' not in text:
+            if re.match(r'^[-+]?\d{1,3}(?:,\d{3})+%?$', text):
+                text = text.replace(',', '')
+            elif text.count(',') == 1:
+                text = text.replace(',', '.')
+            else:
+                text = text.replace(',', '')
         else:
-            confidence = 0.0
-            
-        return cleaned, confidence
+            text = text.replace(',', '')
+        corrected = text.translate(self._correction_trans)
 
-    def validate_range(self, text: str, context: str = None, min_val: float = None, max_val: float = None) -> tuple:
-        """Validate if numeric text is within a specified range."""
+        value = self._parse_number(corrected)
+        if value is None:
+            value = self._fuzzy_parse(original_text)
+            if value is None:
+                return None, 0.0
+
+        confidence = self._compute_confidence(
+            original_text, corrected, value, expected_range, context
+        )
+        return value, confidence
+
+    def _parse_number(self, text: str) -> Optional[float]:
+        """Parse cleaned text to number - fast path."""
         if not text:
-            return text, 0.0
-            
+            return None
+
+        is_percentage = text.endswith('%')
+        if is_percentage:
+            text = text[:-1]
+
         try:
-            # Clean the text to extract numeric value
-            clean_num, _ = self.clean_numeric(text)
-            if not clean_num:
-                return text, 0.0
-                
-            # Extract first number from the text
-            numbers = re.findall(r'-?\d+\.?\d*', clean_num)
-            if not numbers:
-                return text, 0.0
-                
-            num = float(numbers[0])
-            
-            in_range = True
-            if min_val is not None and num < min_val:
-                in_range = False
-            if max_val is not None and num > max_val:
-                in_range = False
-                
-            confidence = 1.0 if in_range else 0.0
-            return text, confidence
-        except (ValueError, IndexError):
-            return text, 0.0
+            value = float(text)
+            return value / 100.0 if is_percentage else value
+        except ValueError:
+            return None
+
+    def _fuzzy_parse(self, text: str) -> Optional[float]:
+        """Fuzzy parsing by extracting digits - optimized regex."""
+        digit_parts = re.findall(r'\d+', text)
+        if not digit_parts:
+            return None
+
+        reconstructed = ''.join(digit_parts)
+        if 0 < len(reconstructed) <= 10:
+            try:
+                return float(reconstructed)
+            except ValueError:
+                pass
+
+        return None
+
+    def _compute_confidence(
+        self,
+        original: str,
+        corrected: str,
+        value: float,
+        expected_range: Optional[Tuple[float, float]],
+        context: str,
+    ) -> float:
+        """Compute confidence score with optimized calculations."""
+        score = 1.0
+
+        if original != corrected:
+            set_orig = set(original)
+            set_corr = set(corrected)
+            intersection = len(set_orig & set_corr)
+            union = max(len(original), len(corrected))
+            similarity = intersection / union if union > 0 else 0
+            score *= (0.7 + 0.3 * similarity)
+
+        if not self.numeric_pattern.match(corrected):
+            score *= 0.8
+
+        if expected_range is not None:
+            min_val, max_val = expected_range
+            if value < min_val or value > max_val:
+                range_span = max_val - min_val + 1e-6
+                distance_ratio = min(
+                    abs(value - min_val) / range_span,
+                    abs(value - max_val) / range_span,
+                )
+                score *= np.exp(-distance_ratio)
+
+        if context == 'scale':
+            abs_val = abs(value)
+            if abs_val > 1e6:
+                score *= 0.7
+            elif abs_val < 1e-3 and value != 0:
+                score *= 0.8
+
+        orig_len = len(original)
+        if orig_len < 1 or orig_len > 12:
+            score *= 0.7
+
+        return float(np.clip(score, 0.0, 1.0))

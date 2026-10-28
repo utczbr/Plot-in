@@ -10,7 +10,7 @@ This README is for engineers and agent contributors working on runtime behavior,
 - Input modes: image file, PDF file, image directory, PDF directory, mixed directory
 - Core flow: `analysis.py` (`plotin` CLI) / GUI (`plotin-gui`) -> `ChartAnalysisPipeline` -> `ChartAnalysisOrchestrator` -> chart handlers -> extractors
 - Handler hierarchy: `CartesianExtractionHandler` (bar, line, scatter, box, histogram, area), `GridChartHandler` (heatmap), `PolarChartHandler` (pie)
-- Strategic roadmap: `src/Critic.md` — SOTA transition strategy with prioritized extractor upgrades
+- Strategic roadmap: `src/docs/Critic.md` — SOTA transition strategy with prioritized extractor upgrades
 - Protocol flow: pipeline result -> protocol row builder -> protocol CSV export -> protocol validation harness
 
 ## Entrypoints
@@ -203,7 +203,7 @@ python3 -m pytest tests/strategies_tests/test_router.py
 ### Extractor-Level (Partially Resolved)
 9. ⚠️ **Bar association upgrades are partially active**: GMM layout detection path is available (`bar_layout_detection='gmm'`), while the metric-learning path (`bar_association_mode='metric_learning'`) depends on trained `.npz` weights from `src/evaluation/train_bar_label_model.py`; heuristic path remains default/fallback.
 10. ✅ **Pie keypoint geometry path is active**: `src/handlers/pie_handler.py` uses boundary keypoints with RANSAC circle fitting, max-gap span estimation, data-label parsing/override, and sum-to-one normalization.
-11. ⚠️ **Heatmap CIELAB spline mapping is implemented but opt-in**: `src/services/color_mapping_service.py` supports `heatmap_color_mode='lab_spline'`, while default runtime behavior remains legacy color mapping.
+11. ⚠️ **Heatmap CIELAB spline mapping is implemented but opt-in**: `src/services/heatmap/color_mapping_service.py` supports `heatmap_color_mode='lab_spline'`, while default runtime behavior remains legacy color mapping.
 12. ❌ **Trivial calibration warning is not emitted in active code**: `diagnostics['calibration_trivial']` is not currently produced by the calibration/handler runtime path.
 13. ✅ **Unicode minus and percentage parsing is active for pie labels**: `_parse_data_label()` in `src/handlers/pie_handler.py` handles `"25%"`, `"0.25"`, and Unicode minus (U+2212). Locale-specific thousand separators remain unhandled for other chart types.
 
@@ -215,8 +215,8 @@ python3 -m pytest tests/strategies_tests/test_router.py
 - Heatmap: label anchor monotonicity validation.
 - Bar metric-learning model (`bar_label_model.py`) requires a trained `.npz` weight file — falls back to heuristic until weights are produced by `src/evaluation/train_bar_label_model.py`.
 
-See `src/Critic.md` for the full prioritized upgrade roadmap (P0–P3) with effort estimates and file paths.
-See `src/SOTA_Blueprint.md` for the mathematical specification and file-by-file engineering plan (Sections 1–5).
+See `src/docs/Critic.md` for the full prioritized upgrade roadmap (P0–P3) with effort estimates and file paths.
+See `src/docs/context.md` and `src/docs/RD_NOTES.md` for the current architectural status and mathematical research notes.
 
 ## Troubleshooting
 

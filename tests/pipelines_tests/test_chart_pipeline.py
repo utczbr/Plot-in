@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 sys.path.append('src')
 
-# Mock CV2 before import
-sys.modules['cv2'] = MagicMock()
-sys.modules['onnxruntime'] = MagicMock()
+# Mock CV2 before import only if not installed
+sys.modules.setdefault('cv2', MagicMock())
+sys.modules.setdefault('onnxruntime', MagicMock())
 sys.modules.setdefault('sklearn', MagicMock())
 sys.modules.setdefault('sklearn.cluster', MagicMock())
 sys.modules.setdefault('sklearn.metrics', MagicMock())
@@ -118,6 +118,48 @@ class TestChartPipeline(unittest.TestCase):
         _args, kwargs = mock_inference.call_args
         self.assertEqual(kwargs.get('model_output_type'), 'bbox')
         self.assertIsNone(kwargs.get('expected_keypoints'))
+
+    def test_issue_c_process_ocr_reads_chart_title(self):
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        detections = {'chart_title': [{'xyxy': [0, 0, 10, 10]}]}
+        self.pipeline.ocr_engine.process_batch.return_value = [{"text": "MockTitle", "confidence": 0.99}]
+        self.pipeline._process_ocr(img, detections)
+        self.assertEqual(len(detections.get('chart_title', [])), 1)
+        self.assertEqual(detections['chart_title'][0]['text'], "MockTitle")
+        self.assertEqual(detections['chart_title'][0]['ocr_source'], "chart_title")
+
+    def test_issue_d_process_ocr_reads_legend(self):
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        detections = {'legend': [{'xyxy': [0, 0, 10, 10]}]}
+        self.pipeline.ocr_engine.process_batch.return_value = [{"text": "LegendA", "confidence": 0.99}]
+        self.pipeline._process_ocr(img, detections)
+        self.assertEqual(len(detections.get('legend', [])), 1)
+        self.assertEqual(detections['legend'][0]['text'], "LegendA")
+        self.assertEqual(detections['legend'][0]['ocr_source'], "legend")
+
+    def test_issue_e_legend_misclassified_as_title(self):
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        self.pipeline.models_manager.get_model.return_value = MagicMock()
+        with patch('pipelines.chart_pipeline.run_inference_on_image') as mock_run:
+            mock_run.return_value = [
+                {'xyxy': [50, 10, 950, 40], 'cls': 0},
+                {'xyxy': [800, 100, 900, 300], 'cls': 1},
+            ]
+            with patch('pipelines.chart_pipeline.get_class_map') as mock_map:
+                mock_map.return_value = {0: 'chart_title', 1: 'legend'}
+                organized = self.pipeline._detect_elements(img, 'bar')
+                self.assertEqual(len(organized['chart_title']), 1)
+                self.assertEqual(organized['chart_title'][0]['xyxy'], [50, 10, 950, 40])
+                self.assertEqual(len(organized['legend']), 1)
+                self.assertEqual(organized['legend'][0]['xyxy'], [800, 100, 900, 300])
+
+    def test_classify_chart_types_error_fallback_to_unknown(self):
+        self.mock_models.get_model.side_effect = RuntimeError("Models not loaded")
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        types, top_conf = self.pipeline._classify_chart_types(img)
+        self.assertEqual(types, ['unknown'])
+        self.assertEqual(top_conf, 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

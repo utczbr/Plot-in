@@ -99,16 +99,6 @@ class AxisLabelInterpolator:
         )
         return result
 
-    def classify_sequence(
-        self,
-        valid_indices: List[int],
-        valid_values: List[float],
-    ) -> Dict:
-        """Public wrapper — returns classification dict for diagnostics."""
-        V = np.array(valid_values, dtype=float)
-        K = np.array(valid_indices, dtype=int)
-        return self._classify_sequence(K, V)
-
     # ── Core classification ───────────────────────────────────────────────────
 
     def _classify_sequence(self, K: np.ndarray, V: np.ndarray) -> Dict:

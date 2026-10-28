@@ -62,7 +62,7 @@ flowchart LR
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/utcz/Plot-in.git
+   git clone https://github.com/utczbr/Plot-in.git
    cd Plot-in
    ```
 
@@ -74,7 +74,7 @@ flowchart LR
 
 3. **Fetch Required ONNX Models**:
    ```bash
-   python install.py --download-models
+   python scripts/fetch_models.py
    ```
 
 ---
@@ -87,10 +87,10 @@ Extract data from a single image or directory of images/PDFs:
 
 ```bash
 # Analyze a single chart image
-plotin --input path/to/chart.png --output-dir output/
+plotin --input path/to/chart.png --output output/
 
 # Batch process a folder of PDFs with explicit backend selection
-plotin --input path/to/document.pdf --ocr-backend Paddle --output-dir output/
+plotin --input path/to/document.pdf --ocr Paddle --output output/
 ```
 
 ### Graphical User Interface (GUI)
@@ -148,9 +148,9 @@ Run the full automated test suite (290+ tests):
 PYTHONPATH=src:shared pytest tests/ -v
 ```
 
-Check configuration and path integrity:
+Check installer and configuration integrity:
 ```bash
-python install.py --check-environment
+PYTHONPATH=src:shared pytest tests/installer_tests/ -v
 ```
 
 ---

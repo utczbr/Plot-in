@@ -43,19 +43,18 @@ class LineExtractor(BaseExtractor):
             estimated_value = None
             pixel_distance = 0
 
-            if scale_model is not None and baseline_coord is not None:
-                pixel_distance = abs(baseline_coord - y_center)
+            if scale_model is not None:
+                if baseline_coord is not None:
+                    pixel_distance = abs(baseline_coord - y_center)
                 try:
-                    value_at_center = float(scale_func(y_center))
-                    value_at_baseline = float(scale_func(baseline_coord))
-                    estimated_value = abs(value_at_baseline - value_at_center)
+                    estimated_value = float(scale_func(y_center))
                 except Exception as e:
                     logging.warning(f"Scale model failed for line point: {e}")
-                    estimated_value = pixel_distance
+                    estimated_value = pixel_distance if baseline_coord is not None else y_center
             else:
                 if baseline_coord is not None:
                     pixel_distance = abs(baseline_coord - y_center)
-                estimated_value = pixel_distance
+                estimated_value = pixel_distance if baseline_coord is not None else y_center
 
             point_info = {
                 'index': i,

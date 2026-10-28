@@ -1,4 +1,3 @@
-
 # Python
 __pycache__/
 *.py[cod]
@@ -36,27 +35,37 @@ ENV/
 .idea/
 .vscode/
 
-# Project specific
+# Project configuration (local runtime overrides)
 config/gui_config.json
-#docs/
 models/
 src/models/
 runs/
 *.log
 Backup/
-#tests/*
-#!tests/core_tests/
-#tests/core_tests/*
-#!tests/core_tests/test_main_bootstrap_logging.py
-#!tests/core_tests/test_main_bootstrap_pyqt.py
-#!tests/installer_tests/
-#tests/installer_tests/*
-#!tests/installer_tests/test_install_ui_modes.py
-#!tests/installer_tests/test_build_executables.py
-#!tests/installer_tests/test_dependency_resolution.py
+
+# Outputs & Generated Dumps
 output/
+/output/
+src/images/out/
 *_annotated.png
 *_analysis.json
+*_edited_detections.json
+detections_summary.json
+lylaa_hypertuning_results.json
+
+# Caches & Test Artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Top-level generated benchmarks & local notebooks
+/reports/
+/notebooks/
+
+# Ephemeral & Reference docs
 installer/CROSS_PLATFORM_COMPATIBILITY_ANALYSIS.md
 src/Critic.md
 src/verify_histogram_classifier.py
@@ -74,3 +83,7 @@ src/docs/SOTA_Phase1_validation.md
 src/docs/SOTA.md
 .agents/
 graphify-out/
+
+# OS files
+.DS_Store
+Thumbs.db

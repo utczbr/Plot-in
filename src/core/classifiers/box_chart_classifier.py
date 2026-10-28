@@ -497,10 +497,3 @@ class BoxChartClassifier(BaseChartClassifier):
             scale_labels=[], tick_labels=[], axis_titles=[],
             confidence=0.0, metadata={'error': 'Invalid input'}
         )
-    
-    def compute_feature_scores(self, label_features: Dict, region_scores: Dict, element_context: Optional[Dict]) -> Dict[str, float]:
-        """
-        This is a placeholder to satisfy the abstract method requirement.
-        The main logic is in _compute_box_scores.
-        """
-        return self._compute_box_scores(label_features, element_context, element_context.get('orientation', Orientation.VERTICAL))

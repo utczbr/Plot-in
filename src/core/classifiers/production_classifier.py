@@ -2,7 +2,6 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
-import time
 
 from .bar_chart_classifier import BarChartClassifier
 from .line_chart_classifier import LineChartClassifier
@@ -35,16 +34,9 @@ class ProductionSpatialClassifier:
     def __init__(
         self,
         hyperparams_path: Optional[Path] = None,
-        enable_profiling: bool = False
     ):
-        self.enable_profiling = enable_profiling
-        self.performance_stats = {}
-        
         # Load hypertuned parameters
         self.hyperparams = self._load_hyperparameters(hyperparams_path)
-        
-        # Initialize classifiers (lazy loading)
-        self._classifiers = {}
         
         logger.info("ProductionSpatialClassifier initialized")
         if hyperparams_path and hyperparams_path.exists():
@@ -76,9 +68,6 @@ class ProductionSpatialClassifier:
         Returns:
             ClassificationResult with labeled elements and metadata
         """
-        
-        start_time = time.time()
-        
         # Select parameters based on confidence
         params = self._select_parameters(chart_type, classification_confidence)
         
@@ -86,20 +75,13 @@ class ProductionSpatialClassifier:
         classifier = self._get_classifier(chart_type, params)
         
         # Run classification
-        result = classifier.classify(
+        return classifier.classify(
             axis_labels=axis_labels,
             chart_elements=chart_elements,
             img_width=img_width,
             img_height=img_height,
             orientation=orientation
         )
-        
-        # Update performance stats
-        if self.enable_profiling:
-            elapsed = time.time() - start_time
-            self._update_stats(chart_type, elapsed, result)
-        
-        return result
     
     def _load_hyperparameters(self, path: Optional[Path]) -> Dict:
         """Load hypertuned parameters from JSON"""
@@ -165,6 +147,7 @@ class ProductionSpatialClassifier:
         return {
             'bar': {**default, **BarChartClassifier.get_default_params()},
             'line': {**default, **LineChartClassifier.get_default_params()},
+            'area': {**default, **LineChartClassifier.get_default_params()},
             'scatter': {**default, **ScatterChartClassifier.get_default_params()},
             'box': {**default, **BoxChartClassifier.get_default_params()},
             'histogram': {**default, **HistogramChartClassifier.get_default_params()},
@@ -205,6 +188,7 @@ class ProductionSpatialClassifier:
         classifier_map = {
             'bar': BarChartClassifier,
             'line': LineChartClassifier,
+            'area': LineChartClassifier,
             'scatter': ScatterChartClassifier,
             'box': BoxChartClassifier,
             'histogram': HistogramChartClassifier,
@@ -220,43 +204,4 @@ class ProductionSpatialClassifier:
         
         # Create new instance with parameters
         return classifier_class(params, logger)
-    
-    def _update_stats(
-        self,
-        chart_type: str,
-        elapsed: float,
-        result: ClassificationResult
-    ):
-        """Update performance statistics"""
-        
-        if chart_type not in self.performance_stats:
-            self.performance_stats[chart_type] = {
-                'count': 0,
-                'total_time': 0.0,
-                'avg_time': 0.0,
-                'avg_confidence': 0.0
-            }
-        
-        stats = self.performance_stats[chart_type]
-        stats['count'] += 1
-        stats['total_time'] += elapsed
-        stats['avg_time'] = stats['total_time'] / stats['count']
-        
-        # Running average of confidence
-        n = stats['count']
-        stats['avg_confidence'] = (
-            (stats['avg_confidence'] * (n - 1) + result.confidence) / n
-        )
-    
-    def get_performance_report(self) -> Dict:
-        """Generate performance report"""
-        
-        if not self.enable_profiling:
-            return {'profiling_disabled': True}
-        
-        return {
-            'per_chart_type': self.performance_stats,
-            'total_classifications': sum(
-                s['count'] for s in self.performance_stats.values()
-            )
-        }
+

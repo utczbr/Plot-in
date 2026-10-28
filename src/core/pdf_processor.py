@@ -72,69 +72,6 @@ def open_pdf_document(pdf_path: Path):
 
 # --- Funções Otimizadas ---
 
-def extract_charts_from_pdf_optimized(
-    pdf_path: Path, 
-    output_dir: Path, 
-    min_width: int = 300, 
-    min_height: int = 200
-) -> List[dict]:
-    """
-    Args:
-        pdf_path: Caminho para o arquivo PDF
-        output_dir: Diretório onde salvar as imagens extraídas
-        min_width: Largura mínima para considerar como gráfico (pixels)
-        min_height: Altura mínima para considerar como gráfico (pixels)
-    
-    Returns:
-        List[dict]: Lista de dicionários com informações dos gráficos extraídos
-        [
-            {
-                'page_num': int,
-                'image_index': int,
-                'file_path': Path,
-                'dimensions': tuple,
-                'pdf_rect': fitz.Rect,
-                'extraction_method': str
-            }
-        ]
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    extracted_charts = []
-    
-    with open_pdf_document(pdf_path) as doc:
-        logger.info(f"PDF has {doc.page_count} pages")
-        
-        for page_num in range(doc.page_count):
-            try:
-                page = doc[page_num]
-                logger.debug(f"Analyzing page {page_num + 1}/{doc.page_count}")
-                
-                # Extrair imagens da página atual
-                page_charts = _extract_images_from_page_optimized(
-                    page, 
-                    page_num, 
-                    pdf_path.stem, 
-                    output_dir, 
-                    min_width, 
-                    min_height
-                )
-                
-                extracted_charts.extend(page_charts)
-                
-                if page_charts:
-                    logger.info(f"Page {page_num + 1}: {len(page_charts)} chart(s) extracted")
-                else:
-                    logger.debug(f"Page {page_num + 1}: No charts found")
-                    
-            except Exception as e:
-                logger.error(f"Error processing page {page_num + 1}: {e}")
-                continue
-    
-    logger.info(f"Extraction complete: {len(extracted_charts)} chart(s) extracted from {pdf_path.name}")
-    return extracted_charts
-
 
 def _render_page_as_image_array(page: fitz.Page, dpi: int = 200) -> Optional[np.ndarray]:
     """Render a page straight into a BGR numpy array — no disk round-trip."""
@@ -152,63 +89,6 @@ def _render_page_as_image_array(page: fitz.Page, dpi: int = 200) -> Optional[np.
         return bgr.copy()
     except Exception as exc:
         logger.error(f"In-memory render failed: {exc}")
-        return None
-
-
-def _render_page_as_image(
-    page: fitz.Page,
-    page_num: int,
-    pdf_stem: str,
-    output_dir: Path,
-    dpi: int = 200,
-) -> Optional[dict]:
-    """
-    Render an entire PDF page as a PNG image at the given DPI.
-
-    This is the primary extraction method for vector-based charts (matplotlib,
-    R, LaTeX, Word exports etc.) that contain no embedded raster images.
-
-    Args:
-        page:       fitz.Page object (0-indexed page already selected)
-        page_num:   0-indexed page number (for filename/logging)
-        pdf_stem:   PDF filename stem (no extension)
-        output_dir: Directory where the PNG will be saved
-        dpi:        Rendering resolution (200 DPI is a good balance of
-                    quality vs. file size for analysis)
-
-    Returns:
-        dict with chart_info keys, or None if rendering failed.
-    """
-    try:
-        zoom = dpi / 72.0
-        matrix = fitz.Matrix(zoom, zoom)
-        pixmap = page.get_pixmap(matrix=matrix)
-
-        filename = f"{pdf_stem}_page{page_num + 1:02d}_fullpage.png"
-        file_path = output_dir / filename
-        pixmap.save(str(file_path))
-        w, h = pixmap.width, pixmap.height
-        del pixmap
-
-        if not file_path.exists() or file_path.stat().st_size == 0:
-            logger.error(
-                f"Full-page render for page {page_num + 1} did not produce a "
-                f"valid file at {file_path}. Skipping this page."
-            )
-            return None
-
-        logger.info(f"Full-page render saved: {filename} ({w}x{h}px @ {dpi} DPI)")
-        return {
-            'page_num': page_num + 1,
-            'image_index': 1,
-            'file_path': file_path,
-            'high_res_path': file_path,   # already final quality — no re-render needed
-            'dimensions': (w, h),
-            'pdf_rect': page.rect,
-            'extraction_method': 'full_page_render',
-        }
-    except Exception as exc:
-        logger.error(f"Full-page render failed for page {page_num + 1}: {exc}")
         return None
 
 
@@ -567,86 +447,6 @@ def _find_chart_regions_cv2(
     return candidates
 
 
-
-def rerender_chart_at_high_res_optimized(
-    pdf_path: Path, 
-    page_num: int, 
-    chart_rect: fitz.Rect, 
-    output_path: Path, 
-    dpi: int = 300
-) -> Optional[Path]:
-    """
-    Renderiza um gráfico específico em alta resolução.
-    
-    Args:
-        pdf_path: Caminho do PDF
-        page_num: Número da página (1-based)
-        chart_rect: Retângulo do gráfico na página
-        output_path: Onde salvar a imagem renderizada
-        dpi: Resolução de renderização
-    
-    Returns:
-        Path do arquivo salvo ou None se falhar
-    """
-    # Validar parâmetros
-    if not pdf_path.exists():
-        logger.error(f"PDF not found: {pdf_path}")
-        return None
-    
-    if page_num < 1:
-        logger.error(f"Invalid page number: {page_num} (must be >= 1)")
-        return None
-    
-    if dpi < 72 or dpi > 600:
-        logger.warning(f"Unusual DPI: {dpi}. Recommended: 150-300")
-    
-    try:
-        with open_pdf_document(pdf_path) as doc:
-            if page_num > doc.page_count:
-                logger.error(f"Page {page_num} does not exist (PDF has {doc.page_count} pages)")
-                return None
-            
-            page = doc[page_num - 1]  # Converter para 0-indexed
-            
-            # Calcular matriz de transformação para o DPI desejado
-            zoom_factor = dpi / 72.0  # 72 DPI é o padrão
-            matrix = fitz.Matrix(zoom_factor, zoom_factor)
-            
-            logger.info(f"Rendering page {page_num} at {dpi} DPI (zoom: {zoom_factor:.2f}x)")
-            
-            # Renderizar apenas a área especificada com margem de padding (25pt)
-            if chart_rect and not chart_rect.is_empty:
-                pad = 25.0
-                padded_rect = fitz.Rect(
-                    max(0, chart_rect.x0 - pad),
-                    max(0, chart_rect.y0 - pad),
-                    min(page.rect.width, chart_rect.x1 + pad),
-                    min(page.rect.height, chart_rect.y1 + pad),
-                )
-                logger.debug(f"Specific area with padding: {padded_rect}")
-                pixmap = page.get_pixmap(matrix=matrix, clip=padded_rect, alpha=False)
-            else:
-                # Renderizar página inteira
-                logger.debug("Rendering full page")
-                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-            
-            # Salvar a imagem
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            pixmap_width, pixmap_height = pixmap.width, pixmap.height
-            pixmap.save(str(output_path))
-            del pixmap
-
-            logger.info(f"Rendered image saved: {output_path.name} ({pixmap_width}x{pixmap_height}px)")
-            return output_path
-            
-    except Exception as e:
-        logger.error(f"Error rendering: {e}")
-        return None
-
-
-
 _model_inference_lock = threading.Lock()
 
 
@@ -794,19 +594,6 @@ def _save_processing_metadata(processed_charts: List[dict], output_dir: Path, pd
         
     except Exception as e:
         logger.warning(f"Could not save metadata: {e}")
-
-
-def extract_charts_with_doclayout(pdf_path: Path, output_dir: Path, model_path: str, figure_class_id: int = 3):
-    """Deprecated legacy compatibility function."""
-    try:
-        from doclayout_yolo import YOLOv10
-    except (ImportError, ModuleNotFoundError) as exc:
-        logger.warning(
-            "DocLayout extraction unavailable (missing optional dependency 'doclayout_yolo'): %s",
-            exc,
-        )
-    logger.warning("extract_charts_with_doclayout is deprecated; use process_pdf_charts_optimized.")
-    return []
 
 
 # --- Função Principal para Testes ---

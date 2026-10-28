@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 
 from .base_classifier import BaseChartClassifier, ClassificationResult
-from utils.validation_utils import is_numeric
+from utils.validation_utils import clean_numeric_text, is_numeric
 from services.orientation_service import Orientation
 
 class ScatterChartClassifier(BaseChartClassifier):
@@ -79,11 +79,11 @@ class ScatterChartClassifier(BaseChartClassifier):
             
             if scores[best_class] > threshold:
                 if best_class == 'scale_label' and feat['is_numeric']:
-                    try:
-                        numeric_val = float(feat['text'].replace(',', '').replace('%', ''))
+                    numeric_val = clean_numeric_text(feat.get('text'))
+                    if numeric_val is not None:
                         feat['label']['cleaned_value'] = numeric_val
                         classified[best_class].append(feat['label'])
-                    except:
+                    else:
                         classified['axis_title'].append(feat['label'])
                 else:
                     classified[best_class].append(feat['label'])
@@ -488,10 +488,3 @@ class ScatterChartClassifier(BaseChartClassifier):
             scale_labels=[], tick_labels=[], axis_titles=[],
             confidence=0.0, metadata={'error': 'Invalid input'}
         )
-
-    def compute_feature_scores(self, label_features: Dict, region_scores: Dict, element_context: Optional[Dict]) -> Dict[str, float]:
-        """
-        This is a placeholder to satisfy the abstract method requirement.
-        The main logic is in _compute_scatter_scores.
-        """
-        return self._compute_scatter_scores(label_features, element_context)

@@ -16,10 +16,9 @@ class TestOCRTabBuilder(unittest.TestCase):
         records = categorize_ocr_records(result)
         self.assertEqual(len(records["chart_title"]), 1)
         self.assertEqual(records["chart_title"][0][0]["text"], "Sample Bar Chart")
-        self.assertEqual(len(records["scale_label"]), 1)
+        self.assertEqual(len(records["axis_labels"]), 2)
         self.assertEqual(records["scale_label"][0][0]["text"], "10")
-        self.assertEqual(len(records["tick_label"]), 1)
-        self.assertEqual(records["tick_label"][0][0]["text"], "Category A")
+        self.assertEqual(records["tick_label"][1][0]["text"], "Category A")
 
     def test_categorize_empty_result(self):
         records = categorize_ocr_records({})

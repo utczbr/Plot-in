@@ -14,7 +14,7 @@ sys.modules.setdefault('sklearn.metrics', MagicMock())
 sys.modules.setdefault('sklearn.ensemble', MagicMock())
 sys.modules.setdefault('sklearn.preprocessing', MagicMock())
 
-from handlers.base_handler import CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
 from handlers.bar_handler import BarHandler
 from handlers.line_handler import LineHandler
 from handlers.scatter_handler import ScatterHandler

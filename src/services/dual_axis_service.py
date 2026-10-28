@@ -9,10 +9,11 @@ This service consolidates the duplicated logic from:
 It provides unified dual-axis detection with consistent results.
 """
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import Callable, List, Dict, Optional, Tuple
 import numpy as np
 from sklearn.cluster import KMeans
 
+from core.baseline.clustering import Clusterer
 from services.orientation_service import Orientation
 
 @dataclass
@@ -42,7 +43,7 @@ class DualAxisDetectionService:
     """
     
     def __init__(self, 
-                 clusterer_factory=None,
+                 clusterer_factory: Optional[Callable[..., Clusterer]] = None,
                  min_separation_ratio: float = 0.30,
                  min_balance: float = 0.35):
         """
@@ -162,14 +163,14 @@ class DualAxisDetectionService:
             ]).reshape(-1, 1)
             threshold = self.min_sep_ratio * h
         
-        if len(coords) < 2:
+        if len(coords) < 2 or float(np.ptp(coords)) <= threshold:
             return DualAxisDecision(
                 has_dual_axis=False,
                 primary_labels=axis_labels,
                 secondary_labels=[],
-                separation_px=0.0,
-                confidence=0.5,
-                method='insufficient_data',
+                separation_px=float(np.ptp(coords)) if len(coords) >= 2 else 0.0,
+                confidence=0.8 if len(coords) >= 2 else 0.5,
+                method='single_edge_span' if len(coords) >= 2 else 'insufficient_data',
                 diagnostics={}
             )
         
@@ -186,10 +187,13 @@ class DualAxisDetectionService:
         n1 = int(np.sum(labels == 1))
         balance = 1.0 - abs(n0 - n1) / float(max(n0 + n1, 1))
         
-        # Edge proximity scores
+        # Edge proximity scores: evaluate left/top cluster against 0.0 and right/bottom cluster against 1.0
         low_edge, high_edge = (0.0, float(w)) if orientation == Orientation.VERTICAL else (0.0, float(h))
-        low_score = float(np.mean(np.exp(-(centers / high_edge - 0.0) / 0.08)))
-        high_score = float(np.mean(np.exp(-(1.0 - centers / high_edge) / 0.08)))
+        denom = max(high_edge, 1.0)
+        c_min_rel = float(np.min(centers) / denom)
+        c_max_rel = float(np.max(centers) / denom)
+        low_score = float(np.exp(-max(0.0, c_min_rel) / 0.18))
+        high_score = float(np.exp(-max(0.0, 1.0 - c_max_rel) / 0.18))
         
         # Decision criteria
         dual = (

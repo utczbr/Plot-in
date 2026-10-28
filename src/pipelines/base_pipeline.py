@@ -1,8 +1,6 @@
-
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, List
+from typing import Any, Optional
 import logging
-from pathlib import Path
 
 class BasePipeline(ABC):
     """
@@ -34,23 +32,3 @@ class BasePipeline(ABC):
         """
         pass
 
-    def run_batch(self, inputs: List[Any], **kwargs) -> List[Any]:
-        """
-        Execute the pipeline on a batch of inputs.
-        
-        Args:
-            inputs: List of inputs to process
-            **kwargs: Additional execution parameters
-            
-        Returns:
-            List of processing results
-        """
-        results = []
-        for item in inputs:
-            try:
-                result = self.run(item, **kwargs)
-                if result:
-                    results.append(result)
-            except Exception as e:
-                self.logger.error(f"Error processing item {item}: {e}")
-        return results

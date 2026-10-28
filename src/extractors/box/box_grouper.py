@@ -44,7 +44,10 @@ def group_box_plot_elements(boxes: List[Dict],
       where threshold = box_dimension × α, α ∈ [0.3, 0.5]
     """
     grouped = []
-    
+    assigned_indicators = set()
+    assigned_medians = set()
+
+    # Pass 1: Intersection-based grouping + outlier & tick coordinate alignment
     for box in boxes:
         group = {
             'box': box,
@@ -53,121 +56,47 @@ def group_box_plot_elements(boxes: List[Dict],
             'outliers': [],
             'tick_label': None
         }
-        
+
         # Extract box geometry
         x1, y1, x2, y2 = box['xyxy']
         box_center_x = (x1 + x2) / 2.0
         box_center_y = (y1 + y2) / 2.0
         box_width = x2 - x1
         box_height = y2 - y1
-        
+
         # Stage 1: Intersection-based grouping for range_indicator and median_line
-        # Collect ALL intersecting indicators (may have separate upper/lower whiskers)
         intersecting_indicators = [
-            indicator for indicator in range_indicators
-            if compute_aabb_intersection(box['xyxy'], indicator['xyxy'])
+            (idx, indicator)
+            for idx, indicator in enumerate(range_indicators)
+            if idx not in assigned_indicators and compute_aabb_intersection(box['xyxy'], indicator['xyxy'])
         ]
-        
+
         if len(intersecting_indicators) == 1:
-            # Single whisker element - standard case
-            group['range_indicator'] = intersecting_indicators[0]
+            idx, ind = intersecting_indicators[0]
+            group['range_indicator'] = ind
+            assigned_indicators.add(idx)
         elif len(intersecting_indicators) >= 2:
-            # Multiple whisker elements detected - merge them
-            # Compute bounding box covering all whisker elements
-            all_x1 = min(ind['xyxy'][0] for ind in intersecting_indicators)
-            all_y1 = min(ind['xyxy'][1] for ind in intersecting_indicators)
-            all_x2 = max(ind['xyxy'][2] for ind in intersecting_indicators)
-            all_y2 = max(ind['xyxy'][3] for ind in intersecting_indicators)
-            
-            # Create merged indicator
+            for idx, _ in intersecting_indicators:
+                assigned_indicators.add(idx)
+            inds = [ind for _, ind in intersecting_indicators]
+            all_x1 = min(ind['xyxy'][0] for ind in inds)
+            all_y1 = min(ind['xyxy'][1] for ind in inds)
+            all_x2 = max(ind['xyxy'][2] for ind in inds)
+            all_y2 = max(ind['xyxy'][3] for ind in inds)
+
             merged_indicator = {
                 'xyxy': (all_x1, all_y1, all_x2, all_y2),
-                'confidence': max(ind.get('confidence', 1.0) for ind in intersecting_indicators),
-                'merged_from': len(intersecting_indicators)
+                'confidence': max(ind.get('confidence', 1.0) for ind in inds),
+                'merged_from': len(inds)
             }
             group['range_indicator'] = merged_indicator
-        # else: no intersection, will fall through to proximity-based
-        
-        # If no intersecting indicator found, use proximity-based assignment
-        if group['range_indicator'] is None:
-            x1, y1, x2, y2 = box['xyxy']
-            box_center_x = (x1 + x2) / 2.0
-            box_center_y = (y1 + y2) / 2.0
-            box_width = x2 - x1
-            box_height = y2 - y1
-            
-            best_indicator = None
-            min_distance = float('inf')
-            
-            for indicator in range_indicators:
-                ind_x1, ind_y1, ind_x2, ind_y2 = indicator['xyxy']
-                ind_center_x = (ind_x1 + ind_x2) / 2.0
-                ind_center_y = (ind_y1 + ind_y2) / 2.0
-                
-                # Calculate distance based on orientation
-                if orientation == 'vertical':
-                    # For vertical: check x-alignment and vertical proximity
-                    x_alignment = abs(ind_center_x - box_center_x)
-                    if x_alignment < (box_width * 0.5):  # Reasonable x-alignment
-                        y_distance = abs(ind_center_y - box_center_y)
-                        if y_distance < min_distance:
-                            min_distance = y_distance
-                            best_indicator = indicator
-                else:  # horizontal
-                    # For horizontal: check y-alignment and horizontal proximity
-                    y_alignment = abs(ind_center_y - box_center_y)
-                    if y_alignment < (box_height * 0.5):  # Reasonable y-alignment
-                        x_distance = abs(ind_center_x - box_center_x)
-                        if x_distance < min_distance:
-                            min_distance = x_distance
-                            best_indicator = indicator
-            
-            if best_indicator is not None:
-                group['range_indicator'] = best_indicator
 
-        # Do the same for median lines
-        for median in median_lines:
-            if compute_aabb_intersection(box['xyxy'], median['xyxy']):
+        for med_idx, median in enumerate(median_lines):
+            if med_idx not in assigned_medians and compute_aabb_intersection(box['xyxy'], median['xyxy']):
                 group['median_line'] = median
-                break  # Use first intersecting median
-        
-        # If no intersecting median found, use proximity-based assignment
-        if group['median_line'] is None:
-            x1, y1, x2, y2 = box['xyxy']
-            box_center_x = (x1 + x2) / 2.0
-            box_center_y = (y1 + y2) / 2.0
-            box_width = x2 - x1
-            box_height = y2 - y1
-            
-            best_median = None
-            min_distance = float('inf')
-            
-            for median in median_lines:
-                med_x1, med_y1, med_x2, med_y2 = median['xyxy']
-                med_center_x = (med_x1 + med_x2) / 2.0
-                med_center_y = (med_y1 + med_y2) / 2.0
-                
-                # Calculate distance based on orientation
-                if orientation == 'vertical':
-                    # For vertical: check x-alignment and proximity to box center
-                    x_alignment = abs(med_center_x - box_center_x)
-                    if x_alignment < (box_width * 0.5):  # Reasonable x-alignment
-                        y_distance = abs(med_center_y - box_center_y)
-                        if y_distance < min_distance:
-                            min_distance = y_distance
-                            best_median = median
-                else:  # horizontal
-                    # For horizontal: check y-alignment and proximity to box center
-                    y_alignment = abs(med_center_y - box_center_y)
-                    if y_alignment < (box_height * 0.5):  # Reasonable y-alignment
-                        x_distance = abs(med_center_x - box_center_x)
-                        if x_distance < min_distance:
-                            min_distance = x_distance
-                            best_median = median
-            
-            if best_median is not None:
-                group['median_line'] = best_median
-        
+                assigned_medians.add(med_idx)
+                break
+
         # Stage 2: Coordinate-aligned grouping for outliers
         # Vertical: match x-coordinates, Horizontal: match y-coordinates
         if orientation == 'vertical':
@@ -182,7 +111,7 @@ def group_box_plot_elements(boxes: List[Dict],
                 outlier_cy = (outlier['xyxy'][1] + outlier['xyxy'][3]) / 2.0
                 if abs(outlier_cy - box_center_y) < threshold:
                     group['outliers'].append(outlier)
-        
+
         # Stage 3: Coordinate-aligned tick label assignment
         if orientation == 'vertical':
             threshold = box_width * 0.5
@@ -198,7 +127,56 @@ def group_box_plot_elements(boxes: List[Dict],
                 if abs(label_cy - box_center_y) < threshold:
                     group['tick_label'] = label
                     break
-        
+
         grouped.append(group)
-    
+
+    # Pass 2: Greedy min-distance exclusive proximity fallback for unassigned indicators and medians
+    ind_candidates = []
+    med_candidates = []
+    for g_idx, group in enumerate(grouped):
+        box = group['box']
+        x1, y1, x2, y2 = box['xyxy']
+        box_center_x = (x1 + x2) / 2.0
+        box_center_y = (y1 + y2) / 2.0
+        box_width = x2 - x1
+        box_height = y2 - y1
+
+        if group['range_indicator'] is None:
+            for idx, indicator in enumerate(range_indicators):
+                if idx in assigned_indicators:
+                    continue
+                ind_x1, ind_y1, ind_x2, ind_y2 = indicator['xyxy']
+                ind_center_x = (ind_x1 + ind_x2) / 2.0
+                ind_center_y = (ind_y1 + ind_y2) / 2.0
+                if orientation == 'vertical':
+                    if abs(ind_center_x - box_center_x) < (box_width * 0.5):
+                        ind_candidates.append((abs(ind_center_y - box_center_y), g_idx, idx))
+                else:
+                    if abs(ind_center_y - box_center_y) < (box_height * 0.5):
+                        ind_candidates.append((abs(ind_center_x - box_center_x), g_idx, idx))
+
+        if group['median_line'] is None:
+            for idx, median in enumerate(median_lines):
+                if idx in assigned_medians:
+                    continue
+                med_x1, med_y1, med_x2, med_y2 = median['xyxy']
+                med_center_x = (med_x1 + med_x2) / 2.0
+                med_center_y = (med_y1 + med_y2) / 2.0
+                if orientation == 'vertical':
+                    if abs(med_center_x - box_center_x) < (box_width * 0.5):
+                        med_candidates.append((abs(med_center_y - box_center_y), g_idx, idx))
+                else:
+                    if abs(med_center_y - box_center_y) < (box_height * 0.5):
+                        med_candidates.append((abs(med_center_x - box_center_x), g_idx, idx))
+
+    for _, g_idx, idx in sorted(ind_candidates):
+        if grouped[g_idx]['range_indicator'] is None and idx not in assigned_indicators:
+            grouped[g_idx]['range_indicator'] = range_indicators[idx]
+            assigned_indicators.add(idx)
+
+    for _, g_idx, idx in sorted(med_candidates):
+        if grouped[g_idx]['median_line'] is None and idx not in assigned_medians:
+            grouped[g_idx]['median_line'] = median_lines[idx]
+            assigned_medians.add(idx)
+
     return grouped

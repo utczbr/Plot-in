@@ -1,0 +1,1155 @@
+{
+  "schema_version": "v4.1",
+  "dataset_version": "4.1.0",
+  "image": {
+    "width": 672,
+    "height": 480
+  },
+  "chart_type": "line",
+  "semantic_domain": "biomedical",
+  "is_scientific": true,
+  "is_composite": false,
+  "composite_chart_types": [],
+  "composite_domains": [],
+  "subplots": [
+    {
+      "index": 0,
+      "chart_type": "line",
+      "semantic_domain": "biomedical",
+      "is_scientific": true,
+      "scale_axes": {
+        "primary": "y",
+        "secondary": null
+      }
+    }
+  ],
+  "annotations": [
+    {
+      "id": 0,
+      "stream": "annotations",
+      "class_id": 4,
+      "class_name": "chart_title",
+      "subplot": 0,
+      "xyxy": [
+        280.29,
+        26.67,
+        459.29,
+        43.67
+      ],
+      "obb": [
+        [
+          280.29,
+          26.67
+        ],
+        [
+          459.29,
+          26.67
+        ],
+        [
+          459.29,
+          43.67
+        ],
+        [
+          280.29,
+          43.67
+        ]
+      ],
+      "text": "Experiment Summary",
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 1,
+      "stream": "annotations",
+      "class_id": 2,
+      "class_name": "axis_title",
+      "subplot": 0,
+      "xyxy": [
+        26.67,
+        149.15,
+        40.67,
+        313.53
+      ],
+      "obb": [
+        [
+          47.67,
+          231.34
+        ],
+        [
+          33.67,
+          231.34
+        ],
+        [
+          33.67,
+          66.96
+        ],
+        [
+          47.67,
+          66.96
+        ]
+      ],
+      "text": "Total Cholesterol (mg/dL)",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y"
+      }
+    },
+    {
+      "id": 2,
+      "stream": "annotations",
+      "class_id": 2,
+      "class_name": "axis_title",
+      "subplot": 0,
+      "xyxy": [
+        324.79,
+        439.33,
+        414.79,
+        453.33
+      ],
+      "obb": [
+        [
+          324.79,
+          439.33
+        ],
+        [
+          414.79,
+          439.33
+        ],
+        [
+          414.79,
+          453.33
+        ],
+        [
+          324.79,
+          453.33
+        ]
+      ],
+      "text": "Molarity (mM)",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x"
+      }
+    },
+    {
+      "id": 3,
+      "stream": "annotations",
+      "class_id": 0,
+      "class_name": "chart",
+      "subplot": 0,
+      "xyxy": [
+        94.24,
+        59.67,
+        645.33,
+        403.01
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 4,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "line_segment",
+      "subplot": 0,
+      "xyxy": [
+        115.79,
+        71.78,
+        623.78,
+        390.9
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 5,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        386.79,
+        412.34,
+        408.45,
+        434.0
+      ],
+      "obb": [
+        [
+          393.16,
+          432.59
+        ],
+        [
+          387.5,
+          426.93
+        ],
+        [
+          402.08,
+          412.34
+        ],
+        [
+          407.74,
+          418.0
+        ]
+      ],
+      "text": "10.0",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 6,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        456.37,
+        412.34,
+        478.03,
+        434.0
+      ],
+      "obb": [
+        [
+          462.74,
+          432.59
+        ],
+        [
+          457.08,
+          426.93
+        ],
+        [
+          471.67,
+          412.34
+        ],
+        [
+          477.32,
+          418.0
+        ]
+      ],
+      "text": "12.5",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 7,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        525.96,
+        412.34,
+        547.61,
+        434.0
+      ],
+      "obb": [
+        [
+          532.32,
+          432.59
+        ],
+        [
+          526.66,
+          426.93
+        ],
+        [
+          541.25,
+          412.34
+        ],
+        [
+          546.9,
+          418.0
+        ]
+      ],
+      "text": "15.0",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 8,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        595.54,
+        412.34,
+        617.19,
+        434.0
+      ],
+      "obb": [
+        [
+          601.9,
+          432.59
+        ],
+        [
+          596.25,
+          426.93
+        ],
+        [
+          610.83,
+          412.34
+        ],
+        [
+          616.49,
+          418.0
+        ]
+      ],
+      "text": "17.5",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 9,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        180.12,
+        412.34,
+        197.62,
+        429.85
+      ],
+      "obb": [
+        [
+          186.48,
+          428.43
+        ],
+        [
+          180.83,
+          422.77
+        ],
+        [
+          191.26,
+          412.34
+        ],
+        [
+          196.91,
+          418.0
+        ]
+      ],
+      "text": "2.5",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 10,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        249.7,
+        412.34,
+        267.2,
+        429.85
+      ],
+      "obb": [
+        [
+          256.07,
+          428.43
+        ],
+        [
+          250.41,
+          422.77
+        ],
+        [
+          260.84,
+          412.34
+        ],
+        [
+          266.5,
+          418.0
+        ]
+      ],
+      "text": "5.0",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 11,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        319.29,
+        412.34,
+        336.79,
+        429.85
+      ],
+      "obb": [
+        [
+          325.65,
+          428.43
+        ],
+        [
+          319.99,
+          422.77
+        ],
+        [
+          330.42,
+          412.34
+        ],
+        [
+          336.08,
+          418.0
+        ]
+      ],
+      "text": "7.5",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 12,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        110.54,
+        412.34,
+        128.04,
+        429.85
+      ],
+      "obb": [
+        [
+          116.9,
+          428.43
+        ],
+        [
+          111.25,
+          422.77
+        ],
+        [
+          121.68,
+          412.34
+        ],
+        [
+          127.33,
+          418.0
+        ]
+      ],
+      "text": "0.0",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 13,
+      "stream": "line_seg",
+      "class_id": 0,
+      "class_name": "line_series",
+      "subplot": 0,
+      "xyxy": [
+        117.63,
+        73.57,
+        621.53,
+        388.57
+      ],
+      "polygon": [
+        [
+          147.37,
+          86.12
+        ],
+        [
+          174.21,
+          134.18
+        ],
+        [
+          201.93,
+          130.07
+        ],
+        [
+          230.69,
+          202.56
+        ],
+        [
+          258.41,
+          108.95
+        ],
+        [
+          286.15,
+          222.53
+        ],
+        [
+          314.03,
+          156.62
+        ],
+        [
+          342.02,
+          247.03
+        ],
+        [
+          370.23,
+          124.46
+        ],
+        [
+          397.17,
+          154.7
+        ],
+        [
+          424.67,
+          145.96
+        ],
+        [
+          453.4,
+          230.82
+        ],
+        [
+          481.1,
+          76.98
+        ],
+        [
+          508.8,
+          251.31
+        ],
+        [
+          536.93,
+          172.7
+        ],
+        [
+          563.02,
+          220.71
+        ],
+        [
+          590.93,
+          358.37
+        ],
+        [
+          619.04,
+          388.57
+        ],
+        [
+          621.53,
+          386.24
+        ],
+        [
+          593.97,
+          356.81
+        ],
+        [
+          566.22,
+          219.51
+        ],
+        [
+          536.63,
+          169.3
+        ],
+        [
+          509.11,
+          247.91
+        ],
+        [
+          481.14,
+          73.57
+        ],
+        [
+          453.17,
+          227.41
+        ],
+        [
+          426.24,
+          142.92
+        ],
+        [
+          398.06,
+          151.4
+        ],
+        [
+          369.35,
+          121.17
+        ],
+        [
+          341.89,
+          243.62
+        ],
+        [
+          314.21,
+          153.21
+        ],
+        [
+          286.42,
+          219.13
+        ],
+        [
+          258.5,
+          105.54
+        ],
+        [
+          230.55,
+          199.15
+        ],
+        [
+          203.65,
+          127.12
+        ],
+        [
+          175.7,
+          131.1
+        ],
+        [
+          146.87,
+          82.74
+        ],
+        [
+          117.63,
+          203.79
+        ],
+        [
+          120.95,
+          204.56
+        ]
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "series_idx": 0
+      }
+    },
+    {
+      "id": 14,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        115.79,
+        200.68,
+        122.78,
+        207.67
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 15,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        143.63,
+        80.94,
+        150.62,
+        87.93
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 16,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        171.46,
+        129.15,
+        178.45,
+        136.13
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 17,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        199.29,
+        125.1,
+        206.28,
+        132.09
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 18,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        227.13,
+        197.36,
+        234.12,
+        204.35
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 19,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        254.96,
+        103.75,
+        261.95,
+        110.74
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 20,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        282.79,
+        217.33,
+        289.78,
+        224.32
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 21,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        310.63,
+        151.42,
+        317.61,
+        158.41
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 22,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        338.46,
+        241.83,
+        345.45,
+        248.82
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 23,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        366.29,
+        119.32,
+        373.28,
+        126.31
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 24,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        394.13,
+        149.56,
+        401.11,
+        156.55
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 25,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        421.96,
+        140.94,
+        428.95,
+        147.93
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 26,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        449.79,
+        225.62,
+        456.78,
+        232.61
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 27,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        477.62,
+        71.78,
+        484.61,
+        78.77
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 28,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        505.46,
+        246.11,
+        512.45,
+        253.1
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 29,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        533.29,
+        167.51,
+        540.28,
+        174.5
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 30,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        561.12,
+        216.61,
+        568.11,
+        223.6
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 31,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        588.96,
+        354.1,
+        595.94,
+        361.09
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 32,
+      "stream": "line_marker",
+      "class_id": 0,
+      "class_name": "data_marker",
+      "subplot": 0,
+      "xyxy": [
+        616.79,
+        383.91,
+        623.78,
+        390.9
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 33,
+      "stream": "graph",
+      "class_id": null,
+      "class_name": "series_keypoints",
+      "subplot": 0,
+      "xyxy": [
+        119.29,
+        75.27,
+        620.28,
+        387.4
+      ],
+      "keypoints": [
+        [
+          119.29,
+          204.17,
+          2
+        ],
+        [
+          147.12,
+          84.43,
+          2
+        ],
+        [
+          174.95,
+          132.64,
+          2
+        ],
+        [
+          202.79,
+          128.59,
+          2
+        ],
+        [
+          230.62,
+          200.86,
+          2
+        ],
+        [
+          258.45,
+          107.24,
+          2
+        ],
+        [
+          286.29,
+          220.83,
+          2
+        ],
+        [
+          314.12,
+          154.92,
+          2
+        ],
+        [
+          341.95,
+          245.33,
+          2
+        ],
+        [
+          369.79,
+          122.82,
+          2
+        ],
+        [
+          397.62,
+          153.05,
+          2
+        ],
+        [
+          425.45,
+          144.44,
+          2
+        ],
+        [
+          453.29,
+          229.11,
+          2
+        ],
+        [
+          481.12,
+          75.27,
+          2
+        ],
+        [
+          508.95,
+          249.61,
+          2
+        ],
+        [
+          536.78,
+          171.0,
+          2
+        ],
+        [
+          564.62,
+          220.11,
+          2
+        ],
+        [
+          592.45,
+          357.59,
+          2
+        ],
+        [
+          620.28,
+          387.4,
+          2
+        ]
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "series_idx": 0,
+        "tags": [
+          "endpoint",
+          "inflection",
+          "peak",
+          "inflection",
+          "inflection",
+          "inflection",
+          "inflection",
+          "inflection",
+          "valley",
+          "inflection",
+          "peak",
+          "inflection",
+          "inflection",
+          "inflection",
+          "inflection",
+          "inflection",
+          "inflection",
+          "inflection",
+          "endpoint"
+        ],
+        "data": [
+          [
+            0.0,
+            35.987
+          ],
+          [
+            1.0,
+            45.032
+          ],
+          [
+            2.0,
+            41.145
+          ],
+          [
+            3.0,
+            41.458
+          ],
+          [
+            4.0,
+            36.211
+          ],
+          [
+            5.0,
+            43.149
+          ],
+          [
+            6.0,
+            34.882
+          ],
+          [
+            7.0,
+            39.464
+          ],
+          [
+            8.0,
+            33.318
+          ],
+          [
+            9.0,
+            41.909
+          ],
+          [
+            10.0,
+            39.602
+          ],
+          [
+            11.0,
+            40.246
+          ],
+          [
+            12.0,
+            34.345
+          ],
+          [
+            13.0,
+            45.811
+          ],
+          [
+            14.0,
+            33.052
+          ],
+          [
+            15.0,
+            38.293
+          ],
+          [
+            16.0,
+            34.929
+          ],
+          [
+            17.0,
+            27.001
+          ],
+          [
+            18.0,
+            25.535
+          ]
+        ]
+      }
+    }
+  ],
+  "filter_stats": {
+    "size": {},
+    "aspect": {},
+    "viewport": {},
+    "duplicate": {
+      "chart_title": 1,
+      "axis_title": 2,
+      "axis_labels": 8,
+      "chart": 1,
+      "line_segment": 1
+    },
+    "overlap": {}
+  },
+  "image_id": "chart_00081"
+}

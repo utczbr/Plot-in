@@ -7,7 +7,7 @@ due to all numeric labels being classified as title_label instead of scale_label
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
 
 

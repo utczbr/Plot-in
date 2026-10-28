@@ -7,7 +7,7 @@ This handler addresses the critical issue where line charts crash with
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
 
 
@@ -35,6 +35,8 @@ class LineHandler(CartesianExtractionHandler):
         detections_for_extractor = detections.copy()
         if 'line' in detections and 'data_point' not in detections:
             detections_for_extractor['data_point'] = detections['line']
+        elif 'data_marker' in detections and 'data_point' not in detections:
+            detections_for_extractor['data_point'] = detections['data_marker']
 
         try:
             orientation_enum = OrientationService.from_any(orientation)

@@ -98,9 +98,17 @@ def baseline_from_scale_zero(
     if len(axis_labels) == 0:
         return None
 
-    usable = [
+    target_axis = "y" if is_vertical else "x"
+    axis_tagged = [
         lbl
         for lbl in axis_labels
+        if (lbl.get("axis") or (lbl.get("attrs") or {}).get("axis")) == target_axis
+    ]
+    candidate_labels = axis_tagged if axis_tagged else axis_labels
+
+    usable = [
+        lbl
+        for lbl in candidate_labels
         if "cleanedvalue" in lbl
         and lbl["cleanedvalue"] is not None
         and validate_xyxy(lbl.get("xyxy"))

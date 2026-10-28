@@ -37,4 +37,5 @@ class PipelineResult(TypedDict, total=False):
     metadata: Dict[str, Any]
     detections: Dict[str, Any]
     _provenance: Optional[Dict[str, Any]]
-    protocol_rows: List[Dict[str, Any]]
+    protocol_rows: List[ProtocolRow]
+

@@ -1,5 +1,6 @@
 
 import os
+import re
 import cv2
 import numpy as np
 import logging
@@ -13,6 +14,7 @@ from core.model_manager import ModelManager
 from models.config import MODELS_CONFIG
 from core.chart_registry import get_chart_element_key, normalize_chart_type
 from utils import run_inference_on_image, sanitize_for_json
+from utils.validation_utils import is_numeric
 from services.orientation_detection_service import OrientationDetectionService
 from services.orientation_service import Orientation
 from ChartAnalysisOrchestrator import ChartAnalysisOrchestrator
@@ -20,6 +22,7 @@ from visual.visualization_service import VisualizationService
 from visual.box_plot_visualizer import BoxPlotVisualizer
 from handlers.types import HandlerContext
 from services.text_layout_service import TextLayoutService
+from ocr.preprocessing.ocr_validator import OCRValidator
 
 # Strategy layer
 from strategies.router import StrategyRouter
@@ -91,6 +94,7 @@ class ChartAnalysisPipeline(BasePipeline):
         self._vlm_strategy: Optional[VLMStrategy] = None
         self._chart_to_table_strategy: Optional[ChartToTableStrategy] = None
         self._hybrid_strategy: Optional[HybridStrategy] = None
+        self.ocr_validator = OCRValidator()
 
         # Ensure classifiers and detectors are ready
         # self.models_manager.load_models() # Assumed to be managed externally or lazy loaded
@@ -1114,11 +1118,20 @@ class ChartAnalysisPipeline(BasePipeline):
             default=0.1,
         )
 
-        # Check if any bars detected
-        has_bars = any(class_map.get(d['cls']) == 'bar' for d in current_dets)
-        
-        if not has_bars:
-            self.logger.warning("No bars in histogram, trying fallback...")
+        # Check if any bars detected or if detections are degenerate (sparse or sub-3px colliding bins)
+        bars = [d for d in current_dets if class_map.get(d.get('cls')) == 'bar']
+        has_bars = len(bars) > 0
+        is_degenerate = False
+        if has_bars:
+            widths = [abs(d['xyxy'][2] - d['xyxy'][0]) for d in bars if 'xyxy' in d]
+            if widths and np.mean(widths) < 3.0:
+                is_degenerate = True
+            elif len(bars) < 2:
+                is_degenerate = True
+
+        if not has_bars or is_degenerate:
+            reason = "Degenerate bar detections" if is_degenerate else "No bars in histogram"
+            self.logger.warning("%s, trying fallback...", reason)
             # Try lower threshold
             model = self.models_manager.get_model('histogram')
             lower_dets = run_inference_on_image(
@@ -1221,7 +1234,7 @@ class ChartAnalysisPipeline(BasePipeline):
             h_box = max(1, y2 - y1)
             label_type = region.get('ocr_source', 'axis_label')
 
-            if label_type in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_labels'):
+            if label_type in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_label', 'axis_labels'):
                 if h_box > w_box:
                     # Vertical text: 20% horizontal padding, 5% vertical padding (per side)
                     pad_x = int(round(w_box * 0.20))
@@ -1239,9 +1252,24 @@ class ChartAnalysisPipeline(BasePipeline):
 
             crop = img[y1_pad:y2_pad, x1_pad:x2_pad]
 
-            # Rotate vertical text lines (height > 1.2 * width) 90° counter-clockwise
-            # so horizontal OCR models can read vertical axis titles accurately
-            if crop.size > 0 and crop.shape[0] > 1.2 * crop.shape[1]:
+            # Rotate vertical text lines 90° counter-clockwise so horizontal OCR models
+            # can read vertical text accurately.
+            # Avoid transposing single digits and small horizontal numbers whose glyph aspect ratio > 1.2:
+            # - For titles ('axis_title', 'chart_title'): rotate when height > 1.2 * width
+            # - For labels ('axis_labels', 'axis_label', 'tick_label', 'data_label'): only rotate when
+            #   height >= 22px and height > 1.5 * width (true multi-character vertical lines)
+            should_rotate = False
+            if crop.size > 0:
+                if label_type in ('title', 'chart_title', 'axis_title'):
+                    if crop.shape[0] > 1.2 * crop.shape[1]:
+                        should_rotate = True
+                elif label_type in ('axis_labels', 'axis_label', 'tick_label', 'data_label'):
+                    if crop.shape[0] >= 22 and crop.shape[0] > 1.5 * crop.shape[1]:
+                        should_rotate = True
+                elif crop.shape[0] > 1.5 * crop.shape[1] and crop.shape[0] >= 22:
+                    should_rotate = True
+
+            if should_rotate:
                 crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
             crops.append((crop, label_type))
@@ -1250,12 +1278,25 @@ class ChartAnalysisPipeline(BasePipeline):
             results = self.ocr_engine.process_batch(crops)
             for i, res in enumerate(results):
                 target = all_regions[i]
+                label_type = target.get('ocr_source', crops[i][1] if i < len(crops) else 'default')
                 if isinstance(res, dict):
-                    target['text'] = res.get('text', '')
-                    target['ocr_confidence'] = res.get('confidence', 0.0)
+                    raw_text = res.get('text', '')
+                    raw_conf = float(res.get('confidence', 0.0))
                 else:
-                    target['text'] = res
-                    target['ocr_confidence'] = 0.8
+                    raw_text = str(res)
+                    raw_conf = 0.8
+
+                clean_text, _ = self.ocr_validator.validate_and_clean(raw_text, context_type=label_type)
+                adj_conf = self.ocr_validator.validate_confidence(clean_text, raw_conf, context_type=label_type)
+                target['text'] = clean_text
+                target['ocr_confidence'] = adj_conf
+
+                if label_type in ('axis_labels', 'axis_label', 'data_label') and target.get('cleanedvalue') is None:
+                    token_core = re.sub(r'[\s\$\%\€\£]', '', clean_text)
+                    if is_numeric(token_core):
+                        target['cleanedvalue'] = self.ocr_validator.validate_numeric(clean_text)[0]
+                    else:
+                        target['cleanedvalue'] = None
         except Exception as e:
             self.logger.error(f"OCR failed: {e}")
 

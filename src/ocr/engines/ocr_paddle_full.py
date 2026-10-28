@@ -26,7 +26,8 @@ except (ImportError, OSError):
 from typing import List, Tuple, Optional, Dict, Union, Any
 import logging
 from pathlib import Path
-from ..ocr_base import BaseOCRLegacy as BaseOCREngine
+from ..ocr_base import BaseOCREngine
+from ..runtime.cache_runtime import ZeroCopyHashCache
 from concurrent.futures import ThreadPoolExecutor
 import time
 
@@ -172,6 +173,18 @@ class PaddleOCRFullPipeline(BaseOCREngine):
         
         # Load character dictionary
         self.character_dict = self._load_character_dict(dict_path)
+
+        # Align trailing space token (' ') when model was exported with use_space_char=True
+        rec_in_shape = self.rec_session.get_inputs()[0].shape
+        rec_out_shape = self.rec_session.get_outputs()[0].shape
+        self._rec_dynamic_width = not isinstance(rec_in_shape[-1], int) if rec_in_shape else True
+        if (
+            rec_out_shape
+            and isinstance(rec_out_shape[-1], int)
+            and rec_out_shape[-1] == len(self.character_dict) + 1
+        ):
+            self.character_dict.append(' ')
+
         logging.info(f"Character dictionary loaded: {len(self.character_dict)} characters")
         
         # Store configuration
@@ -190,7 +203,7 @@ class PaddleOCRFullPipeline(BaseOCREngine):
         self.rec_batch_size = rec_batch_size
         
         # Cache and executor
-        self._hash_cache = {}
+        self._hash_cache = ZeroCopyHashCache(max_size=512)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         
         logging.info(
@@ -283,9 +296,9 @@ class PaddleOCRFullPipeline(BaseOCREngine):
         for crop, context in crops_with_context:
             try:
                 # Check cache
-                crop_hash = self._compute_hash(crop)
-                if crop_hash in self._hash_cache:
-                    results.append(self._hash_cache[crop_hash])
+                cached = self._hash_cache.get_by_hash(crop, context)
+                if cached is not None:
+                    results.append(cached)
                     continue
 
                 # Stage 4: Text line orientation (optional)
@@ -297,7 +310,7 @@ class PaddleOCRFullPipeline(BaseOCREngine):
 
                 result = {'text': text, 'confidence': confidence}
                 # Cache and store
-                self._hash_cache[crop_hash] = result
+                self._hash_cache.put(crop, result, context)
                 results.append(result)
 
             except Exception as e:
@@ -391,15 +404,22 @@ class PaddleOCRFullPipeline(BaseOCREngine):
         h, w = img.shape[:2]
         
         # Resize to fixed height
-        ratio = img_h / h
-        resize_w = int(w * ratio)
+        ratio = img_h / max(h, 1)
+        resize_w = max(1, int(w * ratio))
         img = cv2.resize(img, (resize_w, img_h), interpolation=cv2.INTER_LINEAR)
         
-        # Pad or crop width
-        if resize_w < img_w:
-            padded = np.ones((img_h, img_w, 3), dtype=np.uint8) * 255
-            padded[:, :resize_w, :] = img
-            img = padded
+        # Pad width (320px for short tokens; dynamic 32x padding for long lines)
+        if resize_w <= img_w:
+            if resize_w < img_w:
+                padded = np.ones((img_h, img_w, 3), dtype=np.uint8) * 255
+                padded[:, :resize_w, :] = img
+                img = padded
+        elif getattr(self, '_rec_dynamic_width', True):
+            dyn_w = int(np.ceil(resize_w / 32.0) * 32)
+            if resize_w < dyn_w:
+                padded = np.ones((img_h, dyn_w, 3), dtype=np.uint8) * 255
+                padded[:, :resize_w, :] = img
+                img = padded
         else:
             img = cv2.resize(img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
         

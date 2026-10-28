@@ -190,8 +190,8 @@ class ImprovedPixelBasedDetector:
         # Box dimension for scaling
         box_size = abs(y2 - y1) if orientation == 'vertical' else abs(x2 - x1)
         
-        # Adaptive prominence: scale with signal strength, min 5 to avoid noise
-        adaptive_prominence = max(5.0, signal_range * 0.08, signal_std * 2.0)
+        # Adaptive prominence: scale with signal strength, min 3.0 to detect subtle internal medians
+        adaptive_prominence = max(3.0, signal_range * 0.05, signal_std * 1.0)
         
         # Adaptive distance: scale with box size, min 2
         adaptive_distance = max(2, int(box_size * 0.015))
@@ -224,12 +224,14 @@ class ImprovedPixelBasedDetector:
             box_start, box_end = x1, x2
 
         # Classify peaks based on position relative to box
+        # Clip 5% margin from edges to prevent picking the box boundary itself as a median
+        edge_margin = max(2.0, box_size * 0.05)
         median_candidates = []
         whisker_low_candidates = []   # Below/left of box
         whisker_high_candidates = []  # Above/right of box
 
         for i, (coord, prominence) in enumerate(zip(peak_coords, peak_prominences)):
-            if box_start <= coord <= box_end:
+            if (box_start + edge_margin) <= coord <= (box_end - edge_margin):
                 # Inside box = median candidate
                 median_candidates.append((coord, prominence))
             elif coord < box_start:

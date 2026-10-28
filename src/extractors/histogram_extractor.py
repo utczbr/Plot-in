@@ -3,7 +3,7 @@ Extractor for Histogram charts with mode-specific processing.
 Histograms are special types of bar charts where the x-axis represents continuous data ranges
 (bins) and y-axis represents frequency or count of observations in each bin.
 """
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import logging
 from utils.geometry_utils import find_closest_element
@@ -45,7 +45,16 @@ class HistogramExtractor:
         }
         
         r_squared = img_dimensions.get('r_squared', None)
-        
+
+        is_degenerate = bool(bars) and (len(bars) < 2 and all((b.get('xyxy', [0, 0, 0, 0])[2] - b.get('xyxy', [0, 0, 0, 0])[0]) < 3.0 for b in bars))
+        if (not bars or is_degenerate) and img is not None and baseline_coord is not None:
+            recovered_bars = self._recover_bins_via_column_projection(img, baseline_coord, img_dimensions)
+            if recovered_bars:
+                bars = recovered_bars
+                result['recovered_from_projection'] = True
+                result['num_bars'] = len(bars)
+                logging.info(f"Histogram extraction: recovered {len(bars)} bins via column projection.")
+
         if not bars:
             logging.debug("Histogram extraction: No bars detected, returning empty result")
             return result
@@ -284,4 +293,91 @@ class HistogramExtractor:
             return 'gaps'
         elif has_overlaps:
             return 'overlaps'
+
+    def _recover_bins_via_column_projection(
+        self,
+        img: np.ndarray,
+        baseline_coord: float,
+        img_dimensions: Dict[str, Any],
+        is_vertical: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Recover histogram bins from pixel column projection when YOLO detection misses bins or bins are degenerate.
+        """
+        if img is None or baseline_coord is None:
+            return []
+        try:
+            import cv2
+            h, w = img.shape[:2]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+            mask = gray < 245
+            if not np.any(mask):
+                return []
+
+            bl = int(round(baseline_coord))
+            if is_vertical:
+                top_limit = max(0, bl - int(h * 0.85))
+                if bl <= top_limit or bl > h:
+                    return []
+                roi_mask = mask[top_limit:bl, :]
+                if roi_mask.size == 0 or not np.any(roi_mask):
+                    return []
+                col_counts = np.sum(roi_mask, axis=0)
+                has_content = col_counts > 5
+
+                from scipy.ndimage import label
+                labeled, num_features = label(has_content)
+                recovered = []
+                for feat in range(1, num_features + 1):
+                    cols = np.where(labeled == feat)[0]
+                    if len(cols) < 3:
+                        continue
+                    x1 = float(cols[0])
+                    x2 = float(cols[-1])
+                    span_mask = roi_mask[:, cols]
+                    active_rows = np.where(np.any(span_mask, axis=1))[0]
+                    if len(active_rows) == 0:
+                        continue
+                    y1 = float(top_limit + active_rows[0])
+                    y2 = float(bl)
+                    if (x2 - x1) >= 3 and (y2 - y1) >= 3:
+                        recovered.append({
+                            'xyxy': [x1, y1, x2, y2],
+                            'conf': 0.7,
+                            'recovered': True,
+                        })
+                return recovered
+            else:
+                left_limit = int(round(baseline_coord))
+                right_limit = min(w, left_limit + int(w * 0.85))
+                if right_limit <= left_limit:
+                    return []
+                roi_mask = mask[:, left_limit:right_limit]
+                row_counts = np.sum(roi_mask, axis=1)
+                has_content = row_counts > 5
+                from scipy.ndimage import label
+                labeled, num_features = label(has_content)
+                recovered = []
+                for feat in range(1, num_features + 1):
+                    rows = np.where(labeled == feat)[0]
+                    if len(rows) < 3:
+                        continue
+                    y1 = float(rows[0])
+                    y2 = float(rows[-1])
+                    span_mask = roi_mask[rows, :]
+                    active_cols = np.where(np.any(span_mask, axis=0))[0]
+                    if len(active_cols) == 0:
+                        continue
+                    x1 = float(left_limit)
+                    x2 = float(left_limit + active_cols[-1])
+                    if (x2 - x1) >= 3 and (y2 - y1) >= 3:
+                        recovered.append({
+                            'xyxy': [x1, y1, x2, y2],
+                            'conf': 0.7,
+                            'recovered': True,
+                        })
+                return recovered
+        except Exception as e:
+            logging.debug("Column projection bin recovery failed: %s", e)
+            return []
         return 'ok'

@@ -11,7 +11,7 @@ import platform
 from typing import Dict, Optional
 
 
-from .config import MODELS_CONFIG
+from models.config import MODELS_CONFIG
 
 # ---------------------------------------------------------------------------
 # Lazy import for onnxruntime.

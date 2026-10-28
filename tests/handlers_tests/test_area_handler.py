@@ -23,7 +23,7 @@ class TestAreaChartWiring:
     """Verify area is wired into config, class maps, chart registry, and orchestrator."""
 
     def test_area_in_detection_config(self):
-        from core.config import MODELS_CONFIG
+        from models.config import MODELS_CONFIG
         assert 'area_obj' in MODELS_CONFIG.detection
         assert MODELS_CONFIG.detection['area_obj'] == 'area_obj_detect.onnx'
         assert 'area_seg' in MODELS_CONFIG.detection
@@ -49,7 +49,7 @@ class TestAreaChartWiring:
 
     def test_area_handler_is_cartesian(self):
         from handlers.area_handler import AreaHandler
-        from handlers.base_handler import CartesianExtractionHandler
+        from handlers.base import CartesianExtractionHandler
         assert issubclass(AreaHandler, CartesianExtractionHandler)
 
 

@@ -2,16 +2,8 @@
 Preprocessing module for OCR systems.
 """
 
-from .preprocessing_base import (
-    PreprocessingStrategy,
-    EasyOCRPreprocessing,
-    PaddleOCRPreprocessing,
-    EnhancedPreprocessingMixin
-)
+from .ocr_validator import OCRValidator
 
 __all__ = [
-    'PreprocessingStrategy',
-    'EasyOCRPreprocessing',
-    'PaddleOCRPreprocessing',
-    'EnhancedPreprocessingMixin'
+    'OCRValidator',
 ]

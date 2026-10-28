@@ -82,6 +82,7 @@ exclude = ["tests*", "src/tests*", "demos*", "train*", "docs*",
 [tool.setuptools.package-dir]
 "" = "src"
 "shared" = "shared"
+"scripts" = "scripts"
 
 [tool.setuptools.package-data]
 "*" = ["*.yml", "*.yaml", "*.json"]

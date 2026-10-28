@@ -18,10 +18,12 @@ def _lin_ccc(y_true: np.ndarray, y_pred: np.ndarray) -> Optional[float]:
     y_true, y_pred = y_true[mask], y_pred[mask]
     if len(y_true) < 2:
         return None
+    sx, sy = np.std(y_true), np.std(y_pred)
+    if sx == 0 or sy == 0:
+        return None
     r = np.corrcoef(y_true, y_pred)[0, 1]
     if np.isnan(r):
         return None
-    sx, sy = np.std(y_true), np.std(y_pred)
     mx, my = np.mean(y_true), np.mean(y_pred)
     denom = sx**2 + sy**2 + (mx - my)**2
     if denom == 0:

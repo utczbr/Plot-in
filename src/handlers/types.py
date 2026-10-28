@@ -77,15 +77,3 @@ class HandlerContext:
     chart_elements: List[Dict[str, Any]]
     orientation: Orientation
 
-
-@dataclass
-class OldExtractionResult:
-    """Structured result from chart extraction (old format)."""
-    chart_type: str
-    orientation: str
-    elements: List[Dict]
-    baselines: Dict[str, Any]
-    calibration: Dict[str, Any]
-    diagnostics: Dict[str, Any]
-    errors: List[str]
-    warnings: List[str]

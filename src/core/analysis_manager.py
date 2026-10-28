@@ -4,7 +4,6 @@ Analysis Manager - Service for handling analysis operations, threading, and proc
 Refactored to use ChartAnalysisPipeline.
 """
 
-import threading
 from typing import Dict, Any, Optional, Tuple, List
 import logging
 from pathlib import Path
@@ -21,10 +20,7 @@ class AnalysisManager:
     def __init__(self, data_manager: DataManager, image_manager: ImageManager):
         self.data_manager = data_manager
         self.image_manager = image_manager
-        self._running_threads = {}
-        self._thread_lock = threading.Lock()
         self._models = None
-        self._easyocr_reader = None
         self._advanced_settings = None
         self.logger = logging.getLogger(__name__)
     
@@ -32,13 +28,14 @@ class AnalysisManager:
         """Set the model manager (or model registry object) for analysis."""
         self._models = models
     
-    def set_easyocr_reader(self, reader):
-        """Set the EasyOCR reader for analysis."""
-        self._easyocr_reader = reader
-    
     def set_advanced_settings(self, settings: Dict[str, Any]):
         """Set advanced settings for analysis."""
         self._advanced_settings = settings
+
+    @property
+    def advanced_settings(self) -> Dict[str, Any]:
+        """Return the current advanced settings dictionary."""
+        return self._advanced_settings or {}
 
     def _prepare_settings_for_pipeline(self) -> Dict[str, Any]:
         """Translate GUI settings keys to pipeline-expected format.
@@ -128,15 +125,14 @@ class AnalysisManager:
         # EasyOCR reader that is no longer wired up anywhere in the app.
         if ocr_engine_name == 'Paddle_docs':
             ocr_engine = OCREngineFactory.create_engine(
-                'paddle_full',
-                None,
+                mode='paddle_full',
+                use_gpu=use_gpu,
                 doc_ori_model_path=str(doc_ori_model_path),
                 unwarp_model_path=str(unwarp_model_path),
                 det_model_path=str(det_model_path),
                 textline_ori_model_path=str(textline_ori_model_path),
                 rec_model_path=str(rec_model_path),
                 dict_path=str(dict_path),
-                use_gpu=use_gpu,
             )
         else:
             if ocr_engine_name not in ('Paddle',):
@@ -145,13 +141,12 @@ class AnalysisManager:
                     ocr_engine_name,
                 )
             ocr_engine = OCREngineFactory.create_engine(
-                'paddle_onnx',
-                None,
+                mode='paddle_onnx',
+                use_gpu=use_gpu,
                 det_model_path=str(det_model_path),
                 rec_model_path=str(rec_model_path),
                 dict_path=str(dict_path),
                 cls_model_path=str(cls_model_path),
-                use_gpu=use_gpu,
             )
         
         # Create calibration engine
@@ -196,8 +191,20 @@ class AnalysisManager:
             self.logger.error(f"Single analysis failed for {image_path}: {e}", exc_info=True)
             return {'error': str(e)}
 
-        if result:
-            self.data_manager.store_analysis_result(image_path, result)
+        output_dir = output_path
+        if result and output_dir and self.advanced_settings.get('output_settings', {}).get('save_annotated_image', False):
+            try:
+                import cv2
+                from visual.visualization_service import VisualizationService
+                out_p = Path(output_dir)
+                out_p.mkdir(parents=True, exist_ok=True)
+                stem = output_stem or Path(image_path).stem
+                annotated_path = out_p / f"{stem}_annotated.png"
+                img = image_buffer if image_buffer is not None else cv2.imread(str(image_path))
+                if img is not None:
+                    VisualizationService.save_annotated_image(img, result, str(annotated_path))
+            except Exception as e:
+                self.logger.error(f"Failed to save annotated image: {e}")
 
         return result
     
@@ -262,21 +269,4 @@ class AnalysisManager:
                 self.logger.error(f"Batch error on {asset.image_path}: {e}")
 
         return processed, total
-    
-    def cancel_analysis(self, thread_id: str):
-        """Cancel a running analysis thread."""
-        with self._thread_lock:
-            if thread_id in self._running_threads:
-                thread = self._running_threads[thread_id]
-                del self._running_threads[thread_id]
-    
-    def is_analysis_running(self) -> bool:
-        """Check if any analysis is currently running."""
-        with self._thread_lock:
-            running = False
-            for thread_id, thread in list(self._running_threads.items()):
-                if hasattr(thread, 'is_alive') and thread.is_alive():
-                    running = True
-                else:
-                    del self._running_threads[thread_id]
-            return running
+

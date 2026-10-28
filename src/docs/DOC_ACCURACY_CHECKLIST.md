@@ -6,15 +6,16 @@ Last updated: **February 23, 2026**.
 Manual governance checklist to ensure active documentation stays aligned with current code and tests.
 
 ## Active Docs Under Governance
-- `src/docs/Context.md`
+- `src/docs/context.md`
 - `src/docs/TESTING_WITH_ANALYSIS.md`
 - `src/docs/DOC_ACCURACY_CHECKLIST.md`
 - `src/docs/RD_NOTES.md`
-- `src/docs/README.md`
-- `Protocol_gap.md`
-- `src/Critic.md`
+- `src/docs/archive/README.md`
+- `docs/architecture/`
+- `src/docs/Critic.md`
+- `README.md`
 - `src/README.md`
-- `src/CONTRIBUTING.md`
+- `CONTRIBUTING.md`
 
 ## Claim Evidence Rule
 For each major claim, provide:
@@ -48,10 +49,10 @@ A doc may be archived only if all are true:
 
 | Doc | Claim Summary | Status | Code Evidence | Test Evidence | Verified On | Reviewer |
 |---|---|---|---|---|---|---|
-| src/docs/Context.md | 8-type support and runtime stages | Correct | `src/pipelines/chart_pipeline.py`, `src/ChartAnalysisOrchestrator.py` | `tests/core_tests/test_orchestrator_registry.py`, `tests/pipelines_tests/test_chart_pipeline.py` | 2026-02-23 | pending |
+| src/docs/context.md | 8-type support and runtime stages | Correct | `src/pipelines/chart_pipeline.py`, `src/ChartAnalysisOrchestrator.py` | `tests/core_tests/test_orchestrator_registry.py`, `tests/pipelines_tests/test_chart_pipeline.py` | 2026-02-23 | pending |
 | src/docs/TESTING_WITH_ANALYSIS.md | CLI/protocol/validation workflows | Correct | `src/analysis.py`, `src/validation/run_protocol_validation.py` | `tests/evaluation_tests/test_protocol_validation.py` | 2026-02-23 | pending |
 | src/docs/RD_NOTES.md | Marked non-runtime exploratory ideas | Correct | `src/docs/RD_NOTES.md` | N/A | 2026-02-23 | pending |
-| src/docs/README.md | Active-vs-archive doc map | Correct | `src/docs/README.md`, `src/docs/archive/README.md` | N/A | 2026-02-23 | pending |
+| src/docs/archive/README.md | Archive governance ledger | Correct | `src/docs/archive/README.md` | N/A | 2026-02-23 | pending |
 
 ## Red-Flag Triggers (Rewrite/Remove Required)
 1. Claim references code paths that no longer exist.

@@ -7,7 +7,7 @@ configuration and value extraction.
 """
 from typing import List, Dict, Any
 
-from handlers.base_handler import CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
 
 

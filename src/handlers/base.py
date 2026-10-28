@@ -17,11 +17,14 @@ from calibration.conformal import ConformalPredictor
 from handlers.types import ChartCoordinateSystem, ExtractionResult
 from services.orientation_service import Orientation, OrientationService
 from services.dual_axis_service import DualAxisDecision
+from utils.validation_utils import is_numeric
 
-# Baseline detector components (compatibility facade path remains stable)
-from core.baseline_detection import (
+# Baseline detector components
+from core.baseline import (
     ModularBaselineDetector,
     DetectorConfig,
+)
+from core.baseline.clustering import (
     DBSCANClusterer,
     HDBSCANClusterer,
     KMeansGumbelClusterer,
@@ -456,8 +459,20 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
     ) -> Dict[str, Any]:
         """Calibrate primary/secondary axes and expose canonical aliases."""
         calibrations: Dict[str, Any] = {"primary": None, "secondary": None, "x": None, "y": None}
-        primary_labels = dual_decision.primary_labels
+        primary_labels = list(dual_decision.primary_labels) if dual_decision.primary_labels else []
         axis_type = "y" if orientation == Orientation.VERTICAL else "x"
+
+        # If primary scale labels are absent or insufficient (< 2), fall back to numeric tick labels
+        if len(primary_labels) < 2:
+            candidate_ticks = getattr(classified_labels, "tick_labels", []) or []
+            fallback_ticks = []
+            for lbl in candidate_ticks:
+                raw = str(lbl.get("text", "")).replace("$", "").replace("%", "").strip()
+                if lbl.get("cleanedvalue") is not None or is_numeric(raw):
+                    fallback_ticks.append(lbl)
+            if len(fallback_ticks) >= 2:
+                primary_labels = fallback_ticks
+                self.logger.info("Using %d numeric tick labels for primary axis fallback calibration", len(fallback_ticks))
 
         cal_primary = self.calibration_service.calibrate(primary_labels, axis_type=axis_type)
         calibrations["primary"] = cal_primary
@@ -555,6 +570,12 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         orientation: Orientation = Orientation.NOT_APPLICABLE,
     ) -> ExtractionResult:
         """Create standardized failure result."""
+        if isinstance(orientation, str):
+            from services.orientation_service import OrientationService
+            try:
+                orientation = OrientationService.from_any(orientation)
+            except Exception:
+                orientation = Orientation.VERTICAL
         return ExtractionResult(
             chart_type=self.get_chart_type(),
             coordinate_system=ChartCoordinateSystem.CARTESIAN,

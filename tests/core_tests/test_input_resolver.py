@@ -530,3 +530,17 @@ class TestUpfrontClassificationAndDirectoryForwarding:
             mock_run.assert_not_called()
 
 
+def test_resolved_asset_image_buffer_field():
+    import numpy as np
+    buf = np.zeros((100, 100, 3), dtype=np.uint8)
+    asset = ResolvedAsset(
+        image_path=Path("chart.png"),
+        source_document="doc.pdf",
+        page_index=1,
+        figure_id="doc_p001_f01",
+        image_buffer=buf,
+    )
+    assert asset.image_buffer is buf
+
+
+

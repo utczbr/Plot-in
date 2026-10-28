@@ -93,186 +93,7 @@ class BaseCalibration(ABC):
             - values: np.ndarray of numeric label values
             - weights: np.ndarray of confidence scores
         """
-        return BaseCalibration._extract_points_with_adaptive_threshold(
-            scale_labels, axis_type, True, initial_confidence_threshold, min_points_required
-        )
-    
-    @staticmethod
-    def _extract_points_with_adaptive_threshold(
-        scale_labels: List[Dict],
-        axis_type: str,
-        prefer_cleaned: bool = True,
-        initial_confidence_threshold: float = 0.8,
-        min_points_required: int = 2,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Extract coords, values, weights from labels with ADAPTIVE confidence threshold.
-
-        Strategy:
-        1. Start with initial_confidence_threshold (0.8)
-        2. If insufficient points, reduce threshold by 0.1 steps
-        3. Stop when min_points_required is reached or threshold hits 0.0
-
-        Returns:
-            coords: Pixel positions (1D)
-            values: Numeric values from labels (1D)
-            weights: Confidences in [0,1], filtered by adaptive threshold
-        """
-        if not isinstance(scale_labels, list):
-            raise TypeError("scale_labels must be a list of dictionaries")
-
-        if axis_type.lower() not in ('x', 'y'):
-            raise ValueError(f"axis_type must be 'x' or 'y', got {axis_type}")
-
-        # Adaptive threshold loop
-        confidence_threshold = initial_confidence_threshold
-        coords_list = []
-        values_list = []
-        weights_list = []
-
-        logger.debug(f"ADAPTIVE THRESHOLD CALIBRATION (axis={axis_type})")
-        logger.debug(f"   ├─ Initial threshold: {confidence_threshold:.2f}")
-        logger.debug(f"   ├─ Min points required: {min_points_required}")
-        logger.debug(f"   └─ Total labels provided: {len(scale_labels)}")
-
-        # Safety: limit iterations to prevent infinite loops
-        max_threshold_iterations = 15  # From 0.8 down to 0.0 in 0.1 steps = max 9 iterations
-        iteration_count = 0
-        tried_zero_threshold = False
-
-        while confidence_threshold >= 0.0 and iteration_count < max_threshold_iterations:
-            iteration_count += 1
-            coords_list = []
-            values_list = []
-            weights_list = []
-
-            for lbl_idx, lbl in enumerate(scale_labels):
-                if not isinstance(lbl, dict):
-                    logger.warning(f"Skipping non-dictionary item at index {lbl_idx}")
-                    continue
-
-                xyxy = lbl.get('xyxy')
-                if not xyxy or len(xyxy) < 4:
-                    logger.warning(f"Skipping label {lbl_idx} with invalid or missing xyxy field")
-                    continue
-
-                # Extract confidence first to apply threshold
-                try:
-                    conf = float(lbl.get("ocr_confidence", confidence_threshold))
-                    conf = max(0.0, min(1.0, conf))
-                except (ValueError, TypeError):
-                    logger.debug(f"   └─ Label {lbl_idx}: Invalid confidence, using threshold {confidence_threshold:.2f}")
-                    conf = confidence_threshold
-
-                # Apply threshold filter BEFORE processing
-                if conf < confidence_threshold:
-                    continue
-
-                # Extract pixel coordinate
-                try:
-                    if axis_type.lower().startswith('y'):
-                        pos = 0.5 * (float(xyxy[1]) + float(xyxy[3]))
-                    else:
-                        pos = 0.5 * (float(xyxy[0]) + float(xyxy[2]))
-                except (ValueError, IndexError, TypeError):
-                    logger.warning(f"Skipping label {lbl_idx} with invalid xyxy coordinates: {xyxy}")
-                    continue
-
-                # Extract numeric value
-                val: Optional[float] = None
-
-                # Try cleaned value first
-                if prefer_cleaned and 'cleanedvalue' in lbl:
-                    try:
-                        val = float(lbl['cleanedvalue'])
-                    except (ValueError, TypeError):
-                        logger.debug(f"Failed to parse cleanedvalue for label {lbl_idx}: {lbl.get('cleanedvalue')}")
-                        val = None
-
-                # Fallback to text parsing
-                if val is None:
-                    txt = str(lbl.get('text', '')).strip()
-                    if txt:
-                        # Normalize number formats (handle commas as thousands separator or decimal)
-                        t = txt.replace(' ', '').replace(',', '.')
-
-                        # Regex: sign, digits, optional decimal, optional exponent
-                        matches = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', t)
-
-                        if matches:
-                            try:
-                                # Take first match (most common case)
-                                val = float(matches[0])
-                            except (ValueError, TypeError):
-                                logger.debug(f"Failed to parse numeric value from text for label {lbl_idx}: {txt}")
-                                val = None
-
-                if val is None:
-                    continue
-
-                # FIXED: Add finite check
-                if not np.isfinite(val):
-                    logger.warning(f"Skipping label {lbl_idx} with non-finite value: {val}")
-                    continue
-
-                # Valid point found that passes threshold
-                coords_list.append(pos)
-                values_list.append(val)
-                weights_list.append(conf)
-
-                logger.debug(
-                    f"   └─ Label {lbl_idx}: text='{lbl.get('text', 'N/A')}', val={val:.2f}, "
-                    f"pos={pos:.1f}px, conf={conf:.3f} ≥ {confidence_threshold:.2f} ✓"
-                )
-
-            # Check if we have enough points
-            num_points = len(coords_list)
-            logger.debug(f"   ├─ Threshold {confidence_threshold:.2f}: Found {num_points} points")
-
-            if num_points >= min_points_required:
-                logger.info(
-                    f"✅ ADAPTIVE THRESHOLD SUCCESS: {num_points} points at "
-                    f"confidence >= {confidence_threshold:.2f}"
-                )
-                break
-
-            # If we're at zero threshold, we've tried everything - break to avoid infinite loop
-            if confidence_threshold <= 0.0:
-                logger.debug(f"   ├─ Reached zero threshold, stopping search")
-                break
-
-            # Reduce threshold and try again
-            confidence_threshold -= 0.1
-            confidence_threshold = max(0.0, confidence_threshold)  # Clamp to 0.0
-
-            logger.debug(f"   ├─ Insufficient points, lowering threshold to {confidence_threshold:.2f}")
-
-        # Final validation
-        if len(coords_list) < min_points_required:
-            logger.warning(
-                f"⚠️  ADAPTIVE THRESHOLD FAILED: Only {len(coords_list)} points found "
-                f"after trying all thresholds down to 0.0"
-            )
-            return np.array([]), np.array([]), np.array([])
-
-        # Convert to numpy arrays
-        coords = np.array(coords_list, dtype=float)
-        values = np.array(values_list, dtype=float)
-        weights = np.array(weights_list, dtype=float)
-
-        # Filter out NaN/inf
-        valid_mask = np.isfinite(coords) & np.isfinite(values) & np.isfinite(weights)
-        num_valid = np.sum(valid_mask)
-
-        if num_valid < min_points_required:
-            logger.warning(
-                f"After NaN filtering: {num_valid} valid points (need {min_points_required})"
-            )
-            return np.array([]), np.array([]), np.array([])
-
-        logger.debug(f"   └─ Final: {num_valid} valid points after filtering")
-
-        return coords[valid_mask], values[valid_mask], weights[valid_mask]
+        return BaseCalibration._extract_points(scale_labels, axis_type)
 
     @staticmethod
     def _extract_points(
@@ -323,29 +144,36 @@ class BaseCalibration(ABC):
 
             # Try cleaned value first
             if prefer_cleaned and 'cleanedvalue' in lbl:
+                cv = lbl['cleanedvalue']
                 try:
-                    val = float(lbl['cleanedvalue'])
+                    val = float(cv)
                 except (ValueError, TypeError):
-                    logger.debug(f"Failed to parse cleanedvalue for label {lbl_idx}: {lbl.get('cleanedvalue')}")
-                    val = None
+                    from utils.validation_utils import clean_numeric_text
+                    val = clean_numeric_text(str(cv))
+                    if val is None:
+                        logger.debug(f"Failed to parse cleanedvalue for label {lbl_idx}: {cv}")
 
             # Fallback to text parsing
             if val is None:
                 txt = str(lbl.get('text', '')).strip()
                 if txt:
-                    # Normalize number formats (handle commas as thousands separator or decimal)
-                    t = txt.replace(' ', '').replace(',', '.')
-
-                    # Regex: sign, digits, optional decimal, optional exponent
-                    matches = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', t)
-
-                    if matches:
-                        try:
-                            # Take first match (most common case)
-                            val = float(matches[0])
-                        except (ValueError, TypeError):
-                            logger.debug(f"Failed to parse numeric value from text for label {lbl_idx}: {txt}")
-                            val = None
+                    from utils.validation_utils import clean_numeric_text, is_numeric
+                    txt_norm = txt.translate(str.maketrans({
+                        '\u2212': '-', '\u2013': '-', '\u2014': '-',
+                        '\u2015': '-', '\ufe63': '-', '\uff0d': '-',
+                    }))
+                    val = clean_numeric_text(txt_norm)
+                    if val is None:
+                        # Secondary fallback only if string does not contain categorical letters
+                        core = re.sub(r'[\s\$\%\€\£,]', '', txt_norm)
+                        if not re.search(r'[A-Za-df-z]', core):
+                            matches = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', core)
+                            if matches:
+                                try:
+                                    val = float(matches[0])
+                                except (ValueError, TypeError):
+                                    logger.debug(f"Failed to parse numeric value from text for label {lbl_idx}: {txt}")
+                                    val = None
 
             if val is None:
                 continue
@@ -450,74 +278,3 @@ class BaseCalibration(ABC):
 
         sol = res[0]
         return float(sol[0]), float(sol[1])
-
-    @staticmethod
-    def _compute_mad_threshold(
-        x: np.ndarray, 
-        y: np.ndarray, 
-        base_thr: float, 
-        weights: Optional[np.ndarray] = None
-    ) -> float:
-        """
-        Compute adaptive inlier threshold using (Weighted) Median Absolute Deviation.
-        
-        Args:
-            x: Points x
-            y: Points y
-            base_thr: Minimum threshold floor
-            weights: Optional weights for weighted median calculation
-            
-        Returns:
-            Adaptive threshold in pixels
-        """
-        if x.size < 3:
-            return base_thr
-
-        try:
-            # Initial simple fit to get residuals
-            m, b = BaseCalibration._refit_linear(x, y, weights)
-            resid = np.abs(y - (m * x + b))
-
-            if weights is not None:
-                # Weighted MAD
-                # Normalize weights
-                w_norm = weights / np.maximum(1e-6, weights.sum())
-                
-                # Sort by residual size
-                sorted_idx = np.argsort(resid)
-                sorted_resid = resid[sorted_idx]
-                sorted_weights = w_norm[sorted_idx]
-                
-                # Weighted median of residuals
-                cumsum_weights = np.cumsum(sorted_weights)
-                total_weight = cumsum_weights[-1]
-                med_idx = np.searchsorted(cumsum_weights, total_weight / 2.0)
-                med_idx = min(med_idx, len(sorted_resid) - 1)
-                med = sorted_resid[med_idx]
-                
-                # Weighted MAD of deviation from median
-                abs_dev = np.abs(sorted_resid - med)
-                sorted_abs_dev_idx = np.argsort(abs_dev)
-                sorted_abs_dev = abs_dev[sorted_abs_dev_idx]
-                sorted_weights_mad = w_norm[sorted_abs_dev_idx]
-                
-                cumsum_mad = np.cumsum(sorted_weights_mad)
-                mad_idx = np.searchsorted(cumsum_mad, total_weight / 2.0)
-                mad_idx = min(mad_idx, len(sorted_abs_dev) - 1)
-                mad = sorted_abs_dev[mad_idx]
-                
-                # Sigma estimate
-                sigma = 1.4826 * mad if mad > 1e-9 else np.sqrt(np.average(resid**2, weights=weights))
-                
-            else:
-                # Standard unweighted MAD
-                median_resid = np.median(resid)
-                mad = np.median(np.abs(resid - median_resid))
-                sigma = 1.4826 * mad if mad > 1e-9 else np.std(resid)
-
-            # Threshold logic: 2.5 sigma, floored at base_thr
-            return max(base_thr, 2.5 * sigma)
-
-        except Exception as e:
-            logger.warning(f"Error in MAD threshold calculation: {e}", exc_info=False)
-            return base_thr

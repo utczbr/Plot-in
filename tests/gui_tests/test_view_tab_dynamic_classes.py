@@ -20,14 +20,6 @@ if str(_src_dir) not in sys.path:
 from main_modern import ModernChartAnalysisApp  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 def test_populate_view_tab_renders_dynamic_chart_classes(qapp):
     dummy = type("Dummy", (), {})()
     dummy.current_analysis_result = {

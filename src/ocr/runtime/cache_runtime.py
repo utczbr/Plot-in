@@ -60,6 +60,22 @@ class ZeroCopyHashCache:
         with self._lock:
             self._cache.clear()
     
+    def __contains__(self, key: Any) -> bool:
+        with self._lock:
+            return key in self._cache
+
+    def __getitem__(self, key: Any) -> Any:
+        with self._lock:
+            return self._cache[key]
+
+    def __setitem__(self, key: Any, value: Any):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = value
+            if len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
+
     def size(self) -> int:
         """
         Return current number of cached entries
@@ -114,45 +130,3 @@ class HashDeduplicator:
         if context:
             array_bytes += context.encode('utf-8')
         return hashlib.sha256(array_bytes).hexdigest()
-
-
-class LRUCache:
-    """
-    Generic LRU cache implementation with thread safety
-    """
-    
-    def __init__(self, max_size: int = 128):
-        self.max_size = max_size
-        self._cache = OrderedDict()
-        self._lock = threading.RLock()
-    
-    def get(self, key):
-        with self._lock:
-            if key in self._cache:
-                # Move to end (most recently used)
-                self._cache.move_to_end(key)
-                return self._cache[key]
-            return None
-    
-    def put(self, key, value):
-        with self._lock:
-            # If key exists, move to end
-            if key in self._cache:
-                self._cache.move_to_end(key)
-            self._cache[key] = value
-            
-            # If over size limit, remove oldest
-            if len(self._cache) > self.max_size:
-                self._cache.popitem(last=False)
-    
-    def clear(self):
-        with self._lock:
-            self._cache.clear()
-    
-    def size(self) -> int:
-        with self._lock:
-            return len(self._cache)
-    
-    def keys(self):
-        with self._lock:
-            return list(self._cache.keys())

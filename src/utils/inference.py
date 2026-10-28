@@ -99,7 +99,7 @@ def _postprocess_bbox_output(
     if isinstance(indices, np.ndarray):
         indices = indices.flatten().tolist()
 
-    final_boxes = np.column_stack([x1, y1, x2, y2])
+    final_boxes = np.maximum(0.0, np.column_stack([x1, y1, x2, y2]))
     detections = []
     for i in indices:
         detections.append({
@@ -139,7 +139,7 @@ def _postprocess_yolo_nms_output(
     detections = []
     for row in filtered:
         detections.append({
-            'xyxy': [int(row[0]), int(row[1]), int(row[2]), int(row[3])],
+            'xyxy': [max(0, int(row[0])), max(0, int(row[1])), max(0, int(row[2])), max(0, int(row[3]))],
             'conf': float(row[4]),
             'cls': int(row[5]),
         })
@@ -352,25 +352,6 @@ def _infer_model_output_type(output: np.ndarray, class_map: dict, requested: str
     return 'bbox'
 
 
-def _postprocess_onnx_output(
-    output: np.ndarray,
-    conf_threshold: float,
-    ratio: float,
-    pad: tuple,
-    class_map: dict,
-    nms_threshold: float = 0.45,
-) -> list:
-    """Backward-compatible alias for bbox postprocessing."""
-    return _postprocess_bbox_output(
-        output=output,
-        conf_threshold=conf_threshold,
-        ratio=ratio,
-        pad=pad,
-        class_map=class_map,
-        nms_threshold=nms_threshold,
-    )
-
-
 def _safe_session_run(session: Any, feed_dict: dict) -> list:
     """Executes session.run with automatic fallback to CPUExecutionProvider if an accelerator fails."""
     try:
@@ -392,82 +373,6 @@ def _safe_session_run(session: Any, feed_dict: dict) -> list:
                     logging.error(f"Inference retry on CPUExecutionProvider also failed: {retry_exc}")
                     raise
         raise
-
-
-def run_inference(
-    session: ort.InferenceSession,
-    image_path: Path,
-    conf_threshold: float,
-    class_map: dict,
-    input_size: tuple = (640, 640),
-    model_output_type: str = "bbox",
-    expected_keypoints: Optional[int] = None,
-) -> list:
-    """Executa inferência ONNX em uma imagem e retorna as detecções."""
-    if not image_path.exists():
-        logging.error(f"Image path does not exist: {image_path}")
-        return []
-
-    if not 0.0 <= conf_threshold <= 1.0:
-        logging.warning(f"Invalid confidence threshold: {conf_threshold}. Using 0.5")
-        conf_threshold = 0.5
-
-    try:
-        logging.debug(f"Loading image: {image_path}")
-        img = cv2.imread(str(image_path))
-        if img is None:
-            logging.error(f"Failed to load image: {image_path}. cv2.imread returned None.")
-            return []
-        logging.debug(f"Image loaded. Dimensions: {img.shape}")
-
-        input_img, ratio, pad = preprocess_with_letterbox(img, new_shape=input_size)
-        input_img = input_img.transpose(2, 0, 1).astype(np.float32) / 255.0
-        input_img = np.expand_dims(input_img, 0)
-
-        input_name = session.get_inputs()[0].name
-        outputs = _safe_session_run(session, {input_name: input_img})
-
-        output_type = _infer_model_output_type(outputs[0], class_map, model_output_type)
-        if output_type == 'classification':
-            return _postprocess_classification_output(
-                output=outputs[0],
-                conf_threshold=conf_threshold,
-                class_map=class_map,
-                image_shape=img.shape[:2],
-            )
-        elif output_type == 'yolo_nms':
-            return _postprocess_yolo_nms_output(
-                output=outputs[0],
-                conf_threshold=conf_threshold,
-                ratio=ratio,
-                pad=pad,
-            )
-        elif output_type == 'pose':
-            return _postprocess_pose_output(
-                output=outputs[0],
-                conf_threshold=conf_threshold,
-                ratio=ratio,
-                pad=pad,
-                expected_keypoints=expected_keypoints,
-            )
-        elif output_type == 'segmentation':
-            return _postprocess_segmentation_output(
-                output0=outputs[0],
-                output1=outputs[1],
-                conf_threshold=conf_threshold,
-                ratio=ratio,
-                pad=pad,
-            )
-        return _postprocess_bbox_output(
-            output=outputs[0],
-            conf_threshold=conf_threshold,
-            ratio=ratio,
-            pad=pad,
-            class_map=class_map,
-        )
-    except Exception as e:
-        logging.error(f"Erro durante a inferência ONNX no arquivo {image_path.name}: {e}")
-        return []
 
 
 def run_inference_on_image(

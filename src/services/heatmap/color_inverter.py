@@ -123,12 +123,6 @@ class LUTColorInverter:
         val = float(self._apply_3d_lut_vectorized(mean_bgr, self.lut)[0, 0])
         return float(np.clip(val, self.min_value, self.max_value))
 
-    def map_image_batch(self, image_bgr: np.ndarray) -> np.ndarray:
-        """Map every pixel in a (H, W, 3) BGR image → (H, W) float32 values."""
-        if not self._is_calibrated or self.lut is None:
-            raise RuntimeError("LUT not precomputed — call precompute_lut() first.")
-        return self._apply_3d_lut_vectorized(image_bgr.astype(np.float32), self.lut)
-
     # ── Branchless trilinear interpolation ───────────────────────────────────
 
     @staticmethod

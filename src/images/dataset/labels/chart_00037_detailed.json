@@ -1,0 +1,2724 @@
+{
+  "schema_version": "v4.1",
+  "dataset_version": "4.1.0",
+  "image": {
+    "width": 672,
+    "height": 480
+  },
+  "chart_type": "scatter",
+  "semantic_domain": "business",
+  "is_scientific": false,
+  "is_composite": false,
+  "composite_chart_types": [],
+  "composite_domains": [],
+  "subplots": [
+    {
+      "index": 0,
+      "chart_type": "scatter",
+      "semantic_domain": "business",
+      "is_scientific": false,
+      "series": [
+        {
+          "idx": 0,
+          "name": null
+        },
+        {
+          "idx": 1,
+          "name": null
+        },
+        {
+          "idx": 2,
+          "name": null
+        },
+        {
+          "idx": 3,
+          "name": null
+        },
+        {
+          "idx": 4,
+          "name": null
+        }
+      ],
+      "scale_axes": {
+        "primary": "x",
+        "secondary": "y"
+      }
+    }
+  ],
+  "annotations": [
+    {
+      "id": 0,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "chart_title",
+      "subplot": 0,
+      "xyxy": [
+        180.63,
+        26.67,
+        556.76,
+        45.67
+      ],
+      "obb": [
+        [
+          180.63,
+          26.67
+        ],
+        [
+          556.76,
+          26.67
+        ],
+        [
+          556.76,
+          45.67
+        ],
+        [
+          180.63,
+          45.67
+        ]
+      ],
+      "text": "Return on Ad Spend vs Marketing Spend",
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 1,
+      "stream": "annotations",
+      "class_id": 2,
+      "class_name": "axis_title",
+      "subplot": 0,
+      "xyxy": [
+        26.67,
+        134.07,
+        41.67,
+        323.95
+      ],
+      "obb": [
+        [
+          49.17,
+          229.01
+        ],
+        [
+          34.17,
+          229.01
+        ],
+        [
+          34.17,
+          39.14
+        ],
+        [
+          49.17,
+          39.14
+        ]
+      ],
+      "text": "Operating Expenses ($)",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y"
+      }
+    },
+    {
+      "id": 2,
+      "stream": "annotations",
+      "class_id": 2,
+      "class_name": "axis_title",
+      "subplot": 0,
+      "xyxy": [
+        284.57,
+        438.33,
+        452.82,
+        453.33
+      ],
+      "obb": [
+        [
+          284.57,
+          438.33
+        ],
+        [
+          452.82,
+          438.33
+        ],
+        [
+          452.82,
+          453.33
+        ],
+        [
+          284.57,
+          453.33
+        ]
+      ],
+      "text": "Automation Rate (%)",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x"
+      }
+    },
+    {
+      "id": 3,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        282.27,
+        405.69,
+        309.58,
+        433.0
+      ],
+      "obb": [
+        [
+          290.05,
+          430.17
+        ],
+        [
+          283.69,
+          423.81
+        ],
+        [
+          301.81,
+          405.69
+        ],
+        [
+          308.17,
+          412.05
+        ]
+      ],
+      "text": "200",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 4,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        375.65,
+        405.69,
+        402.96,
+        433.0
+      ],
+      "obb": [
+        [
+          383.43,
+          430.17
+        ],
+        [
+          377.06,
+          423.81
+        ],
+        [
+          395.18,
+          405.69
+        ],
+        [
+          401.54,
+          412.05
+        ]
+      ],
+      "text": "250",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 5,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        469.07,
+        405.69,
+        496.29,
+        432.91
+      ],
+      "obb": [
+        [
+          476.85,
+          430.08
+        ],
+        [
+          470.48,
+          423.72
+        ],
+        [
+          488.51,
+          405.69
+        ],
+        [
+          494.88,
+          412.05
+        ]
+      ],
+      "text": "300",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 6,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        562.44,
+        405.69,
+        589.67,
+        432.91
+      ],
+      "obb": [
+        [
+          570.22,
+          430.08
+        ],
+        [
+          563.86,
+          423.72
+        ],
+        [
+          581.89,
+          405.69
+        ],
+        [
+          588.25,
+          412.05
+        ]
+      ],
+      "text": "350",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 7,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        95.56,
+        405.69,
+        122.79,
+        432.91
+      ],
+      "obb": [
+        [
+          103.34,
+          430.08
+        ],
+        [
+          96.98,
+          423.72
+        ],
+        [
+          115.01,
+          405.69
+        ],
+        [
+          121.37,
+          412.05
+        ]
+      ],
+      "text": "100",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 8,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        188.94,
+        405.69,
+        216.16,
+        432.91
+      ],
+      "obb": [
+        [
+          196.72,
+          430.08
+        ],
+        [
+          190.35,
+          423.72
+        ],
+        [
+          208.38,
+          405.69
+        ],
+        [
+          214.75,
+          412.05
+        ]
+      ],
+      "text": "150",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 9,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        47.0,
+        324.54,
+        82.72,
+        341.14
+      ],
+      "obb": [
+        [
+          47.0,
+          324.54
+        ],
+        [
+          82.72,
+          324.54
+        ],
+        [
+          82.72,
+          341.14
+        ],
+        [
+          47.0,
+          341.14
+        ]
+      ],
+      "text": "$\\mathdefault{-10^{0}}$",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 10,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        47.34,
+        382.29,
+        82.72,
+        398.89
+      ],
+      "obb": [
+        [
+          47.34,
+          382.29
+        ],
+        [
+          82.72,
+          382.29
+        ],
+        [
+          82.72,
+          398.89
+        ],
+        [
+          47.34,
+          398.89
+        ]
+      ],
+      "text": "$\\mathdefault{-10^{1}}$",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 11,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        58.21,
+        196.23,
+        82.72,
+        212.83
+      ],
+      "obb": [
+        [
+          58.21,
+          196.23
+        ],
+        [
+          82.72,
+          196.23
+        ],
+        [
+          82.72,
+          212.83
+        ],
+        [
+          58.21,
+          212.83
+        ]
+      ],
+      "text": "$\\mathdefault{10^{0}}$",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 12,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        58.55,
+        138.48,
+        82.72,
+        155.08
+      ],
+      "obb": [
+        [
+          58.55,
+          138.48
+        ],
+        [
+          82.72,
+          138.48
+        ],
+        [
+          82.72,
+          155.08
+        ],
+        [
+          58.55,
+          155.08
+        ]
+      ],
+      "text": "$\\mathdefault{10^{1}}$",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 13,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        58.66,
+        80.74,
+        82.72,
+        97.34
+      ],
+      "obb": [
+        [
+          58.66,
+          80.74
+        ],
+        [
+          82.72,
+          80.74
+        ],
+        [
+          82.72,
+          97.34
+        ],
+        [
+          58.66,
+          97.34
+        ]
+      ],
+      "text": "$\\mathdefault{10^{2}}$",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 14,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        73.1,
+        262.18,
+        82.72,
+        275.18
+      ],
+      "obb": [
+        [
+          73.1,
+          262.18
+        ],
+        [
+          82.72,
+          262.18
+        ],
+        [
+          82.72,
+          275.18
+        ],
+        [
+          73.1,
+          275.18
+        ]
+      ],
+      "text": "$\\mathdefault{0}$",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 15,
+      "stream": "annotations",
+      "class_id": 0,
+      "class_name": "chart",
+      "subplot": 0,
+      "xyxy": [
+        92.06,
+        61.67,
+        645.33,
+        396.35
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 16,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        191.9,
+        262.66,
+        200.95,
+        271.71
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          146.72,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        112.68,
+        262.66,
+        121.73,
+        271.71
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          104.3,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 18,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        135.67,
+        114.05,
+        144.72,
+        123.09
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          116.61,
+          29.017037
+        ]
+      }
+    },
+    {
+      "id": 19,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        153.38,
+        131.41,
+        162.42,
+        140.45
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          126.09,
+          14.519624
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        168.75,
+        94.79,
+        177.79,
+        103.83
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          134.32,
+          62.54897
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        174.91,
+        109.05,
+        183.95,
+        118.1
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          137.62,
+          35.411037
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        183.74,
+        131.61,
+        192.79,
+        140.66
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          142.35,
+          14.402698
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        201.73,
+        84.19,
+        210.77,
+        93.23
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          151.98,
+          95.455368
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        203.8,
+        80.29,
+        212.84,
+        89.33
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          153.09,
+          111.51452
+        ]
+      }
+    },
+    {
+      "id": 25,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        206.68,
+        96.97,
+        215.72,
+        106.02
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          154.63,
+          57.323577
+        ]
+      }
+    },
+    {
+      "id": 26,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        216.09,
+        87.89,
+        225.13,
+        96.94
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          159.67,
+          82.34108
+        ]
+      }
+    },
+    {
+      "id": 27,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        218.37,
+        103.27,
+        227.41,
+        112.31
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          160.89,
+          44.597001
+        ]
+      }
+    },
+    {
+      "id": 28,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        219.6,
+        102.16,
+        228.64,
+        111.21
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          161.55,
+          46.60848
+        ]
+      }
+    },
+    {
+      "id": 29,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        220.44,
+        78.41,
+        229.48,
+        87.45
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          162.0,
+          120.190146
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        220.51,
+        85.31,
+        229.56,
+        94.36
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          162.04,
+          91.264063
+        ]
+      }
+    },
+    {
+      "id": 31,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        225.37,
+        109.74,
+        234.41,
+        118.78
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          164.64,
+          34.460597
+        ]
+      }
+    },
+    {
+      "id": 32,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        233.94,
+        77.9,
+        242.99,
+        86.95
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          169.23,
+          122.63874
+        ]
+      }
+    },
+    {
+      "id": 33,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        246.16,
+        71.97,
+        255.2,
+        81.01
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          175.77,
+          155.36956
+        ]
+      }
+    },
+    {
+      "id": 34,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        248.0,
+        81.23,
+        257.05,
+        90.28
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          176.76,
+          107.378704
+        ]
+      }
+    },
+    {
+      "id": 35,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        283.77,
+        262.66,
+        292.81,
+        271.71
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          195.91,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 36,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        258.01,
+        78.78,
+        267.06,
+        87.82
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          182.12,
+          118.42924
+        ]
+      }
+    },
+    {
+      "id": 37,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        262.72,
+        77.01,
+        271.76,
+        86.05
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          184.64,
+          127.096905
+        ]
+      }
+    },
+    {
+      "id": 38,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        263.67,
+        89.36,
+        272.72,
+        98.4
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          185.15,
+          77.67386
+        ]
+      }
+    },
+    {
+      "id": 39,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        265.02,
+        72.45,
+        274.06,
+        81.49
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          185.87,
+          152.439747
+        ]
+      }
+    },
+    {
+      "id": 40,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        265.88,
+        66.67,
+        274.92,
+        75.72
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          186.33,
+          191.918019
+        ]
+      }
+    },
+    {
+      "id": 41,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        267.99,
+        88.81,
+        277.03,
+        97.85
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          187.46,
+          79.384982
+        ]
+      }
+    },
+    {
+      "id": 42,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        271.85,
+        88.82,
+        280.9,
+        97.86
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          189.53,
+          79.365401
+        ]
+      }
+    },
+    {
+      "id": 43,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        274.78,
+        129.89,
+        283.83,
+        138.93
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          191.1,
+          15.42956
+        ]
+      }
+    },
+    {
+      "id": 44,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        276.91,
+        78.81,
+        285.96,
+        87.85
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          192.24,
+          118.292388
+        ]
+      }
+    },
+    {
+      "id": 45,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        281.34,
+        86.35,
+        290.38,
+        95.39
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          194.61,
+          87.563872
+        ]
+      }
+    },
+    {
+      "id": 46,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        281.96,
+        81.57,
+        291.0,
+        90.61
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          194.94,
+          105.956305
+        ]
+      }
+    },
+    {
+      "id": 47,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        281.97,
+        70.62,
+        291.02,
+        79.66
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          194.95,
+          163.960949
+        ]
+      }
+    },
+    {
+      "id": 48,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        283.75,
+        83.37,
+        292.79,
+        92.41
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          195.9,
+          98.629875
+        ]
+      }
+    },
+    {
+      "id": 49,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        290.99,
+        76.12,
+        300.04,
+        85.16
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          199.78,
+          131.693249
+        ]
+      }
+    },
+    {
+      "id": 50,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        292.28,
+        84.97,
+        301.33,
+        94.01
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          200.47,
+          92.533784
+        ]
+      }
+    },
+    {
+      "id": 51,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        292.34,
+        117.42,
+        301.38,
+        126.46
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          200.5,
+          25.370098
+        ]
+      }
+    },
+    {
+      "id": 52,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        293.85,
+        79.27,
+        302.9,
+        88.31
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          201.31,
+          116.125452
+        ]
+      }
+    },
+    {
+      "id": 53,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        296.9,
+        68.59,
+        305.94,
+        77.64
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          202.94,
+          177.760413
+        ]
+      }
+    },
+    {
+      "id": 54,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        298.33,
+        71.13,
+        307.38,
+        80.17
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          203.71,
+          160.674286
+        ]
+      }
+    },
+    {
+      "id": 55,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        305.95,
+        65.91,
+        315.0,
+        74.95
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          207.79,
+          197.849054
+        ]
+      }
+    },
+    {
+      "id": 56,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        310.98,
+        62.39,
+        320.02,
+        71.43
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          210.48,
+          227.650707
+        ]
+      }
+    },
+    {
+      "id": 57,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        320.89,
+        72.78,
+        329.94,
+        81.82
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          215.79,
+          150.437995
+        ]
+      }
+    },
+    {
+      "id": 58,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        322.09,
+        81.53,
+        331.13,
+        90.57
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          216.43,
+          106.132169
+        ]
+      }
+    },
+    {
+      "id": 59,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        322.97,
+        71.12,
+        332.01,
+        80.16
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          216.9,
+          160.74162
+        ]
+      }
+    },
+    {
+      "id": 60,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        325.11,
+        71.72,
+        334.16,
+        80.76
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          218.05,
+          156.915193
+        ]
+      }
+    },
+    {
+      "id": 61,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        329.75,
+        117.22,
+        338.79,
+        126.26
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          220.53,
+          25.56985
+        ]
+      }
+    },
+    {
+      "id": 62,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        338.62,
+        68.38,
+        347.66,
+        77.42
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          225.28,
+          179.281004
+        ]
+      }
+    },
+    {
+      "id": 63,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        347.08,
+        97.89,
+        356.12,
+        106.93
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          229.81,
+          55.278848
+        ]
+      }
+    },
+    {
+      "id": 64,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        349.32,
+        67.04,
+        358.36,
+        76.08
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          231.01,
+          189.109727
+        ]
+      }
+    },
+    {
+      "id": 65,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        353.31,
+        69.61,
+        362.36,
+        78.65
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          233.15,
+          170.687847
+        ]
+      }
+    },
+    {
+      "id": 66,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        356.43,
+        75.8,
+        365.48,
+        84.84
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          234.82,
+          133.355176
+        ]
+      }
+    },
+    {
+      "id": 67,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        357.16,
+        69.92,
+        366.2,
+        78.96
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          235.21,
+          168.594123
+        ]
+      }
+    },
+    {
+      "id": 68,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        359.55,
+        95.87,
+        368.59,
+        104.91
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          236.49,
+          59.913538
+        ]
+      }
+    },
+    {
+      "id": 69,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        360.84,
+        99.74,
+        369.88,
+        108.78
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          237.18,
+          51.344732
+        ]
+      }
+    },
+    {
+      "id": 70,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        362.48,
+        69.51,
+        371.53,
+        78.55
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          238.06,
+          171.378618
+        ]
+      }
+    },
+    {
+      "id": 71,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        364.72,
+        71.67,
+        373.77,
+        80.72
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          239.26,
+          157.209727
+        ]
+      }
+    },
+    {
+      "id": 72,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        366.14,
+        74.39,
+        375.19,
+        83.43
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          240.02,
+          141.1017
+        ]
+      }
+    },
+    {
+      "id": 73,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        366.87,
+        83.44,
+        375.92,
+        92.48
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          240.41,
+          98.348537
+        ]
+      }
+    },
+    {
+      "id": 74,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        367.82,
+        81.65,
+        376.87,
+        90.69
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          240.92,
+          105.625749
+        ]
+      }
+    },
+    {
+      "id": 75,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        370.48,
+        74.68,
+        379.52,
+        83.72
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          242.34,
+          139.456487
+        ]
+      }
+    },
+    {
+      "id": 76,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        371.24,
+        69.37,
+        380.29,
+        78.41
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          242.75,
+          172.339459
+        ]
+      }
+    },
+    {
+      "id": 77,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        375.52,
+        94.62,
+        384.56,
+        103.66
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          245.04,
+          62.974087
+        ]
+      }
+    },
+    {
+      "id": 78,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        380.5,
+        77.85,
+        389.55,
+        86.9
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          247.71,
+          122.874836
+        ]
+      }
+    },
+    {
+      "id": 79,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        381.72,
+        73.75,
+        390.76,
+        82.79
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          248.36,
+          144.722654
+        ]
+      }
+    },
+    {
+      "id": 80,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        386.67,
+        98.99,
+        395.71,
+        108.03
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          251.01,
+          52.899905
+        ]
+      }
+    },
+    {
+      "id": 81,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        388.37,
+        99.31,
+        397.41,
+        108.35
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          251.92,
+          52.225291
+        ]
+      }
+    },
+    {
+      "id": 82,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        396.86,
+        74.31,
+        405.91,
+        83.35
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          256.47,
+          141.539982
+        ]
+      }
+    },
+    {
+      "id": 83,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        403.55,
+        77.32,
+        412.59,
+        86.36
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          260.05,
+          125.541956
+        ]
+      }
+    },
+    {
+      "id": 84,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        406.56,
+        66.82,
+        415.6,
+        75.87
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          261.66,
+          190.76479
+        ]
+      }
+    },
+    {
+      "id": 85,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        410.74,
+        68.05,
+        419.78,
+        77.09
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          263.9,
+          181.669844
+        ]
+      }
+    },
+    {
+      "id": 86,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        414.62,
+        70.61,
+        423.67,
+        79.66
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          265.98,
+          164.00732
+        ]
+      }
+    },
+    {
+      "id": 87,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        420.43,
+        68.89,
+        429.48,
+        77.93
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          269.09,
+          175.6718
+        ]
+      }
+    },
+    {
+      "id": 88,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        424.26,
+        84.56,
+        433.3,
+        93.61
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          271.14,
+          94.028644
+        ]
+      }
+    },
+    {
+      "id": 89,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        428.61,
+        73.27,
+        437.66,
+        82.31
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          273.47,
+          147.510996
+        ]
+      }
+    },
+    {
+      "id": 90,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        439.59,
+        65.56,
+        448.64,
+        74.61
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          279.35,
+          200.602903
+        ]
+      }
+    },
+    {
+      "id": 91,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        440.19,
+        68.18,
+        449.23,
+        77.22
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          279.67,
+          180.721844
+        ]
+      }
+    },
+    {
+      "id": 92,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        452.78,
+        68.33,
+        461.82,
+        77.37
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          286.41,
+          179.663203
+        ]
+      }
+    },
+    {
+      "id": 93,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        454.78,
+        63.04,
+        463.82,
+        72.08
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          287.48,
+          221.870188
+        ]
+      }
+    },
+    {
+      "id": 94,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        455.26,
+        74.11,
+        464.3,
+        83.15
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          287.74,
+          142.678956
+        ]
+      }
+    },
+    {
+      "id": 95,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        460.42,
+        67.46,
+        469.46,
+        76.51
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          290.5,
+          185.946997
+        ]
+      }
+    },
+    {
+      "id": 96,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        472.35,
+        65.04,
+        481.39,
+        74.08
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          296.89,
+          204.842552
+        ]
+      }
+    },
+    {
+      "id": 97,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        474.59,
+        77.18,
+        483.63,
+        86.23
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          298.09,
+          126.198832
+        ]
+      }
+    },
+    {
+      "id": 98,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        475.23,
+        87.25,
+        484.27,
+        96.29
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          298.43,
+          84.486838
+        ]
+      }
+    },
+    {
+      "id": 99,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        478.05,
+        84.81,
+        487.09,
+        93.86
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          299.94,
+          93.095695
+        ]
+      }
+    },
+    {
+      "id": 100,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        484.32,
+        78.06,
+        493.36,
+        87.11
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          303.3,
+          121.849416
+        ]
+      }
+    },
+    {
+      "id": 101,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        485.44,
+        63.71,
+        494.48,
+        72.75
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          303.9,
+          216.015109
+        ]
+      }
+    },
+    {
+      "id": 102,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        490.78,
+        71.59,
+        499.83,
+        80.63
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          306.76,
+          157.761958
+        ]
+      }
+    },
+    {
+      "id": 103,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        493.92,
+        67.6,
+        502.96,
+        76.64
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          308.44,
+          184.939298
+        ]
+      }
+    },
+    {
+      "id": 104,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        500.4,
+        73.52,
+        509.44,
+        82.57
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          311.91,
+          146.035412
+        ]
+      }
+    },
+    {
+      "id": 105,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        504.21,
+        69.53,
+        513.25,
+        78.57
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          313.95,
+          171.255117
+        ]
+      }
+    },
+    {
+      "id": 106,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        509.76,
+        65.81,
+        518.8,
+        74.85
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          316.92,
+          198.663994
+        ]
+      }
+    },
+    {
+      "id": 107,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        529.22,
+        72.41,
+        538.26,
+        81.45
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          327.34,
+          152.68508
+        ]
+      }
+    },
+    {
+      "id": 108,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        570.08,
+        66.93,
+        579.12,
+        75.97
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          349.22,
+          189.956081
+        ]
+      }
+    },
+    {
+      "id": 109,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        595.81,
+        65.3,
+        604.85,
+        74.34
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          363.0,
+          202.727133
+        ]
+      }
+    },
+    {
+      "id": 110,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        615.66,
+        67.14,
+        624.71,
+        76.18
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          373.63,
+          188.376585
+        ]
+      }
+    },
+    {
+      "id": 111,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        433.24,
+        61.67,
+        442.29,
+        70.43
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          275.95,
+          235.625129
+        ]
+      }
+    },
+    {
+      "id": 112,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        450.67,
+        61.67,
+        459.71,
+        69.28
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          285.28,
+          241.107652
+        ]
+      }
+    },
+    {
+      "id": 113,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        415.26,
+        61.67,
+        424.3,
+        67.41
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          266.32,
+          250.239726
+        ]
+      }
+    },
+    {
+      "id": 114,
+      "stream": "annotations_obj",
+      "class_id": 1,
+      "class_name": "data_point",
+      "subplot": 0,
+      "xyxy": [
+        411.62,
+        68.57,
+        420.66,
+        77.61
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "data": [
+          264.37,
+          177.933816
+        ]
+      }
+    }
+  ],
+  "filter_stats": {
+    "size": {},
+    "aspect": {},
+    "viewport": {},
+    "duplicate": {
+      "chart_title": 1,
+      "axis_title": 2,
+      "axis_labels": 12,
+      "chart": 1,
+      "data_point": 99
+    },
+    "overlap": {
+      "data_point": 2
+    }
+  },
+  "image_id": "chart_00037"
+}

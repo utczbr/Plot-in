@@ -276,10 +276,6 @@ class EditorToolbar(QWidget):
             self.mode_changed.emit(EditorMode.VIEW)
 
     @property
-    def selected_class(self) -> str:
-        return self._class_combo.currentText()
-
-    @property
     def selected_chart_type(self) -> str:
         return self._chart_type_combo.currentText()
 

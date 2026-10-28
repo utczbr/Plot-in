@@ -35,15 +35,6 @@ class PieChartClassifier(BaseChartClassifier):
             'classification_threshold': 2.0
         }
 
-    def compute_feature_scores(self, structure_scores: Dict[str, float], 
-                              context_scores: Dict[str, float]) -> Dict[str, float]:
-        """
-        Compute feature scores for determining if this is a pie chart.
-        (Required by BaseChartClassifier)
-        """
-        # Placeholder implementation - we primarily use this class for element classification
-        return {'score': 1.0}
-
     def classify(self, 
                  axis_labels: List[Dict], 
                  chart_elements: List[Dict], 

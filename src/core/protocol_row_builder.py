@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from pipelines.types import ProtocolRow
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,6 +149,10 @@ def _extract_group(element: Dict[str, Any]) -> str:
 
 def _extract_series_id(element: Dict[str, Any], chart_type: str) -> str:
     """Extract series identifier from element."""
+    for key in ('series_id', 'legend_label'):
+        val = element.get(key, '')
+        if isinstance(val, str) and val.strip():
+            return val.strip()
     if chart_type == 'scatter':
         x = element.get('x')
         if x is not None:
@@ -207,7 +213,7 @@ def _get_axis_titles(pipeline_result: Dict[str, Any]) -> List[str]:
 def build_protocol_rows(
     pipeline_result: Dict[str, Any],
     context: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+) -> List[ProtocolRow]:
     """
     Convert pipeline elements to protocol-level rows.
 

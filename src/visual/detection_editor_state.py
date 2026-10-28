@@ -361,10 +361,6 @@ class EditorStateManager(QObject):
         self._undo_stack.indexChanged.connect(self._on_index_changed)
 
     @property
-    def undo_stack(self) -> QUndoStack:
-        return self._undo_stack
-
-    @property
     def edit_count(self) -> int:
         """Number of edits in the stack (may differ from index if undo was used)."""
         return self._undo_stack.index()
@@ -395,10 +391,6 @@ class EditorStateManager(QObject):
     def clear(self) -> None:
         """Clear all undo history."""
         self._undo_stack.clear()
-
-    def mark_clean(self) -> None:
-        """Mark the current state as clean (e.g., after Apply & Re-Extract)."""
-        self._undo_stack.setClean()
 
     def _on_index_changed(self, idx: int):
         self.edit_count_changed.emit(idx)

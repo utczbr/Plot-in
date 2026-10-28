@@ -39,15 +39,6 @@ class DataTabSchema:
     empty_message: str
 
 
-@dataclass(frozen=True)
-class DataTabEditBinding:
-    """Binding between a table cell and an element field."""
-    element_index: int
-    source: str
-    field: str
-    parser: str = "str"
-
-
 _CARTESIAN_TYPES = {"bar", "histogram", "line", "scatter", "box", "area"}
 
 

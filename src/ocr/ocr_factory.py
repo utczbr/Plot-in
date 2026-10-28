@@ -9,9 +9,6 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from .compat.unified_ocr_bridge import create_unified_ocr_engine
-from .orchestrator.unified_ocr_system_v2 import QualityMode
-
 logger = logging.getLogger(__name__)
 
 
@@ -92,7 +89,6 @@ class OCREngineFactory:
     @staticmethod
     def create_engine(
         mode: str = 'paddle_onnx',
-        reader=None,
         use_gpu: bool = False,
         **kwargs
     ):
@@ -109,7 +105,6 @@ class OCREngineFactory:
 
         Args:
             mode: OCR mode selector (defaults to 'paddle_onnx')
-            reader: Ignored (retained for backward compatibility)
             use_gpu: Enable GPU acceleration
             **kwargs: Model paths and tuning parameters
 
@@ -117,31 +112,6 @@ class OCREngineFactory:
             Initialized OCR engine instance
         """
         normalized_mode = (mode or 'paddle_onnx').lower().strip()
-
-        # Handle unified system modes
-        if normalized_mode.startswith('unified_'):
-            if normalized_mode == 'unified_fast':
-                quality_mode = QualityMode.FAST
-            elif normalized_mode == 'unified_optimized':
-                quality_mode = QualityMode.BALANCED
-            elif normalized_mode == 'unified_precise':
-                quality_mode = QualityMode.ACCURATE
-            else:
-                quality_mode = QualityMode.BALANCED
-
-            paddle_params = {
-                'det_session': kwargs.get('det_session'),
-                'rec_session': kwargs.get('rec_session'),
-                'character_dict': kwargs.get('character_dict', []),
-                'cls_session': kwargs.get('cls_session')
-            }
-            return create_unified_ocr_engine(
-                ocr_backend='paddle',
-                quality_mode=quality_mode,
-                enable_gpu=use_gpu,
-                max_workers=kwargs.get('max_workers', 4),
-                paddle_params=paddle_params
-            )
 
         # Handle full document orientation / unwarping pipeline
         if normalized_mode in ('paddle_full', 'paddle_docs'):

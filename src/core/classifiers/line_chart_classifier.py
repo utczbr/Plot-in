@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 
 from .base_classifier import BaseChartClassifier, ClassificationResult
-from utils.validation_utils import is_numeric
+from utils.validation_utils import clean_numeric_text, is_numeric
 from services.orientation_service import Orientation
 
 class LineChartClassifier(BaseChartClassifier):
@@ -80,20 +80,25 @@ class LineChartClassifier(BaseChartClassifier):
             
             if scores[best_class] > threshold:
                 # Additional validation for scale labels
-                if best_class == 'scale_label' and feat['is_numeric']:
-                    # Extract numeric value for calibration
-                    try:
-                        numeric_val = float(feat['text'].replace(',', '').replace('%', ''))
-                        feat['label']['cleaned_value'] = numeric_val
-                        classified[best_class].append(feat['label'])
-                    except:
+                if best_class == 'scale_label':
+                    if feat['is_numeric']:
+                        numeric_val = clean_numeric_text(feat.get('text'))
+                        if numeric_val is not None:
+                            feat['label']['cleaned_value'] = numeric_val
+                            classified['scale_label'].append(feat['label'])
+                        else:
+                            classified['axis_title'].append(feat['label'])
+                    elif feat['ny'] > 0.70 and feat['rel_h'] <= 0.08:
+                        classified['tick_label'].append(feat['label'])
+                    else:
                         classified['axis_title'].append(feat['label'])
                 else:
                     classified[best_class].append(feat['label'])
             else:
-                # Default: numeric = scale, non-numeric = title
                 if feat['is_numeric']:
                     classified['scale_label'].append(feat['label'])
+                elif feat['ny'] > 0.70 and feat['rel_h'] <= 0.08:
+                    classified['tick_label'].append(feat['label'])
                 else:
                     classified['axis_title'].append(feat['label'])
         
@@ -117,7 +122,9 @@ class LineChartClassifier(BaseChartClassifier):
             tick_labels=classified['tick_label'],
             axis_titles=classified['axis_title'],
             confidence=confidence,
-            metadata=metadata
+            metadata=metadata,
+            x_scale_labels=x_scales,
+            y_scale_labels=y_scales,
         )
     
     def _extract_line_features(self, labels: List[Dict], w: int, h: int) -> List[Dict]:
@@ -137,7 +144,7 @@ class LineChartClassifier(BaseChartClassifier):
                 'width': width, 'height': height,
                 'rel_w': width / w, 'rel_h': height / h,
                 'aspect': width / (height + 1e-6),
-                'is_numeric': is_numeric,
+                'is_numeric': is_num,
                 'text': text
             })
         return features
@@ -323,10 +330,3 @@ class LineChartClassifier(BaseChartClassifier):
             scale_labels=[], tick_labels=[], axis_titles=[],
             confidence=0.0, metadata={'error': 'Invalid input'}
         )
-
-    def compute_feature_scores(self, label_features: Dict, region_scores: Dict, element_context: Optional[Dict]) -> Dict[str, float]:
-        """
-        This is a placeholder to satisfy the abstract method requirement.
-        The main logic is in _compute_line_scores.
-        """
-        return self._compute_line_scores(label_features, element_context)

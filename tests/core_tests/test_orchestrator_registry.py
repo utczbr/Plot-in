@@ -14,7 +14,7 @@ sys.modules.setdefault('sklearn.ensemble', MagicMock())
 sys.modules.setdefault('sklearn.preprocessing', MagicMock())
 
 from ChartAnalysisOrchestrator import ChartAnalysisOrchestrator
-from handlers.base_handler import CartesianChartHandler, GridChartHandler, PolarChartHandler
+from handlers.base import CartesianChartHandler, GridChartHandler, PolarChartHandler
 from handlers.types import ExtractionResult, ChartCoordinateSystem
 from services.orientation_service import Orientation
 

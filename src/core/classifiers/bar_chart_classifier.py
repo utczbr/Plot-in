@@ -104,7 +104,7 @@ class BarChartClassifier(BaseChartClassifier):
         )
         
         # IMPROVEMENT: Apply constraint-based post-processing
-        classified = self._apply_constraints(classified, label_features)
+        classified = self._apply_constraints(classified, label_features, orientation)
         
         confidence = self._compute_confidence(all_scores)
         
@@ -141,7 +141,12 @@ class BarChartClassifier(BaseChartClassifier):
         else:
             classified['tick_label'].append(feat['label'])
     
-    def _apply_constraints(self, classified: Dict, features: List[Dict]) -> Dict:
+    def _apply_constraints(
+        self,
+        classified: Dict,
+        features: List[Dict],
+        orientation: Orientation = Orientation.VERTICAL,
+    ) -> Dict:
         """Apply domain-specific constraints to refine classifications."""
         label_to_feat = {tuple(f['label']['xyxy']): f for f in features}
         
@@ -158,8 +163,15 @@ class BarChartClassifier(BaseChartClassifier):
         
         for label in classified.get('tick_label', []):
             feat = label_to_feat.get(tuple(label['xyxy']))
-            if feat and feat.get('min_edge_dist', 0.5) < 0.1:
-                swaps.append((label, 'tick_to_scale'))
+            if feat:
+                if orientation == Orientation.VERTICAL:
+                    scale_edge_dist = min(feat.get('dist_left', 0.5), feat.get('dist_right', 0.5))
+                else:
+                    scale_edge_dist = min(feat.get('dist_top', 0.5), feat.get('dist_bottom', 0.5))
+                if feat.get('is_numeric', False) and scale_edge_dist < 0.1:
+                    swaps.append((label, 'tick_to_scale'))
+                else:
+                    refined_tick.append(label)
             else:
                 refined_tick.append(label)
         
@@ -413,9 +425,10 @@ class BarChartClassifier(BaseChartClassifier):
                     dist = abs(ty - by)
                 min_dist = min(min_dist, dist)
             
-            # Only keep if reasonably aligned
+            # Keep if aligned with a detected bar or positioned clearly in the categorical tick margin
             threshold = 0.15 * (w if orientation == Orientation.VERTICAL else h)
-            if min_dist < threshold:
+            in_tick_margin = (ty / max(h, 1) > 0.75) if orientation == Orientation.VERTICAL else (tx / max(w, 1) < 0.25)
+            if min_dist < threshold or in_tick_margin:
                 aligned_ticks.append(tick)
         
         return aligned_ticks
@@ -441,10 +454,3 @@ class BarChartClassifier(BaseChartClassifier):
             scale_labels=[], tick_labels=[], axis_titles=[],
             confidence=0.0, metadata={'error': 'Invalid input'}
         )
-
-    def compute_feature_scores(self, label_features: Dict, region_scores: Dict, element_context: Optional[Dict]) -> Dict[str, float]:
-        """
-        This is a placeholder to satisfy the abstract method requirement.
-        The main logic is in _compute_bar_scores.
-        """
-        return self._compute_bar_scores(label_features, element_context, element_context.get('orientation', 'vertical'))

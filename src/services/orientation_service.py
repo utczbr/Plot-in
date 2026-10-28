@@ -4,15 +4,11 @@ Type-safe orientation service to prevent string/boolean confusion bugs.
 This service addresses the critical issue where string/boolean confusion
 caused TypeErrors in ModularBaselineDetector.detect() method.
 """
-from enum import Enum
 from typing import Union
 import logging
 
-class Orientation(str, Enum):
-    """Type-safe orientation enum matching baseline_detection.py."""
-    VERTICAL = "vertical"
-    HORIZONTAL = "horizontal"
-    NOT_APPLICABLE = "not_applicable"
+from core.enums import Orientation
+
 
 class OrientationService:
     """Validates and converts orientation values to enum."""
@@ -78,11 +74,3 @@ class OrientationService:
             f"Valid inputs: Orientation.VERTICAL/HORIZONTAL, 'vertical'/'horizontal', "
             f"True/False, 'v'/'h'"
         )
-    
-    @staticmethod
-    def validate_early(orientation: Union[str, bool, Orientation]) -> None:
-        """Validate orientation before pipeline processing."""
-        try:
-            OrientationService.from_any(orientation)
-        except ValueError as e:
-            raise TypeError(f"Invalid orientation in orchestrator: {e}")

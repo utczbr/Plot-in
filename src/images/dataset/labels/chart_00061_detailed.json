@@ -1,0 +1,848 @@
+{
+  "schema_version": "v4.1",
+  "dataset_version": "4.1.0",
+  "image": {
+    "width": 1050,
+    "height": 750
+  },
+  "chart_type": "box",
+  "semantic_domain": "business",
+  "is_scientific": false,
+  "is_composite": false,
+  "composite_chart_types": [],
+  "composite_domains": [],
+  "subplots": [
+    {
+      "index": 0,
+      "chart_type": "box",
+      "semantic_domain": "business",
+      "is_scientific": false,
+      "orientation": "vertical",
+      "scale_axes": {
+        "primary": "y",
+        "secondary": null
+      },
+      "box": {
+        "num_groups": 4,
+        "box_width": 0.6,
+        "medians": [
+          {
+            "group_index": 0,
+            "median_value": 77.2,
+            "position": 1.0
+          },
+          {
+            "group_index": 1,
+            "median_value": 76.0,
+            "position": 2.0
+          },
+          {
+            "group_index": 2,
+            "median_value": 39.5,
+            "position": 3.0
+          },
+          {
+            "group_index": 3,
+            "median_value": 26.0,
+            "position": 4.0
+          }
+        ]
+      }
+    }
+  ],
+  "annotations": [
+    {
+      "id": 0,
+      "stream": "annotations",
+      "class_id": 6,
+      "class_name": "chart_title",
+      "subplot": 0,
+      "xyxy": [
+        332.9,
+        41.67,
+        797.27,
+        69.67
+      ],
+      "obb": [
+        [
+          332.9,
+          41.67
+        ],
+        [
+          797.27,
+          41.67
+        ],
+        [
+          797.27,
+          69.67
+        ],
+        [
+          332.9,
+          69.67
+        ]
+      ],
+      "text": "Offer Acceptance Rate by Job Level",
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 1,
+      "stream": "annotations",
+      "class_id": 2,
+      "class_name": "axis_title",
+      "subplot": 0,
+      "xyxy": [
+        41.67,
+        195.92,
+        60.67,
+        545.42
+      ],
+      "obb": [
+        [
+          70.17,
+          370.67
+        ],
+        [
+          51.17,
+          370.67
+        ],
+        [
+          51.17,
+          21.17
+        ],
+        [
+          70.17,
+          21.17
+        ]
+      ],
+      "text": "Return on Invested Capital (ROIC, %)",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y"
+      }
+    },
+    {
+      "id": 2,
+      "stream": "annotations",
+      "class_id": 2,
+      "class_name": "axis_title",
+      "subplot": 0,
+      "xyxy": [
+        507.15,
+        689.33,
+        623.02,
+        708.33
+      ],
+      "obb": [
+        [
+          507.15,
+          689.33
+        ],
+        [
+          623.02,
+          689.33
+        ],
+        [
+          623.02,
+          708.33
+        ],
+        [
+          507.15,
+          708.33
+        ]
+      ],
+      "text": "Project Type",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x"
+      }
+    },
+    {
+      "id": 3,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        69.0,
+        129.91,
+        107.25,
+        149.91
+      ],
+      "obb": [
+        [
+          69.0,
+          129.91
+        ],
+        [
+          107.25,
+          129.91
+        ],
+        [
+          107.25,
+          149.91
+        ],
+        [
+          69.0,
+          149.91
+        ]
+      ],
+      "text": "100",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 4,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        217.4,
+        661.0,
+        247.9,
+        681.0
+      ],
+      "obb": [
+        [
+          217.4,
+          661.0
+        ],
+        [
+          247.9,
+          661.0
+        ],
+        [
+          247.9,
+          681.0
+        ],
+        [
+          217.4,
+          681.0
+        ]
+      ],
+      "text": "G1",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 5,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        882.27,
+        661.0,
+        912.77,
+        681.0
+      ],
+      "obb": [
+        [
+          882.27,
+          661.0
+        ],
+        [
+          912.77,
+          661.0
+        ],
+        [
+          912.77,
+          681.0
+        ],
+        [
+          882.27,
+          681.0
+        ]
+      ],
+      "text": "G4",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 6,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        439.08,
+        661.0,
+        469.46,
+        681.0
+      ],
+      "obb": [
+        [
+          439.08,
+          661.0
+        ],
+        [
+          469.46,
+          661.0
+        ],
+        [
+          469.46,
+          681.0
+        ],
+        [
+          439.08,
+          681.0
+        ]
+      ],
+      "text": "G2",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 7,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        660.71,
+        661.0,
+        691.08,
+        681.0
+      ],
+      "obb": [
+        [
+          660.71,
+          661.0
+        ],
+        [
+          691.08,
+          661.0
+        ],
+        [
+          691.08,
+          681.0
+        ],
+        [
+          660.71,
+          681.0
+        ]
+      ],
+      "text": "G3",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "x",
+        "label_role": "tick"
+      }
+    },
+    {
+      "id": 8,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        81.75,
+        420.55,
+        107.25,
+        440.55
+      ],
+      "obb": [
+        [
+          81.75,
+          420.55
+        ],
+        [
+          107.25,
+          420.55
+        ],
+        [
+          107.25,
+          440.55
+        ],
+        [
+          81.75,
+          440.55
+        ]
+      ],
+      "text": "40",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 9,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        81.75,
+        323.67,
+        107.25,
+        343.67
+      ],
+      "obb": [
+        [
+          81.75,
+          323.67
+        ],
+        [
+          107.25,
+          323.67
+        ],
+        [
+          107.25,
+          343.67
+        ],
+        [
+          81.75,
+          343.67
+        ]
+      ],
+      "text": "60",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 10,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        81.75,
+        226.79,
+        107.25,
+        246.79
+      ],
+      "obb": [
+        [
+          81.75,
+          226.79
+        ],
+        [
+          107.25,
+          226.79
+        ],
+        [
+          107.25,
+          246.79
+        ],
+        [
+          81.75,
+          246.79
+        ]
+      ],
+      "text": "80",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 11,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        81.88,
+        517.44,
+        107.25,
+        537.44
+      ],
+      "obb": [
+        [
+          81.88,
+          517.44
+        ],
+        [
+          107.25,
+          517.44
+        ],
+        [
+          107.25,
+          537.44
+        ],
+        [
+          81.88,
+          537.44
+        ]
+      ],
+      "text": "20",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 12,
+      "stream": "annotations",
+      "class_id": 8,
+      "class_name": "axis_labels",
+      "subplot": 0,
+      "xyxy": [
+        94.5,
+        614.32,
+        107.25,
+        634.32
+      ],
+      "obb": [
+        [
+          94.5,
+          614.32
+        ],
+        [
+          107.25,
+          614.32
+        ],
+        [
+          107.25,
+          634.32
+        ],
+        [
+          94.5,
+          634.32
+        ]
+      ],
+      "text": "0",
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "axis": "y",
+        "label_role": "scale"
+      }
+    },
+    {
+      "id": 13,
+      "stream": "annotations",
+      "class_id": 0,
+      "class_name": "chart",
+      "subplot": 0,
+      "xyxy": [
+        121.83,
+        94.92,
+        1008.33,
+        646.42
+      ],
+      "visibility": 1,
+      "occluded": false
+    },
+    {
+      "id": 14,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "box",
+      "subplot": 0,
+      "xyxy": [
+        609.41,
+        220.26,
+        742.38,
+        611.18
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 2
+      }
+    },
+    {
+      "id": 15,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "box",
+      "subplot": 0,
+      "xyxy": [
+        166.16,
+        226.55,
+        299.13,
+        460.52
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 0
+      }
+    },
+    {
+      "id": 16,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "box",
+      "subplot": 0,
+      "xyxy": [
+        831.03,
+        409.54,
+        964.01,
+        543.24
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 3
+      }
+    },
+    {
+      "id": 17,
+      "stream": "annotations",
+      "class_id": 1,
+      "class_name": "box",
+      "subplot": 0,
+      "xyxy": [
+        387.78,
+        195.55,
+        520.76,
+        313.39
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 1
+      }
+    },
+    {
+      "id": 18,
+      "stream": "annotations",
+      "class_id": 7,
+      "class_name": "median_line",
+      "subplot": 0,
+      "xyxy": [
+        387.78,
+        252.17,
+        520.76,
+        256.17
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 1
+      }
+    },
+    {
+      "id": 19,
+      "stream": "annotations",
+      "class_id": 7,
+      "class_name": "median_line",
+      "subplot": 0,
+      "xyxy": [
+        166.16,
+        246.35,
+        299.13,
+        250.35
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 0
+      }
+    },
+    {
+      "id": 20,
+      "stream": "annotations",
+      "class_id": 7,
+      "class_name": "median_line",
+      "subplot": 0,
+      "xyxy": [
+        609.41,
+        428.98,
+        742.38,
+        432.98
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 2
+      }
+    },
+    {
+      "id": 21,
+      "stream": "annotations",
+      "class_id": 7,
+      "class_name": "median_line",
+      "subplot": 0,
+      "xyxy": [
+        831.03,
+        494.37,
+        964.01,
+        498.37
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 3
+      }
+    },
+    {
+      "id": 22,
+      "stream": "annotations",
+      "class_id": 4,
+      "class_name": "range_indicator",
+      "subplot": 0,
+      "xyxy": [
+        642.65,
+        159.71,
+        709.14,
+        621.35
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 2
+      }
+    },
+    {
+      "id": 23,
+      "stream": "annotations",
+      "class_id": 4,
+      "class_name": "range_indicator",
+      "subplot": 0,
+      "xyxy": [
+        199.4,
+        186.83,
+        265.89,
+        591.8
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 0
+      }
+    },
+    {
+      "id": 24,
+      "stream": "annotations",
+      "class_id": 4,
+      "class_name": "range_indicator",
+      "subplot": 0,
+      "xyxy": [
+        864.28,
+        219.77,
+        930.76,
+        590.83
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 3
+      }
+    },
+    {
+      "id": 25,
+      "stream": "annotations",
+      "class_id": 4,
+      "class_name": "range_indicator",
+      "subplot": 0,
+      "xyxy": [
+        421.03,
+        143.72,
+        487.51,
+        370.42
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 1
+      }
+    },
+    {
+      "id": 26,
+      "stream": "annotations",
+      "class_id": 9,
+      "class_name": "outlier",
+      "subplot": 0,
+      "xyxy": [
+        894.52,
+        116.98,
+        900.52,
+        122.98
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 3,
+        "data": [
+          4.0,
+          103.7
+        ]
+      }
+    },
+    {
+      "id": 27,
+      "stream": "annotations",
+      "class_id": 9,
+      "class_name": "outlier",
+      "subplot": 0,
+      "xyxy": [
+        894.52,
+        174.63,
+        900.52,
+        180.63
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 3,
+        "data": [
+          4.0,
+          91.8
+        ]
+      }
+    },
+    {
+      "id": 28,
+      "stream": "annotations",
+      "class_id": 9,
+      "class_name": "outlier",
+      "subplot": 0,
+      "xyxy": [
+        894.52,
+        205.15,
+        900.52,
+        211.15
+      ],
+      "visibility": 1,
+      "occluded": false,
+      "attrs": {
+        "group_index": 3,
+        "data": [
+          4.0,
+          85.5
+        ]
+      }
+    }
+  ],
+  "filter_stats": {
+    "size": {},
+    "aspect": {},
+    "viewport": {},
+    "duplicate": {},
+    "overlap": {}
+  },
+  "image_id": "chart_00061"
+}

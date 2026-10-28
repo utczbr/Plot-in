@@ -78,8 +78,7 @@ except ModuleNotFoundError as exc:
 import multiprocessing
 import threading
 import os
-from collections import defaultdict
-from PIL import Image, ImageDraw
+from PIL import Image
 import numpy as np
 import json
 from pathlib import Path
@@ -90,517 +89,42 @@ from core.app_context import ApplicationContext
 from services.service_container import create_service_container
 
 # Import from new modular structure
-from core.model_manager import ModelManager
-from models.config import MODELS_CONFIG
 from core.install_profile import (
     apply_profile_environment,
     load_install_profile,
     merge_dicts,
 )
-from ocr.ocr_factory import OCREngineFactory
 from utils import sanitize_for_json
-import analysis  # Keep for backward compatibility where needed
 
 from visual.settings_dialog import SettingsDialog, save_settings_to_file, load_settings_from_file
-from visual.pie_geometry import extract_slice_overlay_points
 from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
-
-
 from visual.qt_utils import safe_combo_populate
-
-
-CONFIG_FILE = "gui_config.json"
 
 from core.export_manager import ExportManager
 
 PROTOCOL_COLUMNS = ExportManager.PROTOCOL_COLUMNS
 READONLY_COLUMNS = frozenset({'source_file', 'page_index', 'chart_type', 'confidence'})
 
+from visual.table_widget import MultiSelectTableWidget, TableEditCommand
+from visual.result_normalizer import (
+    _extract_calibration_r2,
+    _normalize_result_payload_for_gui,
+    _resolve_baseline_coord,
+    partition_assets_by_confidence,
+)
+from visual.workers import (
+    BatchAnalysisThread,
+    ModernAnalysisThread,
+    ResolveWorker,
+    safely_stop_thread,
+)
+from visual.canvas_editor_controller import CanvasEditorMixin
+from visual.file_list_controller import FileListCacheMixin
+
+
+class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow):
+    _safely_stop_thread = staticmethod(safely_stop_thread)
 
-class TableEditCommand(QUndoCommand):
-    """Command to handle undo/redo of MultiSelectTableWidget cell edits."""
-    def __init__(self, table, changes, description):
-        super().__init__(description)
-        self.table = table
-        self.changes = changes
-        self._first_run = True
-
-    def _apply(self, idx):
-        self.table.blockSignals(True)
-        try:
-            for row, col, *vals in self.changes:
-                item = self.table.item(row, col)
-                if item:
-                    item.setText(vals[idx])
-                    self.table._current_data[(row, col)] = vals[idx]
-        finally:
-            self.table.blockSignals(False)
-        self.table._is_editing_undo = True
-        for row, col, *_ in self.changes:
-            self.table.cellChanged.emit(row, col)
-        self.table._is_editing_undo = False
-
-    def undo(self):
-        self._apply(0)
-
-    def redo(self):
-        if self._first_run:
-            self._first_run = False
-            return
-        self._apply(1)
-
-
-class MultiSelectTableWidget(QTableWidget):
-    """QTableWidget subclass with Ctrl+C, Ctrl+V, Delete multi-cell support and Undo/Redo."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._undo_stack = QUndoStack(self)
-        self._undo_stack.setUndoLimit(50)
-        self._current_data = {}
-        self._is_editing_undo = False
-        self.cellChanged.connect(self._on_cell_changed)
-
-    def setItem(self, row, col, item):
-        super().setItem(row, col, item)
-        self._current_data[(row, col)] = item.text()
-
-    def setRowCount(self, rows):
-        if rows == 0:
-            self._undo_stack.clear()
-            self._current_data.clear()
-        super().setRowCount(rows)
-
-    def _on_cell_changed(self, row, col):
-        if self._is_editing_undo:
-            return
-        item = self.item(row, col)
-        if not item:
-            return
-        new_text, old_text = item.text(), self._current_data.get((row, col), "")
-        if new_text != old_text:
-            self._is_editing_undo = True
-            self._undo_stack.push(TableEditCommand(self, [(row, col, old_text, new_text)], "Edit Cell"))
-            self._is_editing_undo = False
-            self._current_data[(row, col)] = new_text
-
-    def keyPressEvent(self, event):
-        if event.matches(QKeySequence.StandardKey.Copy):
-            self._copy_selection()
-        elif event.matches(QKeySequence.StandardKey.Paste):
-            self._paste_selection()
-        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            self._delete_selection()
-        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
-            if self._undo_stack.canUndo():
-                self._undo_stack.undo()
-        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y:
-            if self._undo_stack.canRedo():
-                self._undo_stack.redo()
-        else:
-            super().keyPressEvent(event)
-
-    def _apply_and_push(self, changes, desc):
-        self.blockSignals(True)
-        for r, c, _, new in changes:
-            self.item(r, c).setText(new)
-            self._current_data[(r, c)] = new
-        self.blockSignals(False)
-        self._is_editing_undo = True
-        self._undo_stack.push(TableEditCommand(self, changes, desc))
-        self._is_editing_undo = False
-        for r, c, *_ in changes:
-            self.cellChanged.emit(r, c)
-
-    def _copy_selection(self):
-        selected = self.selectedRanges()
-        if not selected:
-            return
-        rows = sorted({r for rng in selected for r in range(rng.topRow(), rng.bottomRow() + 1)})
-        cols = sorted({c for rng in selected for c in range(rng.leftColumn(), rng.rightColumn() + 1)})
-        lines = ["\t".join(getattr(self.item(r, c), "text", lambda: "")() for c in cols) for r in rows]
-        QApplication.clipboard().setText("\n".join(lines))
-
-    def _paste_selection(self):
-        text = QApplication.clipboard().text()
-        current = self.currentItem()
-        if not text or not current:
-            return
-        start_r, start_c = current.row(), current.column()
-        changes = []
-        for r_off, row_text in enumerate(text.split("\n")):
-            for c_off, cell_text in enumerate(row_text.split("\t")):
-                r, c = start_r + r_off, start_c + c_off
-                if r < self.rowCount() and c < self.columnCount():
-                    item = self.item(r, c)
-                    if item and (item.flags() & Qt.ItemFlag.ItemIsEditable) and item.text() != cell_text:
-                        changes.append((r, c, item.text(), cell_text))
-        if changes:
-            self._apply_and_push(changes, "Paste")
-
-    def _delete_selection(self):
-        changes = [
-            (it.row(), it.column(), it.text(), "")
-            for it in self.selectedItems()
-            if (it.flags() & Qt.ItemFlag.ItemIsEditable) and it.text()
-        ]
-        if changes:
-            self._apply_and_push(changes, "Delete")
-
-
-def _extract_calibration_r2(calibration_entry: Any) -> Optional[float]:
-    if not calibration_entry:
-        return None
-    val = calibration_entry.get("r2", calibration_entry.get("r_squared")) if isinstance(calibration_entry, dict) else getattr(calibration_entry, "r2", getattr(calibration_entry, "r_squared", None))
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _resolve_baseline_coord(baselines: Any, orientation: str) -> Optional[float]:
-    if not isinstance(baselines, list) or not baselines:
-        return None
-    axis_id = "y" if str(orientation).lower() == "vertical" else "x"
-    entry = next((b for b in baselines if isinstance(b, dict) and b.get("axis_id") == axis_id), None)
-    if entry is None and isinstance(baselines[0], dict):
-        entry = baselines[0]
-    try:
-        return float(entry.get("value")) if entry and "value" in entry else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalize_result_payload_for_gui(
-    result: Dict[str, Any],
-    image_size: Optional[Tuple[int, int]] = None,
-) -> Dict[str, Any]:
-    """
-    Normalize runtime pipeline result payloads into the legacy keys expected by GUI widgets.
-    Keeps backward compatibility for existing legacy payload shapes.
-    """
-    normalized = dict(result)
-
-    detections = normalized.get("detections")
-    if not isinstance(detections, dict):
-        detections = {}
-    normalized["detections"] = detections
-
-    orientation = str(normalized.get("orientation", "vertical")).lower()
-    chart_type = str(normalized.get("chart_type", "")).lower()
-
-    bars = normalized.get("bars")
-    if not isinstance(bars, list):
-        if chart_type in {"bar", "histogram"}:
-            elements = normalized.get("elements")
-            if isinstance(elements, list):
-                bars = [element for element in elements if isinstance(element, dict)]
-            else:
-                bars = []
-        else:
-            bars = []
-
-    normalized_bars = []
-    for bar in bars:
-        if not isinstance(bar, dict):
-            continue
-        item = dict(bar)
-        tick_label = item.get("tick_label")
-        if not item.get("bar_label") and isinstance(tick_label, dict):
-            tick_text = tick_label.get("text")
-            if isinstance(tick_text, str) and tick_text.strip():
-                item["bar_label"] = tick_text.strip()
-            tick_bbox = tick_label.get("bbox")
-            if "bar_label_bbox" not in item and isinstance(tick_bbox, list):
-                item["bar_label_bbox"] = tick_bbox
-        if item.get("pixel_height") is None:
-            pixel_dimension = item.get("pixel_dimension")
-            if pixel_dimension is not None:
-                item["pixel_height"] = pixel_dimension
-        normalized_bars.append(item)
-
-    normalized["bars"] = normalized_bars
-
-    scale_info = normalized.get("scale_info")
-    if not isinstance(scale_info, dict):
-        scale_info = {}
-    normalized["scale_info"] = scale_info
-
-    calibration = normalized.get("calibration")
-    if isinstance(calibration, dict):
-        primary = calibration.get("primary")
-    else:
-        primary = None
-    r2 = _extract_calibration_r2(primary)
-    if r2 is None:
-        r2 = _extract_calibration_r2(scale_info)
-    if r2 is not None:
-        scale_info["r_squared"] = r2
-
-    baseline_coord = normalized.get("baseline_coord")
-    if baseline_coord is None:
-        baseline_coord = _resolve_baseline_coord(normalized.get("baselines"), orientation)
-    if baseline_coord is not None:
-        try:
-            baseline_coord = float(baseline_coord)
-            normalized["baseline_coord"] = baseline_coord
-            # Legacy UI expects this legacy field for visibility toggles.
-            scale_info.setdefault("baseline_y_coord", baseline_coord)
-        except (TypeError, ValueError):
-            pass
-
-    if "_assigned_bar_labels" not in normalized:
-        metadata = normalized.get("metadata")
-        if isinstance(metadata, dict):
-            assigned = metadata.get("assigned_bar_labels", metadata.get("_assigned_bar_labels"))
-            if isinstance(assigned, dict):
-                normalized["_assigned_bar_labels"] = assigned
-
-    image_dimensions = normalized.get("image_dimensions")
-    if not isinstance(image_dimensions, dict):
-        image_dimensions = {}
-    if image_size is not None:
-        width, height = image_size
-        image_dimensions.setdefault("width", int(width))
-        image_dimensions.setdefault("height", int(height))
-    normalized["image_dimensions"] = image_dimensions
-
-    from visual.data_tab_schema import build_data_tab_model
-    data_model = normalized.get("data_tab_model")
-    if not isinstance(data_model, dict):
-        data_model = build_data_tab_model(normalized)
-        normalized["data_tab_model"] = data_model
-
-    return normalized
-
-
-def partition_assets_by_confidence(
-    assets: List[Any],
-    benchmark_cache: Dict[str, str],
-) -> Tuple[List[int], List[int]]:
-    """Partition assets into (normal_indices, low_conf_indices) for exclusive sidebar display."""
-    from services.confidence_extractor import extract_confidence_from_analysis_json
-
-    def _is_low(asset: Any) -> bool:
-        path = str(getattr(asset, 'image_path', asset))
-        json_path = benchmark_cache.get(path)
-        if json_path:
-            info = extract_confidence_from_analysis_json(json_path)
-            if info is not None:
-                return bool(info.get("is_low_confidence", False))
-        info = getattr(asset, 'confidence_info', None)
-        return bool(info.get("is_low_confidence", False)) if isinstance(info, dict) else False
-
-    low = [i for i, a in enumerate(assets) if _is_low(a)]
-    low_set = set(low)
-    normal = [i for i in range(len(assets)) if i not in low_set]
-    return normal, low
-
-
-class ResolveWorker(QThread):
-    finished_signal = pyqtSignal(list)
-    status_signal = pyqtSignal(str)
-
-    def __init__(self, path, rdir, failure_callback=None, model_manager=None, parent=None, models_dir=None, force_reextract=False):
-        super().__init__(parent)
-        self.path = path
-        self.rdir = rdir
-        self.failure_callback = failure_callback
-        self.model_manager = model_manager
-        self.models_dir = models_dir
-        self.force_reextract = force_reextract
-        self._cancel_event = threading.Event()
-
-    def cancel(self):
-        self._cancel_event.set()
-
-    def run(self):
-        try:
-            if self.model_manager and self.models_dir:
-                try:
-                    self.status_signal.emit("Loading models...")
-                    self.model_manager.load_models(self.models_dir)
-                except Exception as exc:
-                    logging.getLogger(__name__).warning("Pre-loading models in resolve worker failed: %s", exc)
-
-            from core.input_resolver import resolve_input_assets
-            result = resolve_input_assets(
-                input_path=self.path,
-                render_dir=self.rdir,
-                progress_callback=lambda msg: self.status_signal.emit(msg),
-                cancel_event=self._cancel_event,
-                failure_callback=self.failure_callback,
-                model_manager=self.model_manager,
-                force_reextract=self.force_reextract,
-            )
-            self.finished_signal.emit(result)
-        except Exception as exc:
-            logging.getLogger(__name__).error("PDF resolve worker unhandled error: %s", exc)
-            self.finished_signal.emit([])
-
-
-class OCRLoaderThread(QThread):
-    """
-    Background worker for verifying OCR readiness (PaddleOCR ONNX).
-    """
-    ocr_ready = pyqtSignal(object)
-    error_occurred = pyqtSignal(str)
-
-    def __init__(self, settings, parent=None):
-        super().__init__(parent)
-        self.settings = settings
-        self._cancel_event = threading.Event()
-
-    def run(self):
-        try:
-            if not self._cancel_event.is_set():
-                self.ocr_ready.emit(None)
-        except Exception as e:
-            if not self._cancel_event.is_set():
-                self.error_occurred.emit(str(e))
-    
-    def cancel(self):
-        self._cancel_event.set()
-
-class ModernAnalysisThread(QThread):
-    status_updated = pyqtSignal(str)
-    analysis_complete = pyqtSignal(object)
-    progress_updated = pyqtSignal(int)
-
-    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None, chart_type=None):
-        from PyQt6.QtCore import QObject
-        qparent = parent if isinstance(parent, QObject) else None
-        super().__init__(qparent)
-        self.output_stem = output_stem
-        self.image_path = image_path
-        self.conf = conf
-        self.output_path = output_path
-        self.advanced_settings = advanced_settings
-        self.models_dir = models_dir
-        self.context = context
-        self.provenance = provenance
-        self.manual_detections = manual_detections
-        self.chart_type = chart_type
-        self._cancel_event = threading.Event()
-
-    def cancel(self):
-        self._cancel_event.set()
-
-    def is_cancelled(self):
-        return self._cancel_event.is_set()
-
-    def run(self):
-        try:
-            if self.is_cancelled():
-                return
-
-            self.status_updated.emit("Starting analysis...")
-            self.progress_updated.emit(10)
-
-            analysis_manager = self.context.analysis_manager
-
-            # Setup analysis_manager
-            analysis_manager.set_models(self.context.model_manager)
-
-            # Ensure models are loaded
-            self.context.model_manager.load_models(self.models_dir)
-
-            # OCR engine (PaddleOCR ONNX) is handled directly by AnalysisManager.
-
-            analysis_manager.set_advanced_settings(self.advanced_settings)
-
-            logger = logging.getLogger(__name__)
-            logger.debug(
-                "Running analysis: image=%s, manual_detections=%s, provenance=%s",
-                self.image_path,
-                bool(self.manual_detections),
-                self.provenance,
-            )
-
-            result = analysis_manager.run_single_analysis(
-                self.image_path, self.conf, self.output_path,
-                provenance=self.provenance,
-                manual_detections=self.manual_detections,
-                output_stem=self.output_stem,
-                chart_type=self.chart_type,
-            )
-
-            self.progress_updated.emit(100)
-
-            if not self.is_cancelled():
-                if result:
-                    self.status_updated.emit("Analysis complete.")
-                    self.analysis_complete.emit(result)
-                else:
-                    self.status_updated.emit("Analysis failed.")
-                    self.analysis_complete.emit({'error': 'Analysis failed.'})
-
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Analysis error: {e}", exc_info=True)
-            if not self.is_cancelled():
-                self.status_updated.emit(f"Error: {str(e)}")
-                self.analysis_complete.emit({'error': str(e)})
-
-
-class BatchAnalysisThread(QThread):
-    status_updated = pyqtSignal(str)
-    progress_updated = pyqtSignal(int, int)
-    batch_complete = pyqtSignal(str)
-    assets_resolved = pyqtSignal(list)
-
-    def __init__(
-        self,
-        input_path,
-        output_path,
-        models_dir,
-        easyocr_reader=None,
-        conf=0.6,
-        advanced_settings=None,
-        context: Optional["ApplicationContext"] = None,
-        output_stems=None,
-    ):
-        super().__init__()
-        self.output_stems = output_stems
-        self.input_path = input_path
-        self.output_path = output_path
-        self.models_dir = models_dir
-        # Note: The easyocr_reader is passed from the main application
-        # but we'll access it via the context in the actual execution
-        self.conf = conf
-        self.advanced_settings = advanced_settings
-        self._cancel_event = multiprocessing.Event()
-        self.context = context or ApplicationContext.get_instance()
-
-    def cancel(self):
-        self._cancel_event.set()
-
-    def run(self):
-        try:
-            analysis_manager = self.context.analysis_manager
-            analysis_manager.set_models(self.context.model_manager)
-            analysis_manager.set_advanced_settings(self.advanced_settings)
-            self.context.model_manager.load_models(self.models_dir)
-
-            def _on_assets(assets):
-                if not self._cancel_event.is_set():
-                    self.assets_resolved.emit(assets)
-
-            processed, total = analysis_manager.run_batch_analysis(
-                self.input_path, self.output_path, self.models_dir, self.conf,
-                self.status_updated, self._cancel_event,
-                output_stems=self.output_stems,
-                assets_callback=_on_assets,
-            )
-
-            self.progress_updated.emit(processed, total)
-            if not self._cancel_event.is_set():
-                self.batch_complete.emit(f"Batch complete! {processed}/{total} images processed.")
-        except Exception as e:
-            self.status_updated.emit(f"Batch error: {str(e)}")
-
-
-class ModernChartAnalysisApp(QMainWindow):
     def __init__(self, context: Optional[ApplicationContext] = None):
         super().__init__()
         self.context = context or ApplicationContext.get_instance()
@@ -624,11 +148,6 @@ class ModernChartAnalysisApp(QMainWindow):
         self.advanced_settings = None
         self.advanced_settings_file = self._state_root / "config" / "advanced_settings.json"
         self.easyocr_reader = None  # Initialize as None, will be set during processing
-
-        # Thread safety and StateManager from context
-        self.thread_safety = self.context.thread_safety
-        self.state_manager = self.context.state_manager
-        self.state_manager.state_changed.connect(self._on_state_changed)
 
         stylesheet = self._get_stylesheet()
         self.setStyleSheet(stylesheet)
@@ -676,11 +195,7 @@ class ModernChartAnalysisApp(QMainWindow):
         self.ocr_loader_thread = None
         self.ocr_ready = False
 
-        runtime_state = getattr(self.state_manager, "_runtime_state", None)
-        if runtime_state is None:
-            runtime_state = {}
-            self.state_manager._runtime_state = runtime_state
-        self.highlight_cache = runtime_state.setdefault("highlight_cache", {})
+        self.highlight_cache = {}
         self.current_pixmap = None
         self._benchmark_result_cache: Dict[str, str] = {}
         self._file_list_buttons: List[QPushButton] = []
@@ -1030,33 +545,6 @@ class ModernChartAnalysisApp(QMainWindow):
         self.ocr_ready = True
         self.run_batch_btn.setEnabled(True)
         self.update_status("✅ OCR engine configured (Paddle mode).")
-
-    def _start_ocr_loading(self, settings):
-        """Configure OCR engine state (PaddleOCR ONNX)."""
-        self.ocr_ready = True
-        self.run_batch_btn.setEnabled(True)
-        self.update_status("✅ OCR engine configured (Paddle mode).")
-
-    def _on_ocr_loaded(self, reader):
-        """Handle successful OCR load."""
-        self.ocr_ready = True
-        self.run_batch_btn.setEnabled(True)
-        self.update_status("OCR engine loaded.")
-
-        if getattr(self, '_auto_run_after_ocr', False):
-            self._auto_run_after_ocr = False
-            if getattr(self, '_auto_run_is_re_extract', False):
-                self._auto_run_is_re_extract = False
-                self._on_editor_apply()
-            elif self.current_image_index >= 0:
-                self.load_image_for_assisted_analysis()
-
-    def _on_ocr_load_error(self, message: str):
-        """Handle OCR preload errors."""
-        self.ocr_ready = False
-        self.run_batch_btn.setEnabled(True)
-        self.update_status(f"OCR load error: {message}")
-        logging.error("OCR preload failed: %s", message)
 
     def apply_advanced_settings(self):
         if not self.advanced_settings:
@@ -1601,11 +1089,6 @@ Click to configure advanced options."""
         data_scroll.setWidget(self.data_content_widget)
         data_layout.addWidget(data_scroll)
 
-        # Legacy aliases kept for backward compatibility in existing code paths.
-        self.bar_content_widget = self.data_content_widget
-        self.bar_content_layout = self.data_content_layout
-        self.bars_group = self.data_group
-
         self.results_tab_widget.addTab(data_tab, "Data")
 
     def _create_view_tab(self):
@@ -1703,17 +1186,9 @@ Click to configure advanced options."""
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
 
-    def _apply_pixmap_to_ui(self, pixmap):
-        if self._det_scene and pixmap is not None:
-            self._det_scene.load_image(pixmap)
-
     def _set_image_placeholder(self, message: str):
         if self._det_scene:
             self._det_scene.clear()
-
-    def _set_image_pixmap(self, pixmap: QPixmap):
-        if self._det_scene and pixmap is not None:
-            self._det_scene.load_image(pixmap)
 
     # ── New canvas: scene ↔ table click sync ──
     def _on_scene_bbox_clicked(self, class_name: str, xyxy: list):
@@ -1763,483 +1238,6 @@ Click to configure advanced options."""
                     if item:
                         self.protocol_table.scrollToItem(item)
                     break
-
-    def _get_active_ocr_engine(self):
-        """Lazy-instantiate or return the active OCR engine instance for canvas re-OCR."""
-        if hasattr(self, '_active_ocr_engine') and self._active_ocr_engine is not None:
-            return self._active_ocr_engine
-
-        try:
-            from ocr.ocr_factory import OCREngineFactory
-            settings = self.advanced_settings or {}
-            ocr_backend = settings.get('ocr_engine', 'Paddle')
-            models_dir_path = Path(self.models_dir_edit.text()) if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else Path('src/models')
-
-            engine_mode = 'paddle_full' if ocr_backend == 'Paddle_docs' else 'paddle_onnx'
-            self._active_ocr_engine = OCREngineFactory.create_engine(
-                engine_mode,
-                det_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_det.onnx'),
-                rec_model_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.onnx'),
-                dict_path=str(models_dir_path / 'OCR' / 'PP-OCRv5_server_rec.yml'),
-                cls_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx'),
-                doc_ori_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_doc_ori.onnx'),
-                unwarp_model_path=str(models_dir_path / 'OCR' / 'UVDoc.onnx'),
-                textline_ori_model_path=str(models_dir_path / 'OCR' / 'PP-LCNet_x1_0_textline_ori.onnx')
-            )
-            return self._active_ocr_engine
-        except Exception as exc:
-            logging.warning("Could not create active OCR engine for re-OCR: %s", exc)
-            return None
-
-    def _re_ocr_detection_item(self, item):
-        """Re-run OCR extraction on a modified detection item's new bounding box."""
-        if not item or not hasattr(item, 'detection') or not isinstance(item.detection, dict):
-            return
-
-        class_name = item.class_name
-        TEXT_CLASSES = {
-            'axis_title', 'chart_title', 'legend', 'tick_label',
-            'axis_labels', 'data_label', 'color_bar_label', 'color_bar_title', 'other'
-        }
-        if class_name not in TEXT_CLASSES:
-            return
-
-        import cv2
-        import numpy as np
-
-        if self.original_pil_image is None:
-            if hasattr(self, 'current_image_path') and self.current_image_path and Path(self.current_image_path).exists():
-                img_bgr = cv2.imread(str(self.current_image_path))
-            else:
-                return
-        else:
-            img_bgr = cv2.cvtColor(np.array(self.original_pil_image), cv2.COLOR_RGB2BGR)
-
-        if img_bgr is None:
-            return
-
-        h_img, w_img = img_bgr.shape[:2]
-        xyxy = item.detection.get('xyxy', [0, 0, 0, 0])
-        x1, y1, x2, y2 = [int(c) for c in xyxy]
-        w_box = max(1, x2 - x1)
-        h_box = max(1, y2 - y1)
-
-        # Proportional padding matching pipeline logic
-        if class_name in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_labels'):
-            if h_box > w_box:
-                pad_x = int(round(w_box * 0.20))
-                pad_y = int(round(h_box * 0.05))
-            else:
-                pad_x = int(round(w_box * 0.05))
-                pad_y = int(round(h_box * 0.20))
-        else:
-            pad_x = 5
-            pad_y = 5
-
-        x1_pad, y1_pad = max(0, x1 - pad_x), max(0, y1 - pad_y)
-        x2_pad, y2_pad = min(w_img, x2 + pad_x), min(h_img, y2 + pad_y)
-
-        crop = img_bgr[y1_pad:y2_pad, x1_pad:x2_pad]
-        if crop.size == 0:
-            return
-
-        # 90° counter-clockwise rotation if vertical
-        if crop.shape[0] > 1.2 * crop.shape[1]:
-            crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-        ocr_engine = self._get_active_ocr_engine()
-        if not ocr_engine:
-            return
-
-        try:
-            if hasattr(ocr_engine, 'process_batch'):
-                res_list = ocr_engine.process_batch([(crop, class_name)])
-                if res_list and len(res_list) > 0:
-                    res = res_list[0]
-                    if isinstance(res, dict):
-                        text = res.get('text', '')
-                        conf = res.get('confidence', 0.0)
-                    else:
-                        text = getattr(res, 'text', str(res))
-                        conf = getattr(res, 'confidence', 0.8)
-                else:
-                    text, conf = "", 0.0
-            elif hasattr(ocr_engine, 'recognize'):
-                text, conf = ocr_engine.recognize(crop, class_name)
-            else:
-                return
-
-            text = str(text).strip()
-            if hasattr(item, 'update_text_and_tooltip'):
-                item.update_text_and_tooltip(text, float(conf))
-            else:
-                item.detection['text'] = text
-                item.detection['ocr_confidence'] = float(conf)
-
-            logging.info("Re-OCR updated item [%s]: '%s' (conf=%.2f)", class_name, text, conf)
-        except Exception as exc:
-            logging.warning("Re-OCR failed for [%s]: %s", class_name, exc)
-
-    def _on_scene_item_edited(self, item, old_xyxy, is_resize):
-        """Handle move/resize completion from the canvas."""
-        if not self._editor_state:
-            return
-        new_xyxy = item.current_xyxy()
-        if old_xyxy != new_xyxy:
-            # Update detection dict in-place so highlight_item_by_bbox can locate
-            # the item by its new coords — the dict is the lookup key in DetectionScene.
-            item.detection["xyxy"] = list(new_xyxy)
-
-            # Re-run OCR on the newly cropped image area and update canvas tooltip/text
-            self._re_ocr_detection_item(item)
-
-            from visual.detection_editor_state import MoveCommand, ResizeCommand
-            cmd_cls = ResizeCommand if is_resize else MoveCommand
-            self._editor_state.push(cmd_cls(item, old_xyxy, new_xyxy))
-
-            # Only update the highlight — do NOT call _update_scene_display() here.
-            self._refresh_scene_highlight(new_xyxy, item.class_name)
-
-    def _on_scene_item_deleted(self, item):
-        """Handle delete action from context menu."""
-        if not self._editor_state or not self._det_scene:
-            return
-        from visual.detection_editor_state import DeleteCommand
-        self._editor_state.push(DeleteCommand(self._det_scene, item))
-        # Do NOT call _update_scene_display() — DeleteCommand.redo() already
-        # removed the item from the scene and from _rect_items.
-        self._det_scene.clear_highlight()
-
-    def _on_scene_item_class_changed(self, item, new_class):
-        """Handle class change from context menu."""
-        if not self._editor_state or not self._det_scene:
-            return
-        from visual.detection_editor_state import ChangeClassCommand
-        colors_map = getattr(self._det_scene, '_colors', {})
-        old_class = item.class_name
-        self._editor_state.push(ChangeClassCommand(item, old_class, new_class, colors_map))
-        # Re-run OCR with the new class rules
-        self._re_ocr_detection_item(item)
-        # ChangeClassCommand.redo() updated class_name and colors in-place.
-        # Only refresh the highlight.
-        self._refresh_scene_highlight(item.current_xyxy(), new_class)
-
-    def _on_scene_item_created(self, class_name, xyxy):
-        """Handle new box drawn via rubber band."""
-        if not self._editor_state or not self._det_scene:
-            return
-        from visual.detection_editor_state import CreateCommand
-        from visual.detection_scene import EditableRectItem
-        # Build the new detection dict and item, then wrap in an undoable command
-        new_det = {"xyxy": xyxy, "conf": 1.0, "text": ""}
-        new_item = EditableRectItem(
-            xyxy=xyxy,
-            class_name=class_name,
-            detection=new_det,
-        )
-        # Re-run OCR on the newly drawn box area
-        self._re_ocr_detection_item(new_item)
-        # Correct signature: (scene, item)
-        self._editor_state.push(CreateCommand(self._det_scene, new_item))
-        # Immediately highlight the newly created box
-        self._det_scene.highlight_item_by_bbox(xyxy, class_name)
-
-    def _on_scene_keypoint_moved(self, point_item, old_pos, new_pos, source: str = "user"):
-        """Handle keypoint move completion — push undo only for user drags."""
-        if not self._editor_state:
-            return
-        if source != "user":
-            return
-        if old_pos == new_pos:
-            return
-        from visual.detection_editor_state import MoveKeypointCommand
-        self._editor_state.push(MoveKeypointCommand(point_item, old_pos, new_pos))
-
-    def _on_scene_keypoint_created(self, group, point_item):
-        """Handle new keypoint placement — push a CreateKeypointCommand for undo/redo."""
-        if not self._editor_state:
-            return
-        from visual.detection_editor_state import CreateKeypointCommand
-        self._editor_state.push(CreateKeypointCommand(group, point_item))
-
-    def _on_scene_keypoint_deleted(self, group, point_item):
-        """Handle keypoint deletion — push a DeleteKeypointCommand for undo/redo."""
-        if not self._editor_state:
-            return
-        from visual.detection_editor_state import DeleteKeypointCommand
-        self._editor_state.push(DeleteKeypointCommand(group, point_item))
-
-    def _on_scene_slice_created(self, group):
-        """Handle creation of a new slice group."""
-        if not self._editor_state or not self._det_scene:
-            return
-        from visual.detection_editor_state import CreateCommand
-        self._editor_state.push(CreateCommand(self._det_scene, group))
-
-    def _on_canvas_status_message(self, message: str, duration_ms: int = 3000):
-        self.statusBar().showMessage(message, duration_ms)
-
-    def _on_canvas_mode_exit(self, mode):
-        if self._editor_toolbar:
-            self._editor_toolbar.set_mode(mode)
-
-    def _on_scene_box_selected(self, class_name: str):
-        """Sync editor toolbar Class: dropdown with the selected box's class."""
-        if self._editor_toolbar:
-            self._editor_toolbar.sync_class_to_selection(class_name)
-
-
-    def _on_editor_mode_changed(self, mode):
-        """Switch canvas interaction mode via toolbar toggle."""
-        if self._det_canvas_view:
-            self._det_canvas_view.set_mode(mode)
-
-    def _on_editor_class_dropdown_changed(self, new_class: str):
-        if not self._editor_toolbar or not self._det_scene:
-            return
-            
-        from visual.detection_scene import EditorMode, EditableRectItem
-        
-        # 1. Edit Mode: Update selected box class
-        if self._editor_toolbar._current_mode == EditorMode.EDIT_BOXES:
-            selected = self._det_scene.selectedItems()
-            if len(selected) == 1 and isinstance(selected[0], EditableRectItem):
-                if selected[0].class_name != new_class:
-                    self._on_scene_item_class_changed(selected[0], new_class)
-                    
-        # 2. Create Mode: Update drawing class
-        elif self._editor_toolbar._current_mode == EditorMode.CREATE_BOX:
-            if hasattr(self._det_canvas_view, "set_create_class"):
-                self._det_canvas_view.set_create_class(new_class)
-
-    def _on_toolbar_chart_type_changed(self, new_type: str):
-        """Handle chart type selection changes in the canvas editor toolbar."""
-        if not new_type:
-            return
-        ct = new_type.lower().strip()
-        classes = self._CHART_TYPE_CLASSES.get(ct, self._CHART_TYPE_CLASSES_FALLBACK)
-        if self._editor_toolbar:
-            self._editor_toolbar.set_available_classes(classes)
-            self._editor_toolbar.set_keypoint_buttons_visible(ct in ("pie",))
-            self._editor_toolbar._btn_apply.setEnabled(True)
-        self.statusBar().showMessage(f"Chart type set to '{ct}'. Click Apply & Re-Extract to re-analyze.", 5000)
-
-    def _on_editor_undo(self):
-        if self._editor_state:
-            self._editor_state.undo()
-            self._refresh_scene_highlight(self.highlighted_bbox,
-                                          self.get_class_for_bbox(self.highlighted_bbox))
-
-    def _on_editor_redo(self):
-        if self._editor_state:
-            self._editor_state.redo()
-            self._refresh_scene_highlight(self.highlighted_bbox,
-                                          self.get_class_for_bbox(self.highlighted_bbox))
-
-    def _refresh_scene_highlight(self, bbox=None, class_name=None):
-        """Update only the highlight in the scene without reloading detections.
-
-        Lightweight alternative to _update_scene_display() for use inside
-        edit-signal handlers where scene items are already at correct positions.
-        Calling _update_scene_display() in those handlers would reload all items
-        from current_analysis_result['detections'] (still holding pre-edit bboxes),
-        destroying the live scene items referenced by undo-stack commands.
-        """
-        if not self._det_scene:
-            return
-        if bbox:
-            self._det_scene.highlight_item_by_bbox(bbox, class_name)
-        else:
-            self._det_scene.clear_highlight()
-
-    def _on_editor_apply(self):
-        """Apply edits and re-run extraction (Phase 4)."""
-        if not self._det_scene or not self.current_analysis_result:
-            logging.warning("_on_editor_apply: no scene or analysis result available")
-            return
-
-        # Block re-extract if any pie slices are incomplete
-        if hasattr(self._det_scene, "get_incomplete_slices"):
-            incomplete = self._det_scene.get_incomplete_slices()
-            if incomplete:
-                count = len(incomplete)
-                self.statusBar().showMessage(
-                    f"⚠️ {count} pie slice(s) incomplete. Complete 5 keypoints per slice before re-extract.",
-                    6000,
-                )
-                return
-
-        # Flush any text or numeric edits made in the OCR/Data tabs back into
-        # current_analysis_result before exporting, so user corrections in those
-        # tabs are not silently discarded when the pipeline re-runs OCR from scratch.
-        try:
-            self._update_results_from_gui()
-        except Exception:
-            logging.debug("_update_results_from_gui failed before apply", exc_info=True)
-
-        # export_detections() returns Dict[class_name, List[dict]] — pass it directly
-        manual_detections = self._det_scene.export_detections()
-        for alias in ('scale_label', 'tick_label', 'scale_labels', 'tick_labels'):
-            if alias in manual_detections and manual_detections[alias]:
-                manual_detections.setdefault('axis_labels', []).extend(manual_detections.pop(alias))
-
-        logging.debug(
-            "_on_editor_apply: exported detection keys=%s, bar_count=%d, slice_count=%d",
-            list(manual_detections.keys()),
-            len(manual_detections.get("bar", [])),
-            len(manual_detections.get("slice", [])),
-        )
-
-        # Pre-validate: remove any bbox that is smaller than 2×2 px
-        cleaned: dict = {}
-        discarded = 0
-        for cls_name, items in manual_detections.items():
-            valid_items = []
-            for det in items:
-                xyxy = det.get('xyxy')
-                if xyxy and len(xyxy) == 4:
-                    x1, y1, x2, y2 = xyxy
-                    if (x2 - x1) < 2 or (y2 - y1) < 2:
-                        logging.warning(f"Discarding tiny detection: {cls_name} {xyxy}")
-                        discarded += 1
-                        continue
-                valid_items.append(det)
-            if valid_items:
-                cleaned[cls_name] = valid_items
-        manual_detections = cleaned
-
-        if not manual_detections:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Invalid Detections", "No valid detections found. Please draw at least one valid bounding box.")
-            return
-
-        if discarded:
-            logging.warning(f"Discarded {discarded} tiny detection(s) before re-extract.")
-        
-        # We need the original configuration fields.
-        image_path = self.current_image_path
-        output_path = self.output_path_edit.text()
-        models_dir = self.models_dir_edit.text()
-        conf = self.conf_slider.value() / 10.0
-        
-        # Stop existing thread if running
-        if self.analysis_thread and self.analysis_thread.isRunning():
-            self.analysis_thread.cancel()
-            self.analysis_thread.quit()
-            terminated = self.analysis_thread.wait(3000)
-            if not terminated:
-                logging.error("Previous analysis thread did not terminate within 3s — aborting re-extract")
-                from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Re-Extract Error", "Previous analysis is still running. Please wait and try again.")
-                if self._editor_toolbar:
-                    self._editor_toolbar.setEnabled(True)
-                self.is_processing = False
-                self.progress_bar.setVisible(False)
-                return
-            
-        # Reuse the already-confirmed chart type for re-extraction instead of
-        # letting the pipeline reclassify the image. Reclassification could
-        # yield 2 chart-type hypotheses which, combined with manual_detections,
-        # previously caused every extracted row to be duplicated (and doubled
-        # again on each subsequent re-extract).
-        toolbar_ct = self._editor_toolbar.selected_chart_type if self._editor_toolbar else None
-        confirmed_chart_type = toolbar_ct or (self.current_analysis_result.get('chart_type') if self.current_analysis_result else None)
-
-        self.analysis_thread = ModernAnalysisThread(
-            str(image_path), conf, output_path, self.advanced_settings or {}, models_dir,
-            context=self.context,
-            provenance={"source": "manual_edit"},
-            manual_detections=manual_detections,
-            chart_type=confirmed_chart_type,
-        )
-        self.analysis_thread.status_updated.connect(self.update_status)
-        self.analysis_thread.progress_updated.connect(self.progress_bar.setValue)
-        self.analysis_thread.analysis_complete.connect(self._on_analysis_complete)
-
-        if self._editor_toolbar:
-            self._editor_toolbar.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        self.is_processing = True          # prevent concurrent file-list clicks (Fix A-1)
-        self.analysis_thread.start()
-
-        self.statusBar().showMessage("🔄 Re-extracting with manual detections — text edits will be replaced by fresh OCR...", 5000)
-
-    def _on_editor_reset(self):
-        """Reset all edits to auto-detected boxes."""
-        if self._editor_state:
-            self._editor_state.clear()
-        if hasattr(self, '_scene_first_fit_done'):
-            delattr(self, '_scene_first_fit_done')
-
-        # Restore interaction mode to VIEW (Fix R-2)
-        from visual.detection_scene import EditorMode
-        if self._det_canvas_view:
-            self._det_canvas_view.set_mode(EditorMode.VIEW)
-        if self._editor_toolbar:
-            self._editor_toolbar.set_mode(EditorMode.VIEW)
-
-        # Reset the class selector to the chart type's default list (Fix R-1)
-        if self._editor_toolbar and self.current_analysis_result:
-            chart_type = str(
-                self.current_analysis_result.get('chart_type', '')
-            ).lower()
-            classes = self._CHART_TYPE_CLASSES.get(
-                chart_type, self._CHART_TYPE_CLASSES_FALLBACK
-            )
-            self._editor_toolbar.set_available_classes(classes)
-
-        self._update_scene_display()
-        self.statusBar().showMessage("🔄 Detections reset to auto-detected", 2000)
-
-    def _on_editor_count_changed(self, count: int):
-        """Update toolbar status text when edits change."""
-        if self._editor_toolbar and self._editor_state:
-            self._editor_toolbar.set_status_text(self._editor_state.get_status_text())
-            self._editor_toolbar.update_undo_state(
-                self._editor_state.can_undo,
-                self._editor_state.can_redo,
-                self._editor_state.is_dirty,
-            )
-
-    # Classes available for each chart type when drawing new boxes.
-    # Omit 'chart' (it covers the whole image) and detection-only classes
-    # like 'significance_marker', 'connector_line', etc.
-    _CHART_TYPE_CLASSES: dict = {
-        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'significance_marker', 'connector_line'],
-        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
-        'box':       ['box', 'outlier', 'range_indicator', 'median_line', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
-        'heatmap':   ['cell', 'color_bar', 'color_bar_label', 'color_bar_title', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
-    }
-    _CHART_TYPE_CLASSES_FALLBACK = [
-        'bar', 'scatter', 'data_point', 'chart_title',
-        'axis_title', 'axis_labels', 'legend',
-        'box', 'outlier', 'range_indicator', 'median_line',
-        'significance_marker', 'connector_line',
-    ]
-
-    def _show_editor_toolbar(self, visible: bool = True,
-                             chart_type: str = "") -> None:
-        """Show/hide the editor toolbar and update the class combo for the given chart type."""
-        if self._editor_toolbar:
-            self._editor_toolbar.setVisible(visible)
-            if visible and self._editor_state:
-                self._editor_state.clear()  # fresh start for new analysis
-            if visible:
-                if chart_type:
-                    self._editor_toolbar.set_chart_type(chart_type)
-                classes = self._CHART_TYPE_CLASSES.get(
-                    chart_type.lower(),
-                    self._CHART_TYPE_CLASSES_FALLBACK,
-                )
-                self._editor_toolbar.set_available_classes(classes)
-                # Show KP buttons only for chart types that produce keypoints
-                has_keypoints = chart_type.lower() in ("pie",)
-                self._editor_toolbar.set_keypoint_buttons_visible(has_keypoints)
 
     def _update_scene_display(self, highlight_bbox=None, highlight_class=None):
         """
@@ -2353,10 +1351,6 @@ Click to configure advanced options."""
         avail_h = max(1, viewport.height() - 24)
         fit_zoom = min(avail_w / width, avail_h / height)
         return float(np.clip(fit_zoom, 0.1, 1.0))
-    
-    def _on_state_changed(self, new_state):
-        if new_state.canvas.zoom_level != self.zoom_level:
-            self.zoom_level = new_state.canvas.zoom_level
 
     def cleanup_resources(self):
         if hasattr(self, "highlight_timer"):
@@ -2366,21 +1360,28 @@ Click to configure advanced options."""
         if hasattr(self, "update_timer"):
             self.update_timer.stop()
 
-        if self.analysis_thread and self.analysis_thread.isRunning():
-            self.analysis_thread.cancel()
-            self.analysis_thread.quit()
-            self.analysis_thread.wait(3000)
+        if self.analysis_thread:
+            safely_stop_thread(self.analysis_thread, timeout_ms=3000, force_terminate=True)
+            self.analysis_thread = None
             
-        if self.batch_thread and self.batch_thread.isRunning():
-            self.batch_thread.cancel()
-            self.batch_thread.quit()
-            self.batch_thread.wait(3000)
+        if self.batch_thread:
+            safely_stop_thread(self.batch_thread, timeout_ms=3000, force_terminate=True)
+            self.batch_thread = None
+
+        resolve_worker = getattr(self, "_resolve_worker", None)
+        if resolve_worker:
+            safely_stop_thread(resolve_worker, timeout_ms=3000, force_terminate=True)
+            self._resolve_worker = None
+
+        recal_worker = getattr(self, "_recalibration_thread", None)
+        if recal_worker:
+            safely_stop_thread(recal_worker, timeout_ms=3000, force_terminate=True)
+            self._recalibration_thread = None
 
         for thread in getattr(self, '_orphaned_threads', []):
-            if thread and thread.isRunning():
-                thread.cancel()
-                thread.quit()
-                thread.wait(100)
+            safely_stop_thread(thread, timeout_ms=1000, force_terminate=True)
+        if hasattr(self, '_orphaned_threads'):
+            self._orphaned_threads.clear()
 
         if self.original_pil_image:
             self._close_pil_image_safely(self.original_pil_image)
@@ -2416,134 +1417,6 @@ Click to configure advanced options."""
             import shutil
             shutil.rmtree(self._pdf_render_temp_dir, ignore_errors=True)
         super().closeEvent(event)
-
-    def save_config(self):
-        config_data = {
-            "input_path": self.input_path_edit.text(),
-            "output_path": self.output_path_edit.text(),
-            "models_dir": self.models_dir_edit.text(),
-            "confidence": self.conf_slider.value() / 10.0,
-            "vertical_splitter_sizes": self.vertical_splitter.sizes() if hasattr(self, 'vertical_splitter') else [400, 300]
-        }
-        try:
-            config_dir = self._state_root / "config"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            with open(config_dir / CONFIG_FILE, 'w') as f:
-                json.dump(config_data, f, indent=2)
-            self.update_status("✅ Configuration saved")
-        except Exception as e:
-            self.update_status(f"❌ Error saving config: {e}")
-
-    def _default_models_dir(self) -> str:
-        runtime_models_dir = self.profile_runtime.get("models_dir") if isinstance(self.profile_runtime, dict) else None
-        if runtime_models_dir:
-            return str(Path(runtime_models_dir).expanduser())
-        return str(self.base_path / "models")
-
-    def load_config(self):
-        try:
-            config_path = self._state_root / "config" / CONFIG_FILE
-            if os.path.exists(config_path):
-                with open(config_path, 'r') as f:
-                    config_data = json.load(f)
-                input_path = config_data.get("input_path", "")
-                if input_path:
-                    input_path = str(Path(input_path).expanduser())
-                self.input_path_edit.setText(input_path)
-                
-                output_path = config_data.get("output_path", str(self._state_root / "output"))
-                if output_path:
-                    output_path = str(Path(output_path).expanduser())
-                self.output_path_edit.setText(output_path)
-                
-                # Migration logic for models_dir
-                models_dir_from_config = config_data.get("models_dir")
-                if models_dir_from_config:
-                    models_dir_path = Path(models_dir_from_config).expanduser()
-                    # If path points to "Modulos" (old name) and doesn't exist, try "models"
-                    if not models_dir_path.exists() and "Modulos" in str(models_dir_path):
-                        potential_new_path = self.base_path / "models"
-                        if potential_new_path.exists():
-                            config_data['models_dir'] = str(potential_new_path)
-                            self.update_status("⚠️ Migrated config: 'Modulos' -> 'models'")
-                
-                models_dir = config_data.get("models_dir", self._default_models_dir())
-                if models_dir:
-                    models_dir = str(Path(models_dir).expanduser())
-                self.models_dir_edit.setText(models_dir)
-                conf = config_data.get("confidence", 0.4)
-                self.conf_slider.setValue(int(conf * 10))
-                self.update_slider_label(self.conf_slider.value())
-                
-                if hasattr(self, 'vertical_splitter'):
-                    splitter_sizes = config_data.get("vertical_splitter_sizes", [400, 300])
-                    self.vertical_splitter.setSizes(splitter_sizes)
-                
-                self.update_status("✅ Configuration loaded")
-                if self.input_path_edit.text():
-                    self.populate_file_list()
-            else:
-                self.update_status("ℹ️ Using default settings")
-        except Exception as e:
-            self.update_status(f"❌ Error loading config: {e}")
-
-    def update_slider_label(self, value):
-        self.conf_label.setText(f"CONFIDENCE: {value / 10.0:.2f}")
-
-    def browse_directory(self, line_edit_widget, on_path_set=None):
-        path = QFileDialog.getExistingDirectory(self, "Select Folder")
-        if path:
-            line_edit_widget.setText(path)
-            if on_path_set:
-                on_path_set(path)
-
-    def browse_input(self, line_edit_widget, on_path_set=None):
-        """Allow user to select a folder, PDF file, or image file(s)."""
-        path = QFileDialog.getExistingDirectory(self, "Select Input Folder")
-        if not path:
-            files, _ = QFileDialog.getOpenFileNames(
-                self, "Select Input File(s)", "",
-                "Supported files (*.pdf *.png *.jpg *.jpeg *.bmp *.tiff *.tif);;"
-                "PDF files (*.pdf);;"
-                "Image files (*.png *.jpg *.jpeg *.bmp *.tiff *.tif)",
-            )
-            if files:
-                path = files[0] if len(files) == 1 else str(Path(files[0]).parent)
-        if path:
-            line_edit_widget.setText(path)
-            if on_path_set:
-                on_path_set(path)
-
-    def handle_input_path_change(self, path_str):
-        self.populate_file_list()
-        self.update_status(f"Input loaded. {len(self.image_files)} chart(s) found.")
-
-    def _required_model_relative_paths(self) -> List[Path]:
-        from core.model_manager import ModelManager
-        optional_keys = ModelManager._OPTIONAL_MODELS
-
-        required = [Path(MODELS_CONFIG.classification)]
-        for name, filename in MODELS_CONFIG.detection.items():
-            if name not in optional_keys:
-                required.append(Path(filename))
-
-        ocr_engine = (self.advanced_settings or {}).get("ocr_engine", "Paddle")
-        if ocr_engine in {"Paddle", "Paddle_docs"}:
-            required.extend([
-                Path("OCR/PP-OCRv5_server_det.onnx"),
-                Path("OCR/PP-OCRv5_server_rec.onnx"),
-                Path("OCR/PP-LCNet_x1_0_textline_ori.onnx"),
-                Path("OCR/PP-OCRv5_server_rec.yml"),
-            ])
-        return required
-
-    def _validate_model_files(self, models_dir_path: Path) -> List[str]:
-        missing = []
-        for relative_path in self._required_model_relative_paths():
-            candidate = models_dir_path / relative_path
-            if not candidate.exists():
-                missing.append(str(candidate))
-        return missing
 
     @staticmethod
     def _is_error_result(result: Any) -> bool:
@@ -2586,496 +1459,23 @@ Click to configure advanced options."""
         image_size = self.original_pil_image.size if self.original_pil_image is not None else None
         return _normalize_result_payload_for_gui(result, image_size=image_size)
 
-    def validate_paths(self):
-        input_path_text = self.input_path_edit.text().strip()
-        output_path_text = self.output_path_edit.text().strip()
-        models_path_text = self.models_dir_edit.text().strip()
-
-        missing_paths = []
-        if not input_path_text:
-            missing_paths.append("Input path")
-        if not output_path_text:
-            missing_paths.append("Output folder")
-        if not models_path_text:
-            missing_paths.append("Models directory")
-
-        if missing_paths:
-            QMessageBox.critical(self, "Missing Paths", f"Please set:\n• " + "\n• ".join(missing_paths))
-            return False
-
-        input_path = Path(input_path_text)
-        if not input_path.exists():
-            QMessageBox.critical(self, "Invalid Input", f"Input path not found:\n{input_path}")
-            return False
-        if not input_path.is_dir() and not input_path.is_file():
-            QMessageBox.critical(self, "Invalid Input", f"Input path is not a file or folder:\n{input_path}")
-            return False
-
-        output_path = Path(output_path_text)
-        try:
-            output_path.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Invalid Output Folder",
-                f"Could not create output folder:\n{output_path}\n\n{exc}",
-            )
-            return False
-
-        models_path = Path(models_path_text)
-        if not models_path.exists() or not models_path.is_dir():
-            QMessageBox.critical(self, "Invalid Models Directory", f"Models directory not found:\n{models_path}")
-            return False
-
-        missing_models = self._validate_model_files(models_path)
-        if missing_models:
-            preview = "\n".join(f"• {path}" for path in missing_models[:10])
-            extra = "" if len(missing_models) <= 10 else f"\n... and {len(missing_models) - 10} more"
-            QMessageBox.critical(
-                self,
-                "Missing Model Files",
-                f"Required model files are missing:\n{preview}{extra}",
-            )
-            return False
-
-        return True
-
-    def _get_render_dir(self, input_path: Path) -> Path:
-        """Return the directory for PDF-rendered chart images."""
-        output_str = self.output_path_edit.text()
-        if output_str:
-            return Path(output_str) / "pdf_renders"
-        # No output path set — use temp dir to avoid polluting input dir
-        if self._pdf_render_temp_dir is None:
-            import tempfile
-            self._pdf_render_temp_dir = tempfile.mkdtemp(prefix="chart_pdf_")
-        return Path(self._pdf_render_temp_dir)
-
-    def populate_file_list(self):
-        for i in reversed(range(self.file_list_layout.count())):
-            child = self.file_list_layout.takeAt(i)
-            if child.widget():
-                child.widget().deleteLater()
-
-        path_str = self.input_path_edit.text()
-        if not path_str:
-            label = QLabel("Invalid input path")
-            label.setStyleSheet("QLabel { color: #ff6b6b; }")
-            self.file_list_layout.addWidget(label)
-            return
-
-        path = Path(path_str)
-        if not path.exists():
-            label = QLabel("Invalid input path")
-            label.setStyleSheet("QLabel { color: #ff6b6b; }")
-            self.file_list_layout.addWidget(label)
-            return
-
-        # Check if any PDFs are present (need threaded expansion)
-        render_dir = self._get_render_dir(path)
-        from core.input_resolver import resolve_input_assets
-
-        has_pdfs = False
-        pdf_paths = []
-        if path.is_dir():
-            pdf_paths = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() == '.pdf']
-            has_pdfs = bool(pdf_paths)
-        elif path.is_file() and path.suffix.lower() == '.pdf':
-            pdf_paths = [path]
-            has_pdfs = True
-
-        # First, check if rendered chart assets already exist in render_dir for these PDFs
-        cached_assets = []
-        if has_pdfs and render_dir.exists():
-            try:
-                cached_assets = resolve_input_assets(
-                    input_path=path, render_dir=render_dir, input_type='auto',
-                    model_manager=self.context.model_manager, force_reextract=False,
-                    check_cache_only=True,
-                )
-            except Exception as exc:
-                logging.getLogger(__name__).debug("Checking cached renders failed: %s", exc)
-
-        if cached_assets:
-            self._finish_populate_file_list(cached_assets)
-            return
-
-        if has_pdfs:
-            reply = QMessageBox.question(
-                self,
-                "PDF Extraction",
-                "PDF file(s) detected in the input path.\nWould you like to extract chart images from the PDF(s)?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self._start_pdf_resolve_worker(path)
-            else:
-                assets = resolve_input_assets(
-                    input_path=path, render_dir=render_dir, input_type='image',
-                )
-                self._finish_populate_file_list(assets)
-        else:
-            # Fast path: image-only, no threading needed
-            assets = resolve_input_assets(
-                input_path=path, render_dir=render_dir, input_type='image',
-            )
-            self._finish_populate_file_list(assets)
-
-    def _start_pdf_resolve_worker(self, input_path: Path):
-        render_dir = self._get_render_dir(input_path)
-
-        models_dir = self.models_dir_edit.text() if hasattr(self, 'models_dir_edit') and self.models_dir_edit.text() else self._default_models_dir()
-
-        progress = QProgressDialog(
-            "Extracting charts from PDFs...", "Cancel", 0, 0, self,
-        )
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(500)
-        self._pdf_progress = progress
-
-        self._pdf_failures = []
-        self._resolve_worker = ResolveWorker(
-            path=input_path,
-            rdir=render_dir,
-            failure_callback=lambda p, reason: self._pdf_failures.append((p, reason)),
-            model_manager=self.context.model_manager,
-            parent=self,
-            models_dir=models_dir,
-            force_reextract=True,
-        )
-        self._resolve_worker.status_signal.connect(
-            lambda msg: progress.setLabelText(msg),
-        )
-        self._resolve_worker.finished_signal.connect(
-            lambda assets: self._on_resolve_finished(assets, progress),
-        )
-        progress.canceled.connect(self._resolve_worker.cancel)
-        self._resolve_worker.start()
-
-    def _on_resolve_finished(self, assets, progress):
-        try:
-            progress.close()
-        except Exception:
-            pass
-        self._finish_populate_file_list(assets)
-
-    def _generate_unique_stems(self, file_paths: list) -> dict:
-        counts, stems = defaultdict(int), {}
-        for p in file_paths:
-            s = Path(p).stem
-            stems[p] = f"{s}_{counts[s]}" if counts[s] else s
-            counts[s] += 1
-        return stems
-
-    def _finish_populate_file_list(self, assets):
-        """Populate the file list UI from resolved assets with exclusive low-confidence partitioning."""
-        self._resolved_assets = assets
-        self.image_files = [str(a.image_path) for a in assets]
-        self._unique_stems = self._generate_unique_stems(self.image_files)
-
-        # Clear existing items in both file_list_layout and low_conf_layout
-        for i in reversed(range(self.file_list_layout.count())):
-            child = self.file_list_layout.takeAt(i)
-            if child.widget():
-                child.widget().deleteLater()
-        for i in reversed(range(self.low_conf_layout.count())):
-            child = self.low_conf_layout.takeAt(i)
-            if child.widget():
-                child.widget().deleteLater()
-
-        if not self.image_files:
-            failures = getattr(self, '_pdf_failures', [])
-            detail = "\n".join(f"• {p.name}: {reason}" for p, reason in failures) if failures else "No charts found"
-            label = QLabel(detail)
-            label.setStyleSheet("QLabel { color: #ff6b6b; }")
-            self.file_list_layout.addWidget(label)
-            return
-
-        # Pre-warm the benchmark cache
-        self._benchmark_result_cache.clear()
-        self._refresh_cache_from_output_dir()
-
-        normal_indices, low_conf_indices = partition_assets_by_confidence(
-            self._resolved_assets, self._benchmark_result_cache
-        )
-
-        self._file_list_buttons = {}
-        image_icon_px = self._scaled_icon_px(13)
-
-        def _create_file_list_button(i: int, is_low_conf: bool) -> QPushButton:
-            file_path = self.image_files[i]
-            base_name = os.path.basename(file_path)
-            asset = self._resolved_assets[i]
-            is_cached = file_path in self._benchmark_result_cache
-            conf_pct = 0.0
-
-            if is_low_conf:
-                json_path = self._benchmark_result_cache.get(file_path)
-                if json_path:
-                    from services.confidence_extractor import extract_confidence_from_analysis_json
-                    c_info = extract_confidence_from_analysis_json(json_path)
-                    if c_info:
-                        conf_pct = c_info["average"] * 100.0
-                elif getattr(asset, 'confidence_info', None):
-                    conf_pct = asset.confidence_info.get('average', 0.0) * 100.0
-                display_name = f"[{conf_pct:.0f}%] {base_name}" if conf_pct > 0 else base_name
-                icon_name = "warning-solid.svg" if hasattr(self, 'has_icon') and self.has_icon("warning-solid.svg") else "image-solid-full.svg"
-                icon_color = "#e5c07b"
-                border_col, hover_bg, hover_border, text_col, bg_col = "#5a4520", "#2b2314", "#e5c07b", "#e5c07b", "#1e1910"
-            else:
-                display_name = base_name
-                icon_name = "check-solid-full.svg" if is_cached else "image-solid-full.svg"
-                icon_color = "#4ec9b0" if is_cached else "#bfbfbf"
-                border_col, hover_bg, hover_border, text_col, bg_col = "#454545", "#2f2f2f", "#007acc", "#d4d4d4", "transparent"
-
-            if len(display_name) > 25:
-                display_name = display_name[:22] + "..."
-
-            btn = QPushButton(display_name)
-            btn.setIcon(self.get_icon(icon_name, color=icon_color, size=image_icon_px))
-            btn.setIconSize(QSize(image_icon_px, image_icon_px))
-            btn.setFlat(True)
-
-            base_tooltip = f"[PDF p.{asset.page_index}] {base_name}" if asset.source_document else base_name
-            if is_low_conf and conf_pct > 0:
-                base_tooltip += f"\nConfidence: {conf_pct:.1f}%"
-            btn.setToolTip(base_tooltip + (" ✓ Results cached" if is_cached else ""))
-
-            btn.setStyleSheet(
-                f"QPushButton {{ text-align: left; padding: 4px 8px; border: 1px solid {border_col}; "
-                f"border-radius: 3px; margin: 1px; font-size: 9px; color: {text_col}; background-color: {bg_col}; }} "
-                f"QPushButton:hover {{ background-color: {hover_bg}; border-color: {hover_border}; }}"
-            )
-            btn._is_low_conf = is_low_conf
-            btn.clicked.connect(lambda checked, idx=i: self.load_image_by_index(idx))
-            self._file_list_buttons[i] = btn
-            return btn
-
-        # 1. Populate normal file list
-        for i in normal_indices:
-            self.file_list_layout.addWidget(_create_file_list_button(i, False))
-
-        # 2. Populate low-confidence list
-        self._low_conf_count = len(low_conf_indices)
-
-        if not normal_indices and low_conf_indices:
-            self.low_conf_scroll.setVisible(True)
-            info_label = QLabel(f"All {len(low_conf_indices)} item(s) in Low Confidence (<60%) tab below:")
-            info_label.setStyleSheet("QLabel { color: #e5c07b; font-size: 9px; padding: 4px; font-style: italic; }")
-            self.file_list_layout.addWidget(info_label)
-
-        arrow = "▾" if self.low_conf_scroll.isVisible() else "▸"
-        self.low_conf_header_btn.setText(f"LOW CONFIDENCE (<60%) [{self._low_conf_count}] {arrow}")
-
-        if not low_conf_indices:
-            placeholder = QLabel("No low-confidence items")
-            placeholder.setStyleSheet("QLabel { color: #888888; font-size: 9px; padding: 4px; }")
-            self.low_conf_layout.addWidget(placeholder)
-        else:
-            for i in low_conf_indices:
-                self.low_conf_layout.addWidget(_create_file_list_button(i, True))
-
-        # If no image is currently selected/displayed and images are loaded, load the first one
-        if self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
-            self.load_image_by_index(0)
-
-    def start_batch_analysis_thread(self):
-        if not self.validate_paths():
-            return
-
-        if self.is_processing or (self.batch_thread and self.batch_thread.isRunning()):
-            QMessageBox.information(self, "Processing", "Analysis already running...")
-            return
-            
-        if self.batch_thread:
-            self.batch_thread.deleteLater()
-            
-        self.run_batch_btn.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setFormat("Batch: %v/%m files")
-        
-        output_stems = getattr(self, "_unique_stems", None)
-        self.batch_thread = BatchAnalysisThread(
-            self.input_path_edit.text(),
-            self.output_path_edit.text(),
-            self.models_dir_edit.text(),
-            None,  # easyocr_reader is no longer needed as it's handled internally
-            self.conf_slider.value() / 10.0,
-            self.advanced_settings,
-            context=self.context,
-            output_stems=output_stems,
-        )
-        
-        self.batch_thread.status_updated.connect(self.update_status)
-        self.batch_thread.progress_updated.connect(self.update_batch_progress)
-        self.batch_thread.batch_complete.connect(self.on_batch_complete)
-        self.batch_thread.assets_resolved.connect(self._on_batch_assets_resolved)
-        
-        self.batch_thread.start()
-        self.update_status("🚀 Starting batch analysis...")
-
-    def update_batch_progress(self, current, total):
-        self.progress_bar.setMaximum(total)
-        self.progress_bar.setValue(current)
-
-    def _on_batch_assets_resolved(self, assets):
-        """Immediately populate sidebar with resolved chart assets during batch run."""
-        if assets:
-            self._finish_populate_file_list(assets)
-
-    def on_batch_complete(self, message):
-        self.progress_bar.setVisible(False)
-        self.run_batch_btn.setEnabled(True)
-        self.update_status("✅ " + message)
-        # If image_files is still empty, populate from input path / renders
-        if not self.image_files:
-            self.populate_file_list()
-        # Refresh cache so newly analysed images show check icons immediately.
-        self._refresh_cache_from_output_dir()
-        self._refresh_file_list_button_states()
-        self.refresh_low_confidence_tab()
-
-        # Automatically load results into GUI for current image
-        if self.image_files:
-            target_idx = self.current_image_index if 0 <= self.current_image_index < len(self.image_files) else 0
-            self.load_image_by_index(target_idx)
-
-        QMessageBox.information(self, "Batch Complete", message)
-
-    # ── Benchmark result cache helpers ────────────────────────────────────────
-
-    def _load_result_from_cache(self, image_path: str, json_path: str) -> None:
-        """Load and display a previously saved analysis JSON without re-running inference."""
-        self._clear_display()
-        try:
-            with Image.open(image_path) as src:
-                self.original_pil_image = src.convert("RGB") if src.mode != "RGB" else src.copy()
-            self.current_image_path = image_path
-            self.zoom_level = self._compute_fit_zoom(self.original_pil_image.size)
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Cached image %s could not be loaded (%s) — invalidating cache "
-                "entry and re-running analysis.", image_path, e,
-            )
-            self._benchmark_result_cache.pop(image_path, None)
-            try:
-                idx = self.image_files.index(image_path)
-                self._update_file_list_button_cached_state(idx, cached=False)
-            except (ValueError, AttributeError):
-                pass
-            self.update_status(
-                f"⚠️ Cached image could not be loaded ({e}); re-running analysis..."
-            )
-            self.load_image_for_assisted_analysis()
-            return
-
-        try:
-            with open(json_path, encoding="utf-8") as f:
-                raw = json.load(f)
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Could not load cached JSON %s: %s — falling back to inference", json_path, e
-            )
-            self.update_status(f"⚠️ Cached result unreadable, re-running analysis...")
-            self.load_image_for_assisted_analysis()
-            return
-
-        image_size = self.original_pil_image.size
-        try:
-            normalized_raw = _normalize_result_payload_for_gui(raw, image_size=image_size)
-            self.current_analysis_result = self._normalize_result_for_gui(normalized_raw)
-        except Exception as norm_exc:
-            logging.getLogger(__name__).warning(
-                "Cached result normalization failed: %s — falling back to inference", norm_exc
-            )
-            self.update_status("⚠️ Cached result could not be displayed, re-running analysis...")
-            self.load_image_for_assisted_analysis()
-            return
-
-        self.update_status(f"📂 Loaded cached result: {os.path.basename(image_path)}")
-        self._update_ui_with_results()
-        self.update_displayed_image()
-        self._setup_navigation_controls()
-        if self._editor_toolbar:
-            self._editor_toolbar.setEnabled(True)
-
-    def _update_file_list_button_cached_state(self, index: int, cached: bool) -> None:
-        """Update icon and tooltip on a single file-list button to reflect cached/uncached state."""
-        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
-            return
-        if index not in self._file_list_buttons:
-            return
-        btn = self._file_list_buttons[index]
-        icon_px = self._scaled_icon_px(13)
-        icon_name = "check-solid-full.svg" if cached else "image-solid-full.svg"
-        icon_color = "#4ec9b0" if cached else "#bfbfbf"
-        btn.setIcon(self.get_icon(icon_name, color=icon_color, size=icon_px))
-        btn.setIconSize(QSize(icon_px, icon_px))
-        current_tip = btn.toolTip()
-        base_tip = current_tip.split(" ✓")[0]
-        btn.setToolTip(base_tip + (" ✓ Results cached" if cached else ""))
-
-    def _refresh_cache_from_output_dir(self) -> None:
-        """Scan the output directory for *_analysis.json files and update _benchmark_result_cache.
-        Uses the embedded 'original_image_path' field for an unambiguous match.
-        Called after a batch run completes. Does not clear existing entries."""
-        output_path = Path(self.output_path_edit.text())
-        if not output_path.is_dir():
-            return
-
-        # Build reverse map from all JSONs not yet in cache
-        abs_path_to_json: dict = {}
-        for json_file in sorted(output_path.glob("*_analysis.json")):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                orig = data.get('original_image_path')
-                if orig:
-                    abs_path_to_json[str(Path(orig).resolve())] = str(json_file)
-            except Exception:
-                pass
-
-        for file_path in self.image_files:
-            if file_path in self._benchmark_result_cache:
-                continue  # already known
-            abs_path = str(Path(file_path).resolve())
-            if abs_path in abs_path_to_json:
-                self._benchmark_result_cache[file_path] = abs_path_to_json[abs_path]
-
-    def _refresh_file_list_button_states(self) -> None:
-        """Update all file-list button icons to reflect the current cache state."""
-        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
-            return
-        for i, file_path in enumerate(self.image_files):
-            if i in self._file_list_buttons:
-                is_cached = file_path in self._benchmark_result_cache
-                self._update_file_list_button_cached_state(i, is_cached)
-
-    def toggle_low_confidence_tab(self):
-        """Toggle the collapsed/expanded state of the low-confidence sidebar tab."""
-        is_visible = self.low_conf_scroll.isVisible()
-        self.low_conf_scroll.setVisible(not is_visible)
-        count = getattr(self, '_low_conf_count', 0)
-        arrow = "▾" if not is_visible else "▸"
-        self.low_conf_header_btn.setText(f"⚠️ LOW CONFIDENCE (<60%) [{count}] {arrow}")
-
-    def refresh_low_confidence_tab(self):
-        """Refresh the low-confidence sidebar tab using cached analysis JSON data."""
-        if hasattr(self, '_resolved_assets') and self._resolved_assets:
-            self._finish_populate_file_list(self._resolved_assets)
-
     def load_image_by_index(self, index):
         """Load image with proper concurrency control."""
-        if self.is_processing:
+        batch_thread = getattr(self, "batch_thread", None)
+        is_batch_running = (
+            bool(batch_thread.isRunning())
+            if isinstance(batch_thread, QThread)
+            else False
+        )
+        if (getattr(self, "is_processing", False) is True) or is_batch_running:
             QMessageBox.information(self, "Processing", "Please wait for current analysis to complete.")
             return
         
         # Cancel any running threads
-        if self.analysis_thread and self.analysis_thread.isRunning():
-            self.analysis_thread.cancel()
-            self.analysis_thread.quit()
-            self.analysis_thread.wait(3000)
+        if self.analysis_thread:
+            if getattr(self.analysis_thread, 'isRunning', lambda: False)():
+                safely_stop_thread(self.analysis_thread, timeout_ms=3000, force_terminate=True)
+            self.analysis_thread = None
         
         # Stop all timers
         if hasattr(self, 'highlight_timer'):
@@ -3223,22 +1623,8 @@ Click to configure advanced options."""
         self.update_status(f"🔄 Processing {os.path.basename(self.current_image_path)}...")
         
         if self.analysis_thread:
-            if self.analysis_thread.isRunning():
-                self.analysis_thread.cancel()
-                self.analysis_thread.quit()
-                if not self.analysis_thread.wait(3000):
-                    try:
-                        self.analysis_thread.status_updated.disconnect()
-                        self.analysis_thread.progress_updated.disconnect()
-                        self.analysis_thread.analysis_complete.disconnect()
-                    except TypeError:
-                        pass
-                    if hasattr(self, '_orphaned_threads'):
-                        self._orphaned_threads.append(self.analysis_thread)
-                else:
-                    self.analysis_thread.deleteLater()
-            else:
-                self.analysis_thread.deleteLater()
+            if getattr(self.analysis_thread, 'isRunning', lambda: False)():
+                safely_stop_thread(self.analysis_thread, timeout_ms=3000, force_terminate=True)
             self.analysis_thread = None
         
         try:
@@ -4409,123 +2795,6 @@ Click to configure advanced options."""
 
         self.bottom_container_layout.addWidget(self.nav_frame)
 
-    def create_image_with_highlight(self, highlight_bbox=None, highlight_class=None, target_size=None):
-        """
-        Create image with detections drawn at correct scale.
-        Args:
-            highlight_bbox: Bbox to highlight (in original image coordinates)
-            highlight_class: Class of highlighted bbox
-            target_size: (width, height) to scale to before drawing, or None for original
-        
-        Returns:
-            PIL Image with bboxes drawn at correct scale
-        """
-        if self.original_pil_image is None:
-            return None
-        
-        try:
-            # Calculate scaling
-            if target_size and target_size != self.original_pil_image.size:
-                original_width, original_height = self.original_pil_image.size
-                target_width, target_height = target_size
-                
-                scale_x = target_width / original_width
-                scale_y = target_height / original_height
-                
-                resampling = Image.Resampling.LANCZOS if (scale_x > 1 or scale_y > 1) else Image.Resampling.BILINEAR
-                img_copy = self.original_pil_image.resize(target_size, resampling)
-            else:
-                img_copy = self.original_pil_image.copy()
-                scale_x = 1.0
-                scale_y = 1.0
-            
-            draw = ImageDraw.Draw(img_copy)
-            
-            #LINE WIDTH: Always 1px regardless of scale
-            line_width_normal = 2
-            line_width_highlight = 2  # Also 1px for highlighted boxes
-            
-            # HIGHLIGHT EXPANSION: How many pixels to expand bbox (scaled)
-            highlight_expansion = int(4 * min(scale_x, scale_y))  # 8px expansion at original scale
-            
-            # Draw detections
-            if self.current_analysis_result and 'detections' in self.current_analysis_result:
-                for class_name, items in self.current_analysis_result['detections'].items():
-                    checkbox = self.visibility_checks.get(class_name)
-                    if checkbox and checkbox.isChecked():
-                        for item in items:
-                            bbox = item.get('xyxy')
-                            if not bbox and class_name != "slice":
-                                continue
-
-                            # Keep highlight identity based on bbox equality for backward compatibility.
-                            is_highlight = (bbox == highlight_bbox and class_name == highlight_class)
-                            color = self.colors.get(class_name, self.colors['other'])
-                            line_color = color['highlight'] if is_highlight else color['normal']
-
-                            if class_name == "slice":
-                                pie_overlay = extract_slice_overlay_points(
-                                    item,
-                                    scale_x=scale_x,
-                                    scale_y=scale_y,
-                                    expected_keypoints=5,
-                                )
-                                if pie_overlay is not None:
-                                    center_pt, arc_pts = pie_overlay
-                                    slice_width = 4 if is_highlight else line_width_normal
-                                    draw.line([center_pt, arc_pts[0]], fill=line_color, width=slice_width)
-                                    draw.line([center_pt, arc_pts[-1]], fill=line_color, width=slice_width)
-                                    draw.line(arc_pts, fill=line_color, width=slice_width)
-                                    continue
-
-                            if not bbox:
-                                continue
-
-                            x1, y1, x2, y2 = bbox
-
-                            # Scale bbox coordinates
-                            scaled_x1 = int(x1 * scale_x)
-                            scaled_y1 = int(y1 * scale_y)
-                            scaled_x2 = int(x2 * scale_x)
-                            scaled_y2 = int(y2 * scale_y)
-
-                            if is_highlight:
-                                # HIGHLIGHTED BOX: Expand bbox and use highlight color
-                                expanded_bbox = [
-                                    max(0, scaled_x1 - highlight_expansion),
-                                    max(0, scaled_y1 - highlight_expansion),
-                                    min(img_copy.width, scaled_x2 + highlight_expansion),
-                                    min(img_copy.height, scaled_y2 + highlight_expansion)
-                                ]
-                                draw.rectangle(expanded_bbox, outline=line_color, width=line_width_highlight)
-                            else:
-                                # NORMAL BOX: Standard size with base line width
-                                scaled_bbox = [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
-                                draw.rectangle(scaled_bbox, outline=line_color, width=line_width_normal)
-            
-            # Draw baseline (controlled by checkbox)
-            baseline_checkbox = self.visibility_checks.get('baseline')
-            if baseline_checkbox and baseline_checkbox.isChecked():
-                if self.current_analysis_result:
-                    # Check for new key first, with fallback to old key for backward compatibility
-                    baseline_coord = (self.current_analysis_result.get('baseline_coord') or 
-                                    self.current_analysis_result.get('scale_info', {}).get('baseline_y_coord'))
-                    if baseline_coord is not None:
-                        scaled_y = int(baseline_coord * scale_y)
-                        # Baseline: 2px width for better visibility
-                        draw.line(
-                            [(0, scaled_y), (img_copy.width, scaled_y)],
-                            fill=(255, 215, 0),  # Gold color
-                            width=2
-                        )
-            
-            return img_copy
-        
-        except Exception as e:
-            logging.error(f"Error creating highlighted image: {e}", exc_info=True)
-            return None
-
-
     def update_displayed_image(self, highlight_bbox=None, highlight_class=None, force_refresh: bool = False):
         """Update displayed image on detection scene."""
         self._update_scene_display(highlight_bbox, highlight_class)
@@ -4583,92 +2852,6 @@ Click to configure advanced options."""
             self._pending_highlight_class = None
             self.hover_clear_timer.stop()
             self.hover_clear_timer.start(110)
-
-    def get_class_for_bbox(self, bbox):
-        if not self.current_analysis_result or not bbox or 'detections' not in self.current_analysis_result:
-            return None
-        for class_name, items in self.current_analysis_result['detections'].items():
-            for item in items:
-                if item.get('xyxy') == bbox:
-                    return class_name
-        return None
-
-    def reset_zoom(self):
-        if self._det_canvas_view:
-            self._det_canvas_view.fit_to_view()
-
-    def zoom_in(self):
-        if self._det_canvas_view:
-            self._det_canvas_view.zoom_in()
-
-    def zoom_out(self):
-        if self._det_canvas_view:
-            self._det_canvas_view.zoom_out()
-
-    def keyPressEvent(self, event: QKeyEvent):
-        """Handle keyboard shortcuts (NEW: includes undo/redo)"""
-        key = event.key()
-        modifiers = event.modifiers()
-
-        # Undo/Redo shortcuts — prioritise the detection-edit stack when active.
-        if modifiers == Qt.KeyboardModifier.ControlModifier:
-            if key == Qt.Key.Key_Z:
-                # NOTE: Do NOT check _editor_toolbar.isVisible() — it returns
-                # False whenever the Edit tab is not the active tab, so
-                # Ctrl+Z from Data/Results tabs would always fall through.
-                editor_active = (
-                    self._editor_toolbar is not None
-                    and self._editor_state is not None
-                    and self._editor_state.can_undo
-                )
-                if editor_active:
-                    self._on_editor_undo()
-                    self.statusBar().showMessage("⏪ Undo detection edit", 2000)
-                elif self.state_manager.undo():
-                    self.statusBar().showMessage("⏪ Undo", 2000)
-                else:
-                    self.statusBar().showMessage("⚠️ Nothing to undo", 2000)
-                return
-            elif key == Qt.Key.Key_Y:
-                editor_active = (
-                    self._editor_toolbar is not None
-                    and self._editor_state is not None
-                    and self._editor_state.can_redo
-                )
-                if editor_active:
-                    self._on_editor_redo()
-                    self.statusBar().showMessage("⏩ Redo detection edit", 2000)
-                elif self.state_manager.redo():
-                    self.statusBar().showMessage("⏩ Redo", 2000)
-                else:
-                    self.statusBar().showMessage("⚠️ Nothing to redo", 2000)
-                return
-            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                # Ctrl+Enter: Apply & Re-Extract when the editor is active and dirty
-                if (
-                    self._editor_toolbar is not None
-                    and self._editor_toolbar.isVisible()
-                    and self._editor_state is not None
-                    and self._editor_state.is_dirty
-                ):
-                    self._on_editor_apply()
-                    return
-
-        # Existing keyboard shortcuts
-        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self.zoom_in()
-        elif key == Qt.Key.Key_Minus:
-            self.zoom_out()
-        elif key == Qt.Key.Key_0:
-            self.reset_zoom()
-        elif event.key() == Qt.Key.Key_Left:
-            self.prev_image()
-        elif event.key() == Qt.Key.Key_Right:
-            self.next_image()
-        elif event.key() == Qt.Key.Key_S and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            self._save_analysis_results()
-        else:
-            super().keyPressEvent(event)
 
     def _update_results_from_gui(self):
         logging.debug("Updating results from GUI...")
@@ -4771,10 +2954,24 @@ Click to configure advanced options."""
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(sanitize_for_json(self.current_analysis_result), f, ensure_ascii=False, indent=2)
 
-            annotated_img = self.create_image_with_highlight()
-            if annotated_img:
-                annotated_path = output_path / f"{base_name}_annotated.png"
-                annotated_img.save(annotated_path, "PNG", optimize=True)
+            output_settings = (self.advanced_settings or {}).get('output_settings', {})
+            if output_settings.get('save_annotated_image', False):
+                try:
+                    import cv2
+                    annotated_path = output_path / f"{base_name}_annotated.png"
+                    img = None
+                    if self.original_pil_image is not None:
+                        img = cv2.cvtColor(np.array(self.original_pil_image), cv2.COLOR_RGB2BGR)
+                    elif self.current_image_path and os.path.exists(self.current_image_path):
+                        img = cv2.imread(str(self.current_image_path))
+                    if img is not None and hasattr(self, 'context') and self.context:
+                        vis_service = getattr(self.context, 'visualization_service', None)
+                        if vis_service and hasattr(vis_service, 'save_annotated_image'):
+                            vis_service.save_annotated_image(
+                                img, self.current_analysis_result, str(annotated_path)
+                            )
+                except Exception as vis_err:
+                    logging.getLogger(__name__).warning("Failed to save annotated image: %s", vis_err)
             
             self.update_status(f"✅ Saved: {os.path.basename(self.current_image_path)}")
             # Update in-memory cache and refresh the file-list button icon.
@@ -4839,6 +3036,11 @@ Click to configure advanced options."""
 
         output_stem = getattr(self, "_unique_stems", {}).get(self.current_image_path)
 
+        if hasattr(self, "_recalibration_thread") and self._recalibration_thread:
+            if getattr(self._recalibration_thread, 'isRunning', lambda: False)():
+                safely_stop_thread(self._recalibration_thread, timeout_ms=3000, force_terminate=True)
+            self._recalibration_thread = None
+
         thread = ModernAnalysisThread(
             image_path=self.current_image_path,
             conf=self.conf_slider.value() / 10.0,
@@ -4849,7 +3051,7 @@ Click to configure advanced options."""
             provenance=provenance,
             output_stem=output_stem,
             chart_type=chart_type,
-            parent=self,
+            parent=None,
         )
         callback = getattr(self, '_on_recalibration_complete', lambda res: None)
         thread.analysis_complete.connect(callback)

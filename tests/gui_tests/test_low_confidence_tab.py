@@ -11,14 +11,6 @@ from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QWid
 from services.confidence_extractor import extract_confidence_from_analysis_json
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
-
-
 class DummyLowConfidenceHost(QWidget):
     """Isolated dummy host representing the low confidence tab wiring from ModernChartAnalysisApp."""
 

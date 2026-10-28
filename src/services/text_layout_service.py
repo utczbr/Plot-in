@@ -23,6 +23,7 @@ class TextLayoutService:
     # IoU threshold above which a layout region is considered a duplicate
     # of an already-detected axis_label and will be skipped
     DEDUP_IOU_THRESHOLD = 0.5
+    DEDUP_IOA_THRESHOLD = 0.70
 
     @staticmethod
     def detect_text_regions(
@@ -83,6 +84,19 @@ class TextLayoutService:
         union = area_a + area_b - inter
         return inter / union if union > 0 else 0.0
 
+    @staticmethod
+    def _ioa(inner_box: list, outer_box: list) -> float:
+        """Compute fraction of inner_box area covered by outer_box."""
+        area_inner = max(0, inner_box[2] - inner_box[0]) * max(0, inner_box[3] - inner_box[1])
+        if area_inner <= 0:
+            return 0.0
+        x1 = max(inner_box[0], outer_box[0])
+        y1 = max(inner_box[1], outer_box[1])
+        x2 = min(inner_box[2], outer_box[2])
+        y2 = min(inner_box[3], outer_box[3])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        return inter / area_inner
+
     @classmethod
     def merge_with_axis_labels(
         cls,
@@ -111,6 +125,8 @@ class TextLayoutService:
             r_box = region['xyxy']
             duplicate = any(
                 cls._iou(r_box, lbl['xyxy']) >= threshold
+                or cls._ioa(lbl['xyxy'], r_box) >= cls.DEDUP_IOA_THRESHOLD
+                or cls._ioa(r_box, lbl['xyxy']) >= cls.DEDUP_IOA_THRESHOLD
                 for lbl in axis_labels
                 if 'xyxy' in lbl
             )

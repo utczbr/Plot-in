@@ -11,9 +11,10 @@ behaviour exactly.
 from typing import List, Dict, Any, Optional
 import numpy as np
 import cv2
-from handlers.base_handler import GridChartHandler, ExtractionResult, ChartCoordinateSystem
+from handlers.base import GridChartHandler
+from handlers.types import ExtractionResult, ChartCoordinateSystem
 from services.orientation_service import Orientation
-from utils.clustering_utils import cluster_1d_dbscan
+from core.baseline.clustering import cluster_1d_dbscan
 from services.heatmap.config import HeatmapConfig
 
 
@@ -575,24 +576,6 @@ class HeatmapHandler(GridChartHandler):
                 return v2
             slope = (v2 - v1) / (p2 - p1)
             return v2 + slope * (t - p2)
-
-    def _compute_robust_bounds(self, cells: List[Dict]) -> Dict:
-        """Compute grid bounds using percentile trimming to exclude outliers."""
-        if not cells:
-            return {'left': 0, 'top': 0, 'right': 0, 'bottom': 0}
-            
-        x1s = [c['xyxy'][0] for c in cells]
-        y1s = [c['xyxy'][1] for c in cells]
-        x2s = [c['xyxy'][2] for c in cells]
-        y2s = [c['xyxy'][3] for c in cells]
-        
-        # Use 5th/95th percentile to trim outliers
-        return {
-            'left': np.percentile(x1s, 5),
-            'top': np.percentile(y1s, 5),
-            'right': np.percentile(x2s, 95),
-            'bottom': np.percentile(y2s, 95)
-        }
 
     def _find_closest_index(self, value: float, centers: List[float]) -> int:
         """Find index of the closest center value."""

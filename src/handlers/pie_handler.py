@@ -12,7 +12,8 @@ from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 import re
 import logging
-from handlers.base_handler import PolarChartHandler, ExtractionResult, ChartCoordinateSystem
+from handlers.base import PolarChartHandler
+from handlers.types import ExtractionResult, ChartCoordinateSystem
 from services.orientation_service import Orientation
 
 
@@ -595,11 +596,6 @@ class PieHandler(PolarChartHandler):
             mask = new_mask
 
         return tuple(np.mean(points[mask], axis=0))
-
-    def _match_slice_to_legend(self, slice_det: Dict[str, Any], axis_labels: List[Dict]) -> str:
-         if self.legend_matcher:
-             return self.legend_matcher.match_slice_to_legend(slice_det, axis_labels)
-         return "Slice"
 
     def extract_values(self, img, detections, calibration, baselines, orientation) -> List[Dict]:
          return []

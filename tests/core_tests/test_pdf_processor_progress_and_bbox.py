@@ -62,6 +62,35 @@ class TestPDFProcessorProgressAndBbox(unittest.TestCase):
         WeightedChartClassifier.set_cached_result("dummy_image.png", ["unknown"], 0.1)
         self.assertEqual(len(WeightedChartClassifier._cache), 0)
 
+    def test_pdf_access_error_on_encrypted(self):
+        from core.pdf_processor import PDFAccessError, open_pdf_document
+        with patch("fitz.open") as mock_open:
+            mock_doc = MagicMock()
+            mock_doc.needs_pass = True
+            mock_doc.name = "protected.pdf"
+            mock_open.return_value = mock_doc
+
+            with self.assertRaisesRegex(PDFAccessError, "password-protected"):
+                with open_pdf_document(Path("protected.pdf")):
+                    pass
+
+    def test_pdf_cancellation_event(self):
+        import threading
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        with patch("core.pdf_processor.open_pdf_document") as mock_open_doc:
+            mock_doc = MagicMock()
+            mock_doc.page_count = 10
+            mock_open_doc.return_value.__enter__.return_value = mock_doc
+
+            charts = process_pdf_charts_optimized(
+                pdf_path=Path("dummy.pdf"),
+                output_dir=Path("/tmp"),
+                cancel_event=cancel_event,
+            )
+            self.assertEqual(charts, [])
+
 
 if __name__ == '__main__':
     unittest.main()

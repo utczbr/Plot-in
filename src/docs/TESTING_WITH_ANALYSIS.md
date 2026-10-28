@@ -15,8 +15,8 @@ This guide describes current test workflows for `src/analysis.py`, protocol expo
 ## Prerequisites
 1. Install dependencies in your active environment.
 ```bash
-python3 -m pip install -r src/requirements.txt
-python3 -m pip install -r src/requirements-dev.txt
+python3 -m pip install --upgrade pip
+python3 -m pip install -e .[all]
 ```
 2. Ensure models are available in `src/models` (or pass `--models-dir`).
 
@@ -25,7 +25,7 @@ python3 -m pip install -r src/requirements-dev.txt
 ### 1) Mixed Input Run (`auto`)
 ```bash
 python3 src/analysis.py \
-  --input src/train/images \
+  --input ./inputs \
   --output /tmp/chart_run_auto \
   --models-dir src/models \
   --ocr Paddle \

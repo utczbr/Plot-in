@@ -28,15 +28,6 @@ logger = logging.getLogger(__name__)
 class CalibrationFactory:
     """Factory for creating calibration engines with strict validation."""
 
-    _LEGACY_STOCHASTIC_PARAMS: Set[str] = {
-        'max_trials',
-        'random_state',
-        'early_termination_ratio',
-        'lo_iters',
-        'prosac_growth',
-        'convergence_threshold',
-    }
-
     _SIEGEL_PARAMS: Set[str] = {
         'residual_threshold',
         'min_inliers',
@@ -45,7 +36,7 @@ class CalibrationFactory:
 
     _VALID_PARAMS: Dict[str, Set[str]] = {
         'fast': {'use_weights'},
-        'siegel': _SIEGEL_PARAMS | _LEGACY_STOCHASTIC_PARAMS,
+        'siegel': _SIEGEL_PARAMS,
         'visual': {'edge_threshold', 'min_tick_spacing', 'max_tick_spacing', 'min_ticks'},
         'neural': {'hidden_dim', 'max_epochs', 'learning_rate', 'early_stop_patience'},
         'log': set(),  # No parameters
@@ -97,19 +88,8 @@ class CalibrationFactory:
                 f"Valid parameters: {valid_params}"
             )
 
-        # Handle legacy stochastic parameters for Siegel-routed engines
         if normalized == 'siegel':
-            active_kwargs = dict(kwargs)
-            for legacy_param in CalibrationFactory._LEGACY_STOCHASTIC_PARAMS:
-                if legacy_param in active_kwargs:
-                    active_kwargs.pop(legacy_param)
-                    warnings.warn(
-                        f"stochastic-sampling parameter '{legacy_param}' was ignored; "
-                        "using deterministic RobustSiegelCalibration",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-            return RobustSiegelCalibration(**active_kwargs)
+            return RobustSiegelCalibration(**kwargs)
 
         if normalized == 'fast':
             return FastCalibration(**kwargs)

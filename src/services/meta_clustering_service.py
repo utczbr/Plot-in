@@ -366,31 +366,6 @@ class MetaClusteringService:
         # For now, use the rule-based approach as backup
         return self._rule_based_recommendation(features, chart_type, orientation, image_size)
     
-    def _generate_parameters(self, algorithm, features, chart_type, orientation, image_size):
-        """Generate algorithm-specific parameters."""
-        h, w = image_size
-        
-        if algorithm == 'hdbscan':
-            return {
-                'min_cluster_size': 3 if chart_type == 'scatter' else 2,
-                'min_samples': max(1, int(features.n_samples * 0.05)),
-                'metric': 'euclidean'
-            }
-        elif algorithm == 'dbscan':
-            eps = features.mean_distance * (0.5 if features.density_variance < 0.3 else 0.3)
-            return {
-                'eps': max(5.0, eps),
-                'min_samples': 2,
-                'metric': 'euclidean'
-            }
-        else:  # kmeans
-            k_max = min(3, features.n_samples // 3)
-            return {
-                'k_range': (1, max(2, k_max)),
-                'n_init': 10,
-                'temperature': 0.7
-            }
-    
     def _default_features(self):
         """Default features for edge cases."""
         return DatasetFeatures(

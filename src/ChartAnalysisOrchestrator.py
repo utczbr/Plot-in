@@ -17,15 +17,17 @@ from core.classifiers.heatmap_chart_classifier import HeatmapChartClassifier
 from core.classifiers.pie_chart_classifier import PieChartClassifier
 from core.chart_registry import normalize_chart_type
 
-from handlers.base_handler import (
+from handlers.base import (
     BaseHandler,
     CartesianChartHandler,
     GridChartHandler,
     PolarChartHandler,
+)
+from handlers.types import (
     ExtractionResult,
     ChartCoordinateSystem,
+    HandlerContext,
 )
-from handlers.types import HandlerContext
 
 # Import all handler implementations
 from handlers.bar_handler import BarHandler
@@ -40,7 +42,7 @@ from handlers.area_handler import AreaHandler
 from services.dual_axis_service import DualAxisDetectionService
 from services.meta_clustering_service import MetaClusteringService
 from services.orientation_service import Orientation, OrientationService
-from services.color_mapping_service import ColorMappingService  # NEW
+from services.heatmap.color_mapping_service import ColorMappingService  # NEW
 from services.legend_matching_service import LegendMatchingService  # NEW
 from services.heatmap.config import HeatmapConfig
 
@@ -278,78 +280,7 @@ class ChartAnalysisOrchestrator:
                 orientation=orientation_enum
             )
 
-    def process_image(self,
-                     image: np.ndarray,
-                     chart_detections: Dict[str, Any],
-                     axis_labels: list,
-                     chart_elements: list,
-                     orientation: str = 'vertical') -> Dict[str, ExtractionResult]:
-        """
-        Process all chart types in a single image.
-
-        Args:
-            image: Input image as numpy array
-            chart_detections: All chart detections in the image
-            axis_labels: All extracted axis labels
-            chart_elements: All chart elements
-            orientation: Default orientation ('vertical' or 'horizontal')
-
-        Returns:
-            Dictionary mapping chart types to their extraction results
-        """
-        results = {}
-
-        # Determine which chart types were detected
-        detected_types = []
-        for chart_type in self.handlers.keys():
-            if chart_type in chart_detections and chart_detections[chart_type]:
-                detected_types.append(chart_type)
-
-        if not detected_types:
-            self.logger.warning("No recognized chart types detected in image")
-            return results
-
-        # Process each detected chart type
-        for chart_type in detected_types:
-            self.logger.info(f"Processing detected {chart_type} chart")
-
-            # Extract chart-specific detections and elements
-            chart_specific_detections = {chart_type: chart_detections[chart_type]}
-            # Note: In a real implementation, you'd filter chart_elements to those
-            # that belong to this specific chart type
-            chart_specific_elements = chart_elements
-
-            result = self.process_chart(
-                image=image,
-                chart_type=chart_type,
-                detections=chart_specific_detections,
-                axis_labels=axis_labels,
-                chart_elements=chart_specific_elements,
-                orientation=orientation
-            )
-
-            results[chart_type] = result
-
-        return results
-
     def get_supported_chart_types(self) -> list:
         """Return list of supported chart types."""
         return list(self.handlers.keys())
 
-    def validate_input(self, image, chart_detections, axis_labels, chart_elements) -> list:
-        """Validate input parameters and return list of validation errors."""
-        errors = []
-
-        if image is None or not hasattr(image, 'shape'):
-            errors.append("Image is None or invalid")
-
-        if chart_detections is None:
-            errors.append("Chart detections are None")
-
-        if axis_labels is None:
-            errors.append("Axis labels are None")
-
-        if chart_elements is None:
-            errors.append("Chart elements are None")
-
-        return errors

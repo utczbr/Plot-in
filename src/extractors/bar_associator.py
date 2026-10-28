@@ -10,7 +10,7 @@ Handles:
 - Irregular spacing
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import logging
 from dataclasses import dataclass
@@ -42,14 +42,26 @@ class RobustBarAssociator:
     4. Zone-based: Assign to nearest bar in spatial zone (fallback)
     """
     
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        logger: Optional[logging.Logger] = None,
+        association_mode: str = "heuristic",
+        model: Optional[Any] = None,
+    ):
         self.logger = logger or logging.getLogger(__name__)
+        self.association_mode = association_mode
+        self.model = model
         
         # Strategy parameters (tunable via config)
         self.overlap_threshold = 0.1  # 10% overlap considered "aligned"
         self.proximity_factor = 1.5   # Within 1.5× bar width
         self.spacing_factor = 0.4     # Within 40% of spacing
         self.zone_factor = 2.0        # Fallback: within 2× spacing
+
+        # GMM layout grouping metadata
+        self._gmm_separators: List[int] = []
+        self._gmm_group_assignments = None
+        self._bar_positions: List[float] = []
     
     def detect_layout(self, bars: List[Dict], orientation: str,
                       advanced_settings: Optional[Dict] = None) -> ChartLayout:
@@ -86,7 +98,7 @@ class RobustBarAssociator:
         if len(spacings) >= 3:
             if mode == 'gmm':
                 # §3a.3: 1D GMM on normalized gaps
-                grouped = self._detect_grouped_gmm(spacings, median_width)
+                grouped = self._detect_grouped_gmm(spacings, median_width, positions=positions)
             else:
                 # Legacy heuristic: max_spacing > 2.5 × min_spacing
                 min_spacing = np.min(spacings)
@@ -127,14 +139,19 @@ class RobustBarAssociator:
         self.logger.info("Detected SIMPLE layout")
         return ChartLayout.SIMPLE
 
-    def _detect_grouped_gmm(self, spacings: np.ndarray, median_width: float) -> bool:
+    def _detect_grouped_gmm(
+        self,
+        spacings: np.ndarray,
+        median_width: float,
+        positions: Optional[List[float]] = None,
+    ) -> bool:
         """
         §3a.3: Detect grouped layout using 1D GMM on normalized inter-bar gaps.
 
         Normalizes gaps by median bar width, fits K=1 and K=2 GMMs,
         and uses BIC model selection to determine if gaps are bimodal.
         """
-        from utils.gmm_1d import fit_gmm_1d
+        from utils.gmm_1d import fit_gmm_1d, find_group_separators
 
         # §3a.3.1: Normalize gaps by median bar width
         median_width = max(median_width, 1.0)  # Prevent division by zero
@@ -154,8 +171,13 @@ class RobustBarAssociator:
                 )
                 # Store group separator info for downstream use
                 self._gmm_group_assignments = result.group_assignments
+                pos_arg = positions if positions is not None else spacings
+                self._gmm_separators = find_group_separators(positions, result)
+                if positions is not None:
+                    self._bar_positions = list(positions)
                 return True
 
+        self._gmm_separators = []
         return False
     
     def _compute_overlap_1d(self, bar_min: float, bar_max: float, 
@@ -313,178 +335,6 @@ class RobustBarAssociator:
             )
         return None
     
-    def _associate_elements_legacy(
-        self,
-        bars: List[Dict],
-        error_bars: List[Dict],
-        tick_labels: List[Dict],
-        orientation: str = 'vertical',
-        **kwargs
-    ) -> List[Dict]:
-        """
-        Robust multi-strategy bar-to-label association.
-        
-        Args:
-            bars: List of bar detections
-            error_bars: List of error_bar detections
-            tick_labels: List of tick_label detections
-            orientation: 'vertical' or 'horizontal'
-        
-        Returns:
-            List of enriched bars with associations and diagnostics
-        """
-        if not bars:
-            return []
-        
-        # Step 1: Detect layout type
-        layout = self.detect_layout(bars, orientation)
-        
-        # Step 2: Compute median spacing (for spacing-based strategies)
-        if orientation == 'vertical':
-            positions = sorted([(b['xyxy'][0] + b['xyxy'][2])/2.0 for b in bars])
-        else:
-            positions = sorted([(b['xyxy'][1] + b['xyxy'][3])/2.0 for b in bars])
-        
-        spacings = np.diff(positions) if len(positions) > 1 else [100.0]
-        median_spacing = np.median(spacings)
-        
-        self.logger.info(
-            f"Association parameters: layout={layout.value}, "
-            f"median_spacing={median_spacing:.1f}px, "
-            f"n_bars={len(bars)}, n_labels={len(tick_labels)}"
-        )
-        
-        # Step 3: For each bar, find its best matching label
-        enriched_bars = []
-        
-        for bar_idx, bar in enumerate(bars):
-            enriched_bar = {
-                **bar,
-                'associated_error_bar': None,
-                'associated_tick_labels': [],
-                'association_strategy': None,
-                'association_diagnostics': {
-                    'layout': layout.value,
-                    'strategies_tried': [],
-                    'confidence': 0.0
-                }
-            }
-            
-            # Find best matching tick_label for this specific bar
-            if tick_labels:
-                best_label = None
-                best_strategy = None
-                best_distance = float('inf')
-                best_confidence = 0.0
-                
-                for label in tick_labels:
-                    # Try strategies in priority order
-                    strategies = [
-                        self._strategy_direct_overlap(bar, label, orientation),
-                        self._strategy_proximity(bar, label, orientation),
-                        self._strategy_spacing_based(bar, label, orientation, median_spacing),
-                        self._strategy_zone_fallback(bar, label, orientation, median_spacing)
-                    ]
-                    
-                    # Find first successful strategy for this specific bar-label pair
-                    for strategy in strategies:
-                        if strategy is not None:
-                            # Compute actual distance for this specific bar-label pair
-                            bar_cx = (bar['xyxy'][0] + bar['xyxy'][2]) / 2.0
-                            bar_cy = (bar['xyxy'][1] + bar['xyxy'][3]) / 2.0
-                            label_cx = (label['xyxy'][0] + label['xyxy'][2]) / 2.0
-                            label_cy = (label['xyxy'][1] + label['xyxy'][3]) / 2.0
-                            
-                            if orientation == 'vertical':
-                                distance = abs(label_cx - bar_cx)
-                            else:
-                                distance = abs(label_cy - bar_cy)
-                            
-                            # Update best match if this strategy is better (higher confidence or same confidence + shorter distance)
-                            if (strategy.confidence > best_confidence or
-                                (strategy.confidence == best_confidence and distance < best_distance)):
-                                best_label = label
-                                best_strategy = strategy
-                                best_distance = distance
-                                best_confidence = strategy.confidence
-                            
-                            break  # Use first successful strategy for this label
-                
-                # Assign best match if found within reasonable distance
-                if best_label is not None and best_distance < median_spacing * 2.0:  # Reasonable distance threshold
-                    enriched_bar['associated_tick_labels'] = [best_label]
-                    enriched_bar['association_strategy'] = best_strategy.name
-                    enriched_bar['association_diagnostics']['confidence'] = best_strategy.confidence
-                    enriched_bar['association_diagnostics']['reason'] = best_strategy.reason
-                    enriched_bar['association_diagnostics']['distance'] = best_distance
-                    enriched_bar['association_diagnostics']['strategies_tried'] = [best_strategy.name]
-                else:
-                    self.logger.warning(
-                        f"Bar {bar_idx}: No tick_label association found "
-                        f"(tried multiple strategies, best_distance={best_distance:.1f}px)"
-                    )
-                    enriched_bar['association_diagnostics']['strategies_tried'] = []
-            else:
-                enriched_bar['association_diagnostics']['strategies_tried'] = []
-            
-            # Associate error_bars (similar multi-strategy approach)
-            if error_bars:
-                best_error_bar = None
-                best_error_distance = float('inf')
-                
-                for eb in error_bars:
-                    # Try direct overlap first
-                    strategy = self._strategy_direct_overlap(bar, eb, orientation)
-                    if strategy is None:
-                        strategy = self._strategy_proximity(bar, eb, orientation)
-                    
-                    if strategy is not None:
-                        bar_cx = (bar['xyxy'][0] + bar['xyxy'][2]) / 2.0
-                        bar_cy = (bar['xyxy'][1] + bar['xyxy'][3]) / 2.0
-                        eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
-                        eb_cy = (eb['xyxy'][1] + eb['xyxy'][3]) / 2.0
-                        
-                        if orientation == 'vertical':
-                            distance = abs(eb_cx - bar_cx)
-                        else:
-                            distance = abs(eb_cy - bar_cy)
-                        
-                        if distance < best_error_distance:
-                            best_error_distance = distance
-                            best_error_bar = eb
-                
-                if best_error_bar is not None:
-                    enriched_bar['associated_error_bar'] = best_error_bar
-            
-            enriched_bars.append(enriched_bar)
-        
-        # Step 4: Resolve conflicts (multiple bars claiming same label or error bar)
-        # This is needed because multiple bars might have been assigned the same best label
-        enriched_bars = self._resolve_conflicts(enriched_bars, tick_labels, orientation)
-
-        # Resolve conflicts for error bars (ensure 1-to-1 association)
-        if error_bars:
-            eb_claims = {}
-            for bar_idx, b in enumerate(enriched_bars):
-                eb = b.get('associated_error_bar')
-                if eb is not None:
-                    eb_id = id(eb)
-                    bar_cx = (b['xyxy'][0] + b['xyxy'][2]) / 2.0
-                    bar_cy = (b['xyxy'][1] + b['xyxy'][3]) / 2.0
-                    eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
-                    eb_cy = (eb['xyxy'][1] + eb['xyxy'][3]) / 2.0
-                    dist = abs(eb_cx - bar_cx) if orientation == 'vertical' else abs(eb_cy - bar_cy)
-                    if eb_id not in eb_claims or dist < eb_claims[eb_id][1]:
-                        eb_claims[eb_id] = (bar_idx, dist)
-            for bar_idx, b in enumerate(enriched_bars):
-                eb = b.get('associated_error_bar')
-                if eb is not None:
-                    eb_id = id(eb)
-                    if eb_claims.get(eb_id, (None, None))[0] != bar_idx:
-                        b['associated_error_bar'] = None
-
-        return enriched_bars
-    
     def _resolve_conflicts(
         self,
         enriched_bars: List[Dict],
@@ -555,7 +405,25 @@ class RobustBarAssociator:
                     # Use adaptive threshold based on bar count
                     cluster_threshold = min(150, 50 * np.sqrt(len(claims)))
 
-                    if max_span < cluster_threshold:
+                    # Check if GMM group separators prevent cross-group bar-label stealing
+                    crosses_gmm_separator = False
+                    if getattr(self, '_gmm_separators', None) and getattr(self, '_bar_positions', None):
+                        min_p = min(positions_only)
+                        max_p = max(positions_only)
+                        for sep_idx in self._gmm_separators:
+                            if sep_idx < len(self._bar_positions) - 1:
+                                boundary = (self._bar_positions[sep_idx] + self._bar_positions[sep_idx + 1]) / 2.0
+                                if min_p < boundary < max_p:
+                                    crosses_gmm_separator = True
+                                    break
+
+                    if crosses_gmm_separator:
+                        self.logger.warning(
+                            f"Detected {layout.value} but bars cross GMM group separator — "
+                            f"resolving conflict to prevent cross-group label stealing"
+                        )
+                        self._resolve_single_conflict(enriched_bars, claims, label_id)
+                    elif max_span < cluster_threshold:
                         # Valid cluster - allow all bars to keep the label
                         self.logger.info(
                             f"Tick_label: {len(claims)} bars in {layout.value} layout "
@@ -787,15 +655,80 @@ class RobustBarAssociator:
                 bars, tick_labels, orientation, median_spacing
             )
         else:
-            # Use standard bar-by-bar association
-            enriched_bars = self._associate_bars_with_labels(
-                bars, tick_labels, orientation, median_spacing
-            )
+            # Check for metric learning dispatch
+            assoc_mode = kwargs.get('association_mode', getattr(self, 'association_mode', 'heuristic'))
+            mlp_model = kwargs.get('model', kwargs.get('bar_label_model', getattr(self, 'model', None)))
+
+            enriched_bars = None
+            if assoc_mode == "metric_learning" and mlp_model is not None:
+                try:
+                    from extractors.bar_label_model import BarLabelMLP
+                    if isinstance(mlp_model, BarLabelMLP):
+                        fwd_kwargs = {k: v for k, v in kwargs.items() if k not in ('model', 'bar_label_model')}
+                        enriched_bars = self._associate_bars_metric_learning(
+                            bars=bars,
+                            tick_labels=tick_labels,
+                            orientation=orientation,
+                            median_spacing=median_spacing,
+                            model=mlp_model,
+                            **fwd_kwargs
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Metric-learning association failed ({e}), falling back to heuristic cascade"
+                    )
+                    enriched_bars = None
+
+            if enriched_bars is None:
+                # Use standard bar-by-bar association (heuristic cascade)
+                enriched_bars = self._associate_bars_with_labels(
+                    bars, tick_labels, orientation, median_spacing
+                )
 
             # Apply layout-aware conflict resolution
             enriched_bars = self._resolve_conflicts_grouped_aware(
                 enriched_bars, tick_labels, orientation, layout
             )
+
+        # Associate error_bars and ensure 1-to-1 association
+        if error_bars:
+            for b in enriched_bars:
+                best_error_bar = None
+                best_error_distance = float('inf')
+                for eb in error_bars:
+                    strategy = self._strategy_direct_overlap(b, eb, orientation)
+                    if strategy is None:
+                        strategy = self._strategy_proximity(b, eb, orientation)
+                    if strategy is not None:
+                        bar_cx = (b['xyxy'][0] + b['xyxy'][2]) / 2.0
+                        bar_cy = (b['xyxy'][1] + b['xyxy'][3]) / 2.0
+                        eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
+                        eb_cy = (eb['xyxy'][1] + eb['xyxy'][3]) / 2.0
+                        distance = abs(eb_cx - bar_cx) if orientation == 'vertical' else abs(eb_cy - bar_cy)
+                        if distance < best_error_distance:
+                            best_error_distance = distance
+                            best_error_bar = eb
+                if best_error_bar is not None:
+                    b['associated_error_bar'] = best_error_bar
+
+            eb_claims = {}
+            for bar_idx, b in enumerate(enriched_bars):
+                eb = b.get('associated_error_bar')
+                if eb is not None:
+                    eb_id = id(eb)
+                    bar_cx = (b['xyxy'][0] + b['xyxy'][2]) / 2.0
+                    bar_cy = (b['xyxy'][1] + b['xyxy'][3]) / 2.0
+                    eb_cx = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
+                    eb_cy = (eb['xyxy'][1] + eb['xyxy'][3]) / 2.0
+                    dist = abs(eb_cx - bar_cx) if orientation == 'vertical' else abs(eb_cy - bar_cy)
+                    if eb_id not in eb_claims or dist < eb_claims[eb_id][1]:
+                        eb_claims[eb_id] = (bar_idx, dist)
+            for bar_idx, b in enumerate(enriched_bars):
+                eb = b.get('associated_error_bar')
+                if eb is not None:
+                    eb_id = id(eb)
+                    if eb_claims.get(eb_id, (None, None))[0] != bar_idx:
+                        b['associated_error_bar'] = None
 
         return enriched_bars
 
@@ -1001,6 +934,108 @@ class RobustBarAssociator:
                     'distance': float('inf'),
                     'error': 'no_matching_label'
                 }
+
+            enriched_bars.append(enriched_bar)
+
+        return enriched_bars
+
+    def _associate_bars_metric_learning(
+        self,
+        bars: List[Dict],
+        tick_labels: List[Dict],
+        orientation: str,
+        median_spacing: float,
+        model: Any,
+        **kwargs
+    ) -> List[Dict]:
+        """
+        §3a.2.4: Bipartite Hungarian matching using BarLabelMLP metric-learning embeddings,
+        falling back cleanly to the heuristic cascade for any unmatched bars.
+        """
+        from extractors.bar_label_model import hungarian_match
+
+        image = kwargs.get('image', getattr(self, 'image', None))
+        img_w = kwargs.get('img_w', getattr(self, 'img_w', 1000))
+        img_h = kwargs.get('img_h', getattr(self, 'img_h', 1000))
+        score_threshold = kwargs.get('score_threshold', 0.3)
+        spatial_window = kwargs.get('spatial_window', 0.5)
+        cluster_assignments = kwargs.get('cluster_assignments', None)
+
+        matches = hungarian_match(
+            bars=bars,
+            labels=tick_labels,
+            image=image,
+            img_w=img_w,
+            img_h=img_h,
+            model=model,
+            cluster_assignments=cluster_assignments,
+            score_threshold=score_threshold,
+            spatial_window=spatial_window,
+        )
+
+        enriched_bars = []
+        for bar_idx, bar in enumerate(bars):
+            enriched_bar = dict(bar)
+            matched = matches[bar_idx] if bar_idx < len(matches) else None
+
+            if matched is not None:
+                enriched_bar['associated_tick_labels'] = [matched['label']]
+                enriched_bar['association_diagnostics'] = {
+                    'strategy': 'metric_learning',
+                    'confidence': float(matched['similarity_score']),
+                    'similarity_score': float(matched['similarity_score']),
+                    'distance': 0.0,
+                    'threshold': score_threshold,
+                    'feature_vector': matched.get('feature_vector'),
+                    'reason': 'Hungarian metric-learning bipartite match'
+                }
+            else:
+                # Fall back to standard heuristic cascade for this bar
+                best_label = None
+                best_strategy = None
+                best_distance = float('inf')
+                best_confidence = 0.0
+
+                for label in tick_labels:
+                    strategies = [
+                        self._strategy_direct_overlap(bar, label, orientation),
+                        self._strategy_proximity(bar, label, orientation),
+                        self._strategy_spacing_based(bar, label, orientation, median_spacing),
+                        self._strategy_zone_fallback(bar, label, orientation, median_spacing),
+                    ]
+                    for strategy in strategies:
+                        if strategy is not None:
+                            bar_cx = (bar['xyxy'][0] + bar['xyxy'][2]) / 2.0
+                            bar_cy = (bar['xyxy'][1] + bar['xyxy'][3]) / 2.0
+                            label_cx = (label['xyxy'][0] + label['xyxy'][2]) / 2.0
+                            label_cy = (label['xyxy'][1] + label['xyxy'][3]) / 2.0
+
+                            distance = abs(label_cx - bar_cx) if orientation == 'vertical' else abs(label_cy - bar_cy)
+                            if (strategy.confidence > best_confidence or
+                                (strategy.confidence == best_confidence and distance < best_distance)):
+                                best_label = label
+                                best_strategy = strategy
+                                best_distance = distance
+                                best_confidence = strategy.confidence
+                            break
+
+                if best_label:
+                    enriched_bar['associated_tick_labels'] = [best_label]
+                    enriched_bar['association_diagnostics'] = {
+                        'strategy': best_strategy.name,
+                        'confidence': best_confidence,
+                        'distance': best_distance,
+                        'threshold': best_strategy.threshold,
+                        'reason': f"Heuristic fallback: {best_strategy.reason}"
+                    }
+                else:
+                    enriched_bar['associated_tick_labels'] = []
+                    enriched_bar['association_diagnostics'] = {
+                        'strategy': 'none',
+                        'confidence': 0.0,
+                        'distance': float('inf'),
+                        'error': 'no_matching_label'
+                    }
 
             enriched_bars.append(enriched_bar)
 

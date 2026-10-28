@@ -19,7 +19,8 @@ except (ImportError, OSError):
 from typing import List, Tuple, Optional, Dict, Any
 import logging
 from pathlib import Path
-from ..ocr_base import BaseOCRLegacy as BaseOCREngine
+from ..ocr_base import BaseOCREngine
+from ..runtime.cache_runtime import ZeroCopyHashCache, HashDeduplicator
 
 try:
     import yaml
@@ -141,6 +142,18 @@ class PaddleOCREngine(BaseOCREngine):
         # Load character dictionary for CTC decoding
         # Dictionary format: one character per line or YAML format
         self.character_dict = self._load_character_dict(dict_path)
+
+        # Align trailing space token (' ') when model was exported with use_space_char=True
+        rec_in_shape = self.rec_session.get_inputs()[0].shape
+        rec_out_shape = self.rec_session.get_outputs()[0].shape
+        self._rec_dynamic_width = not isinstance(rec_in_shape[-1], int) if rec_in_shape else True
+        if (
+            rec_out_shape
+            and isinstance(rec_out_shape[-1], int)
+            and rec_out_shape[-1] == len(self.character_dict) + 1
+        ):
+            self.character_dict.append(' ')
+
         logging.info(f"Loaded character dictionary with {len(self.character_dict)} characters")
         
         # Store configuration
@@ -157,6 +170,9 @@ class PaddleOCREngine(BaseOCREngine):
         
         # Recognition batch size for processing multiple text regions
         self.rec_batch_size = rec_batch_size
+        
+        # Content hash LRU cache for recognition results
+        self._cache = ZeroCopyHashCache(max_size=512)
     
     def _load_character_dict(self, dict_path: str) -> List[str]:
         """
@@ -253,18 +269,29 @@ class PaddleOCREngine(BaseOCREngine):
         if not crops_with_context:
             return []
 
-        results = []
+        results: List[Dict[str, Any]] = [{'text': '', 'confidence': 0.0} for _ in crops_with_context]
 
-        for crop, context in crops_with_context:
-            try:
-                # Since crops are already text regions, directly recognize
-                # Skip detection stage to avoid redundant processing
-                text, confidence = self._recognize_text_region(crop, context)
-                results.append({'text': text, 'confidence': confidence})
+        unique_crops, hash_to_original_indices = HashDeduplicator.deduplicate_crops(crops_with_context)
 
-            except Exception as e:
-                logging.warning(f"OCR failed for crop with context '{context}': {e}")
-                results.append({'text': '', 'confidence': 0.0})
+        for crop, context in unique_crops:
+            crop_hash = HashDeduplicator._compute_content_hash(crop, context)
+            cached_result = self._cache.get_by_hash(crop, context)
+            if cached_result is not None:
+                res = cached_result
+            else:
+                try:
+                    # Since crops are already text regions, directly recognize
+                    # Skip detection stage to avoid redundant processing
+                    text, confidence = self._recognize_text_region(crop, context)
+                    res = {'text': text, 'confidence': confidence}
+                except Exception as e:
+                    logging.warning(f"OCR failed for crop with context '{context}': {e}")
+                    res = {'text': '', 'confidence': 0.0}
+                self._cache.put(crop, res, context)
+
+            _, _, indices = hash_to_original_indices[crop_hash]
+            for idx in indices:
+                results[idx] = res
 
         return results
     
@@ -336,20 +363,27 @@ class PaddleOCREngine(BaseOCREngine):
         h, w = img.shape[:2]
         
         # Calculate resize ratio to match target height
-        ratio = img_h / h
-        resize_w = int(w * ratio)
+        ratio = img_h / max(h, 1)
+        resize_w = max(1, int(w * ratio))
         
         # Resize maintaining aspect ratio
         img = cv2.resize(img, (resize_w, img_h), interpolation=cv2.INTER_LINEAR)
         
-        # Pad or crop width to target width
-        if resize_w < img_w:
-            # Pad with white (255) on the right
-            padded = np.ones((img_h, img_w, 3), dtype=np.uint8) * 255
-            padded[:, :resize_w, :] = img
-            img = padded
+        # Pad width to target width (320px for short tokens; dynamic 32x padding for long lines)
+        if resize_w <= img_w:
+            if resize_w < img_w:
+                # Pad with white (255) on the right
+                padded = np.ones((img_h, img_w, 3), dtype=np.uint8) * 255
+                padded[:, :resize_w, :] = img
+                img = padded
+        elif getattr(self, '_rec_dynamic_width', True):
+            dyn_w = int(np.ceil(resize_w / 32.0) * 32)
+            if resize_w < dyn_w:
+                padded = np.ones((img_h, dyn_w, 3), dtype=np.uint8) * 255
+                padded[:, :resize_w, :] = img
+                img = padded
         else:
-            # Scale to fit max width instead of cropping text
+            # Fixed-width model fallback: scale to fit max width instead of cropping text
             img = cv2.resize(img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
         
         # Normalize to [-1, 1] range

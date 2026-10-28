@@ -68,16 +68,6 @@ class ApplicationContext:
         """Get export manager service."""
         return self._container.get('export_manager')
     
-    @property
-    def thread_safety(self):
-        """Get thread safety manager service."""
-        return self._container.get('thread_safety')
-    
-    @property
-    def state_manager(self):
-        """Get state manager service."""
-        return self._container.get('state_manager')
-    
     # Backend Services
     
     @property
@@ -102,11 +92,6 @@ class ApplicationContext:
         """Get visualization service."""
         return self._container.get('visualization_service')
     
-    @property
-    def app_config(self):
-        """Get application configuration."""
-        return self._container.get('app_config')
-    
     # Configuration
     
     def get_config(self, key: str = None, default: Any = None) -> Any:
@@ -116,13 +101,3 @@ class ApplicationContext:
     def set_config(self, config: Dict[str, Any]):
         """Set application configuration."""
         self._container.set_config(config)
-    
-    # Service Access
-    
-    def get_service(self, name: str) -> Any:
-        """Get any service by name."""
-        return self._container.get(name)
-    
-    def has_service(self, name: str) -> bool:
-        """Check if service is available."""
-        return self._container.has(name)

@@ -84,3 +84,83 @@ class TestClassifiers(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.metadata['chart_type'], 'bar')
         self.assertEqual(result.metadata['orientation'], Orientation.VERTICAL)
+
+
+def _make_label(x1, y1, x2, y2, text="1.0", conf=0.9):
+    return {
+        "xyxy": [x1, y1, x2, y2],
+        "text": text,
+        "cleanedvalue": None,
+        "ocr_confidence": conf,
+    }
+
+
+def _make_scatter_point(cx, cy, size=10):
+    return {"xyxy": [cx - size, cy - size, cx + size, cy + size]}
+
+
+class TestScatterClassifierFeaturesAndSplit:
+    def test_is_numeric_is_bool_for_numeric_text(self):
+        classifier = ScatterChartClassifier()
+        img_w, img_h = 800, 600
+        labels = [
+            _make_label(10, 290, 40, 310, text="1.5"),
+            _make_label(10, 190, 40, 210, text="Weight"),
+        ]
+        features = classifier._extract_scatter_features(labels, img_w, img_h)
+        assert len(features) == 2
+        assert isinstance(features[0]['is_numeric'], bool)
+        assert features[0]['is_numeric'] is True
+        assert isinstance(features[1]['is_numeric'], bool)
+        assert features[1]['is_numeric'] is False
+
+    def _make_vertical_scatter_labels(self):
+        y_axis_labels = [
+            _make_label(10, 100, 90, 120, text="10"),
+            _make_label(10, 200, 90, 220, text="20"),
+            _make_label(10, 300, 90, 320, text="30"),
+            _make_label(10, 400, 90, 420, text="40"),
+        ]
+        x_axis_labels = [
+            _make_label(150, 540, 230, 560, text="1"),
+            _make_label(350, 540, 430, 560, text="2"),
+            _make_label(550, 540, 630, 560, text="3"),
+            _make_label(650, 540, 730, 560, text="4"),
+        ]
+        return y_axis_labels, x_axis_labels
+
+    def test_x_scale_labels_and_y_scale_labels_populated(self):
+        classifier = ScatterChartClassifier()
+        y_labels, x_labels = self._make_vertical_scatter_labels()
+        all_labels = y_labels + x_labels
+        points = [
+            _make_scatter_point(200, 200),
+            _make_scatter_point(400, 300),
+            _make_scatter_point(600, 400),
+        ]
+        result = classifier.classify(
+            axis_labels=all_labels,
+            chart_elements=points,
+            img_width=800,
+            img_height=600,
+            orientation=Orientation.VERTICAL,
+        )
+        assert len(result.x_scale_labels) > 0
+        assert len(result.y_scale_labels) > 0
+
+    def test_no_label_in_both_x_and_y(self):
+        classifier = ScatterChartClassifier()
+        y_labels, x_labels = self._make_vertical_scatter_labels()
+        all_labels = y_labels + x_labels
+        points = [_make_scatter_point(400, 300)]
+        result = classifier.classify(
+            axis_labels=all_labels,
+            chart_elements=points,
+            img_width=800,
+            img_height=600,
+            orientation=Orientation.VERTICAL,
+        )
+        x_ids = {id(lbl) for lbl in result.x_scale_labels}
+        y_ids = {id(lbl) for lbl in result.y_scale_labels}
+        assert len(x_ids & y_ids) == 0
+

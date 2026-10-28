@@ -12,7 +12,7 @@ from services.orientation_service import Orientation, OrientationService
 from .clustering import cluster_bars_by_axis
 
 from .geometry import aggregate_stack_near_ends, validate_xyxy
-from .policy import axis_id_single, chart_type_constraints
+from .policy import axis_id_map_for_dual, axis_id_single, chart_type_constraints
 from .scatter import scatter_axis_baseline
 from .types import BaselineLine, BaselineResult, DetectorConfig
 from .zero_crossing import baseline_fallback_interpolation, baseline_from_scale_zero
@@ -90,10 +90,11 @@ class ModularBaselineDetector:
                 chart_type = ChartType(str(chart_type).lower())
 
             is_vertical = orientation == Orientation.VERTICAL
-            _ = self._chart_type_constraints(chart_type)
+            constraints = self._chart_type_constraints(chart_type)
 
             if (
-                dual_axis_info
+                constraints.get("allow_dual", True)
+                and dual_axis_info
                 and dual_axis_info.get("has_dual_axis", False)
                 and secondary_axis_labels is not None
                 and len(secondary_axis_labels) >= 2
@@ -121,16 +122,11 @@ class ModularBaselineDetector:
                     image_size,
                 )
 
-                if orientation == Orientation.VERTICAL:
-                    baseline_lines = [
-                        BaselineLine(axis_id="y1", value=primary_baseline, confidence=0.8, orientation=orientation),
-                        BaselineLine(axis_id="y2", value=secondary_baseline, confidence=0.8, orientation=orientation),
-                    ]
-                else:
-                    baseline_lines = [
-                        BaselineLine(axis_id="x1", value=primary_baseline, confidence=0.8, orientation=orientation),
-                        BaselineLine(axis_id="x2", value=secondary_baseline, confidence=0.8, orientation=orientation),
-                    ]
+                ax1, ax2 = axis_id_map_for_dual(orientation)
+                baseline_lines = [
+                    BaselineLine(axis_id=ax1, value=primary_baseline, confidence=0.8, orientation=orientation),
+                    BaselineLine(axis_id=ax2, value=secondary_baseline, confidence=0.8, orientation=orientation),
+                ]
 
                 return BaselineResult(
                     baselines=baseline_lines,
@@ -206,9 +202,15 @@ class ModularBaselineDetector:
                         self.logger.info("Detected INVERTED axis from primary calibration: slope=%.4f", slope)
             elif self.cfg.calibration_mode != "none" and axis_labels and BaseCalibration is not None:
                 try:
+                    target_axis = "x" if orientation == Orientation.HORIZONTAL else "y"
+                    tagged_labels = [
+                        lbl for lbl in axis_labels
+                        if (lbl.get("axis") or lbl.get("attrs", {}).get("axis")) == target_axis
+                    ]
+                    inversion_labels = tagged_labels if len(tagged_labels) >= 2 else axis_labels
                     coords, vals, _ = BaseCalibration._extract_points(
-                        axis_labels,
-                        "x" if orientation == Orientation.HORIZONTAL else "y",
+                        inversion_labels,
+                        target_axis,
                         prefer_cleaned=True,
                     )
                     if len(coords) >= 2:
@@ -369,14 +371,6 @@ class ModularBaselineDetector:
             logger=self.logger,
             use_as_fallback_only=use_as_fallback_only,
         )
-
-    def _baseline_fallback_interpolation(
-        self,
-        usable: List[Dict],
-        is_vertical: bool,
-    ) -> Optional[float]:
-        """Backward-compatible wrapper for interpolation fallback."""
-        return baseline_fallback_interpolation(usable, is_vertical, logger=self.logger)
 
 
 def detect_baselines(

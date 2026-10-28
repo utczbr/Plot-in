@@ -218,6 +218,8 @@ def hungarian_match(
     # Compute all pair features and scores
     score_matrix = np.full((n_bars, n_labels), -1e6, dtype=np.float32)
     feature_matrix = {}
+    candidate_indices = []
+    candidate_feats = []
 
     for i, bar in enumerate(bars):
         bar_cx = (bar['xyxy'][0] + bar['xyxy'][2]) / 2 / max(img_w, 1)
@@ -237,8 +239,15 @@ def hungarian_match(
                 same_cluster = cluster_assignments.get(id(bar)) == cluster_assignments.get(id(label))
 
             feat = compute_pair_features(bar, label, image, img_w, img_h, same_cluster)
-            score_matrix[i, j] = model.score(feat)
+            candidate_indices.append((i, j))
+            candidate_feats.append(feat)
             feature_matrix[(i, j)] = feat
+
+    if candidate_feats:
+        feats_matrix = np.stack(candidate_feats, axis=0)
+        scores = model.score_batch(feats_matrix)
+        for (i, j), score in zip(candidate_indices, scores):
+            score_matrix[i, j] = score
 
     # Hungarian matching (minimize cost = -score)
     cost_matrix = -score_matrix

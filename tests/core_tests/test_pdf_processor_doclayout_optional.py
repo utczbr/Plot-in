@@ -31,26 +31,33 @@ def test_pdf_processor_import_and_reload_without_doclayout(monkeypatch):
     reloaded = importlib.reload(module)
 
     assert hasattr(reloaded, "process_pdf_charts_optimized")
-    assert hasattr(reloaded, "extract_charts_with_doclayout")
+    assert not hasattr(reloaded, "extract_charts_with_doclayout")
 
 
-def test_extract_charts_with_doclayout_returns_empty_when_dependency_missing(
+def test_process_pdf_charts_optimized_when_doclayout_missing(
     tmp_path,
     monkeypatch,
-    caplog,
 ):
     _raise_for_doclayout_import(monkeypatch)
 
     module = importlib.import_module("core.pdf_processor")
-    model_path = tmp_path / "doclayout_yolo.onnx"
-    model_path.touch()
 
-    with caplog.at_level("WARNING"):
-        result = module.extract_charts_with_doclayout(
-            pdf_path=tmp_path / "dummy.pdf",
-            output_dir=tmp_path / "out",
-            model_path=str(model_path),
-        )
+    assert module.process_pdf_charts_optimized(
+        pdf_path=tmp_path / "nonexistent.pdf",
+        output_dir=tmp_path / "out",
+    ) == []
 
+    import fitz
+    pdf_path = tmp_path / "blank.pdf"
+    doc = fitz.open()
+    doc.new_page(width=400, height=300)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    result = module.process_pdf_charts_optimized(
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "out",
+        model_manager=None,
+    )
+    assert isinstance(result, list)
     assert result == []
-    assert "missing optional dependency 'doclayout_yolo'" in caplog.text

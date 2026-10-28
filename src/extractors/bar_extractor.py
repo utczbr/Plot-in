@@ -100,7 +100,7 @@ class BarExtractor(BaseExtractor):
                 secondary_scale_model=None,
                 secondary_baseline: float = None,
                 dual_axis_threshold_x: float = None,
-                axis_labels=None):
+                axis_labels=None, **kwargs):
         
         start_time = time.time()
         
@@ -157,11 +157,17 @@ class BarExtractor(BaseExtractor):
         )
 
         # Topological association
+        img_w = img_dimensions.get('width', 1000) if img_dimensions else (img.shape[1] if img is not None else 1000)
+        img_h = img_dimensions.get('height', 1000) if img_dimensions else (img.shape[0] if img is not None else 1000)
         enriched_bars = self.associator.associate_elements(
             bars=bars,
             error_bars=error_bars,
             tick_labels=tick_labels,
-            orientation=orientation
+            orientation=orientation,
+            image=img,
+            img_w=img_w,
+            img_h=img_h,
+            **kwargs
         )
 
         # Error bar validation

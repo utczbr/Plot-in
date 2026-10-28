@@ -4,7 +4,7 @@ import logging
 
 from .base_classifier import BaseChartClassifier, ClassificationResult
 from services.orientation_service import Orientation
-from utils.clustering_utils import cluster_1d_dbscan
+from core.baseline.clustering import cluster_1d_dbscan
 
 class HeatmapChartClassifier(BaseChartClassifier):
     """
@@ -304,10 +304,6 @@ class HeatmapChartClassifier(BaseChartClassifier):
                     x_labels.append(label) # Closer to top/bottom edge
                     
         return x_labels, y_labels
-
-    def compute_feature_scores(self, label_features: Dict, region_scores: Dict, element_context: Optional[Dict]) -> Dict[str, float]:
-        """Abstract method implementation - not used directly as we override classify."""
-        return {}
 
     def _empty_result(self) -> ClassificationResult:
         return ClassificationResult([], [], [], 0.0, {})

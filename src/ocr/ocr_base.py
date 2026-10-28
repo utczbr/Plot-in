@@ -1,80 +1,15 @@
 """
-Core OCR interfaces and dataclasses for the unified OCR system.
+Core OCR interfaces for the unified OCR system.
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
-from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Dict, Any
 import numpy as np
 
 
-class OCREngine(Enum):
-    """Supported OCR engines with distinct optimization profiles."""
-    EASYOCR = "easyocr"  # Better accuracy, slower
-    PADDLE = "paddle"    # Better speed, requires more preprocessing
-
-
-class QualityMode(Enum):
-    """Processing quality modes balancing speed vs accuracy."""
-    FAST = "fast"        # Minimal preprocessing, fastest (2-3x faster)
-    BALANCED = "balanced"  # Adaptive preprocessing, good balance
-    ACCURATE = "accurate"  # Multi-variant preprocessing, highest accuracy
-
-
-@dataclass(frozen=True)
-class OCRConfig:
-    """Immutable configuration for OCR processing pipeline."""
-    engine: OCREngine
-    quality_mode: QualityMode
-    enable_cache: bool = True
-    max_workers: int = 4
-    batch_size: int = 16
-    enable_gpu: bool = False
-    
-    # Engine-specific parameters
-    easyocr_params: Optional[Dict] = None
-    paddle_params: Optional[Dict] = None
-
-
-@dataclass
-class OCRResult:
-    """Structured OCR result with metadata."""
-    text: str
-    confidence: float
-    processing_time_ms: float
-    engine_used: str
-    preprocessing_method: str
-    bbox: Optional[Tuple[int, int, int, int]] = None
-
-
-class BaseOCREngineInternal(ABC):
-    """Abstract base for OCR engine implementations."""
-    
-    @abstractmethod
-    def recognize(self, image: np.ndarray, context: str = "default", **kwargs) -> Tuple[str, float]:
-        """Perform OCR on preprocessed image."""
-        pass
-    
-    def recognize_batch(self, images: List[np.ndarray], contexts: Optional[List[str]] = None,
-                       **kwargs) -> List[Tuple[str, float]]:
-        """Batch OCR processing."""
-        if contexts is None:
-            contexts = ["default"] * len(images)
-        return [self.recognize(img, ctx, **kwargs) for img, ctx in zip(images, contexts)]
-
-    def process_batch(self, crops_with_context: List[Tuple[np.ndarray, str]]) -> List[Dict[str, Any]]:
-        """Bridge process_batch interface for compatibility."""
-        results = []
-        for crop, ctx in crops_with_context:
-            text, conf = self.recognize(crop, ctx)
-            results.append({'text': text, 'confidence': conf})
-        return results
-
-
-class BaseOCRLegacy(ABC):
+class BaseOCREngine(ABC):
     """
-    Abstract base class for OCR engines (legacy interface).
+    Abstract base class for OCR engines.
     """
 
     @abstractmethod
@@ -91,8 +26,9 @@ class BaseOCRLegacy(ABC):
         pass
 
     def recognize(self, image: np.ndarray, context: str = "default", **kwargs) -> Tuple[str, float]:
-        """Bridge recognize interface for compatibility."""
+        """Canonical single-crop convenience method wrapping process_batch."""
         res = self.process_batch([(image, context)])
         if res and len(res) > 0:
             return res[0].get('text', ''), float(res[0].get('confidence', 0.0))
         return "", 0.0
+

@@ -7,7 +7,7 @@ configuration and value extraction.
 """
 from typing import List, Dict, Any
 
-from handlers.base_handler import CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
 from services.orientation_service import Orientation, OrientationService
 
 
@@ -48,30 +48,66 @@ class BarHandler(CartesianExtractionHandler):
             self.logger.warning("Missing baseline or calibration for bar extraction")
             return []
         
-        # NEW: Use BarExtractor with axis_labels
         extractor = BarExtractor()
         h, w = img.shape[:2]
-        
-        # The axis_labels need to be the properly classified tick_labels
-        # Get them from the label_classification metadata provided by the orchestrator
-        # For now, let's pass the full detections which should contain the necessary metadata
-        # We'll extract the classified tick_labels in the extractor
-        
-        # Try to get the classified tick_labels from metadata if available
         axis_labels = detections.get('axis_labels', [])
-        
-        extraction_result = extractor.extract(
-            img=img,
-            detections=detections,
-            scale_model=cal_model,
-            baseline_coord=baseline_coord,
-            img_dimensions={'width': w, 'height': h},
-            mode='optimized',
-            axis_labels=axis_labels  # Pass axis_labels for extraction
+
+        has_secondary_cal = (
+            'secondary' in calibration
+            and calibration['secondary'] is not None
+            and hasattr(calibration['secondary'], 'func')
         )
-        
-        # NEW: Call legend associator on extracted values
-        bars = extraction_result.get('bars', [])
+
+        if has_secondary_cal:
+            from core.baseline.clustering import cluster_bars_by_axis
+            partition = cluster_bars_by_axis(bars, w, {'has_dual_axis': True})
+            primary_bars = partition.get('primary_bars', bars)
+            secondary_bars = partition.get('secondary_bars', [])
+
+            sec_baseline = baseline_coord
+            sec_id = f"{axis_id}2"
+            for baseline in baselines.baselines:
+                if baseline.axis_id == sec_id:
+                    sec_baseline = baseline.value
+                    break
+
+            primary_dets = dict(detections, bar=primary_bars)
+            sec_dets = dict(detections, bar=secondary_bars)
+
+            res_primary = extractor.extract(
+                img=img,
+                detections=primary_dets,
+                scale_model=cal_model,
+                baseline_coord=baseline_coord,
+                img_dimensions={'width': w, 'height': h},
+                mode='optimized',
+                axis_labels=axis_labels,
+            )
+            res_sec = extractor.extract(
+                img=img,
+                detections=sec_dets,
+                scale_model=calibration['secondary'].func,
+                baseline_coord=sec_baseline,
+                img_dimensions={'width': w, 'height': h},
+                mode='optimized',
+                axis_labels=axis_labels,
+            )
+            p_bars = res_primary.get('bars', [])
+            s_bars = res_sec.get('bars', [])
+            for b in s_bars:
+                b['axis'] = 'secondary'
+            bars = p_bars + s_bars
+        else:
+            extraction_result = extractor.extract(
+                img=img,
+                detections=detections,
+                scale_model=cal_model,
+                baseline_coord=baseline_coord,
+                img_dimensions={'width': w, 'height': h},
+                mode='optimized',
+                axis_labels=axis_labels  # Pass axis_labels for extraction
+            )
+            bars = extraction_result.get('bars', [])
         from extractors.legend_associator import LegendAssociator
         bars = LegendAssociator.associate(bars, detections)
 

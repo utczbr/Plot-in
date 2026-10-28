@@ -20,14 +20,6 @@ if str(_src_dir) not in sys.path:
 from main_modern import ModernChartAnalysisApp  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 def test_update_results_from_gui_commits_pie_edits(qapp):
     dummy = type("Dummy", (), {})()
     dummy.analysis_results_widgets = {}

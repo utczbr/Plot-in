@@ -75,13 +75,13 @@ If your change introduces a new mandatory quality gate, update workflow coverage
 
 ## Documentation Sync Requirements
 When changing runtime behavior, update docs in the same branch:
-- `Protocol_gap.md`
-- `src/Critic.md`
+- `src/docs/context.md`
+- `src/docs/Critic.md`
 - `src/README.md`
-- `src/CONTRIBUTING.md` (if process changed)
+- `CONTRIBUTING.md` (if process changed)
 
 Use `src/docs/DOC_ACCURACY_CHECKLIST.md` and ensure major claims cite current code paths and tests.
-Use `src/docs/README.md` to keep active-doc vs archive links correct.
+Use `src/docs/archive/README.md` and `docs/architecture/` to keep active-doc, ADR, and archive links accurate.
 
 ## Pull Request Checklist
 - [ ] Code formatted and imports sorted

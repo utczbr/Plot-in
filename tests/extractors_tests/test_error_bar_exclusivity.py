@@ -56,7 +56,7 @@ def test_bar_associator_conflict_resolution():
         {"bbox": [95, 305, 125, 320], "xyxy": [95, 305, 125, 320], "text": "A"},
     ]
     
-    enriched = associator._associate_elements_legacy(
+    enriched = associator.associate_elements(
         bars=bars,
         error_bars=[single_eb],
         tick_labels=tick_labels,
@@ -107,3 +107,28 @@ def test_line_handler_exclusive_error_bar_association():
     assert len(pts_with_eb) == 1
     assert extracted[0].get("error_bar") is not None
     assert extracted[1].get("error_bar") is None
+
+
+def test_issue_g_line_chart_error_bar_association():
+    import numpy as np
+    from unittest.mock import patch
+    handler = LineHandler(MagicMock(), MagicMock())
+    img = np.zeros((100, 100, 3))
+
+    with patch('extractors.line_extractor.LineExtractor.extract') as mock_ext:
+        mock_ext.return_value = {
+            'data_points': [
+                {'xyxy': [10, 10, 20, 20], 'estimated_value': 5.0, 'x_calibrated': 1, 'y_calibrated': 5, 'x_pixel': 15, 'y_pixel': 15}
+            ]
+        }
+        detections = {'error_bar': [{'xyxy': [14, 5, 16, 25]}]}
+        calib = {'primary': MagicMock()}
+        calib['primary'].func = lambda x: x
+        base = MagicMock()
+        base.baselines = [MagicMock(axis_id='y', value=90)]
+
+        result = handler.extract_values(img, detections, calib, base, 'vertical')
+        assert len(result) == 1
+        assert 'error_bar' in result[0]
+        assert result[0]['error_bar']['bbox'] == [14, 5, 16, 25]
+

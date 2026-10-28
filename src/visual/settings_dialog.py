@@ -824,8 +824,8 @@ class SettingsDialog(QDialog):
 
     @staticmethod
     def get_default_settings():
-        """Get default settings."""
-        return {
+        """Get default settings, loading baseline values from config/advanced_settings.json when present."""
+        defaults = {
             'ocr_engine': 'Paddle',
             'ocr_accuracy': 'Optimized',
             'pipeline_mode': 'standard',
@@ -905,6 +905,20 @@ class SettingsDialog(QDialog):
             'use_doclayout_text': True,
             'heatmap_mode': 'legacy',
         }
+        config_path = Path(__file__).resolve().parents[2] / "config" / "advanced_settings.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    file_defaults = json.load(f)
+                if isinstance(file_defaults, dict):
+                    for key, value in file_defaults.items():
+                        if isinstance(value, dict) and isinstance(defaults.get(key), dict):
+                            defaults[key].update(copy.deepcopy(value))
+                        else:
+                            defaults[key] = copy.deepcopy(value)
+            except Exception:
+                pass
+        return defaults
 
     _get_default_settings = get_default_settings
 

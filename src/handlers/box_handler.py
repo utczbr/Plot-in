@@ -7,7 +7,8 @@ due to missing append in BoxExtractor.
 from typing import List, Dict, Any
 import numpy as np
 
-from handlers.base_handler import ExtractionResult, ChartCoordinateSystem, CartesianExtractionHandler
+from handlers.base import CartesianExtractionHandler
+from handlers.types import ExtractionResult, ChartCoordinateSystem
 from extractors.box_extractor import BoxExtractor, group_box_plot_elements
 from services.meta_clustering_service import ClusteringRecommendation
 
@@ -82,7 +83,7 @@ class BoxHandler(CartesianExtractionHandler):
                 orientation = OrientationService.from_any(orientation)
             except ValueError as e:
                 errors.append(f"Orientation validation failed: {e}")
-                return self._fail_result_new("Orientation validation", errors, warnings, orientation)
+                return self._fail_result("Orientation validation", errors, warnings, orientation)
 
         # Stage 1: Special handling for box plots - skip generic clustering
         # Check meta_clustering to see if it recommends intersection alignment
@@ -141,7 +142,7 @@ class BoxHandler(CartesianExtractionHandler):
             diagnostics['label_classification'] = classified
         except Exception as e:
             errors.append(f"Label classification failed: {e}")
-            return self._fail_result_new("Label classification", errors, warnings, orientation)
+            return self._fail_result("Label classification", errors, warnings, orientation)
 
         # Stage 3: Dual-axis detection (single source of truth)
         try:
@@ -154,7 +155,7 @@ class BoxHandler(CartesianExtractionHandler):
             diagnostics['dual_axis'] = dual_decision.__dict__
         except Exception as e:
             errors.append(f"Dual-axis detection failed: {e}")
-            return self._fail_result_new("Dual-axis detection", errors, warnings, orientation)
+            return self._fail_result("Dual-axis detection", errors, warnings, orientation)
 
         # Stage 4: Calibration with recovery
         try:
@@ -167,10 +168,10 @@ class BoxHandler(CartesianExtractionHandler):
                     warnings.append(f"{axis_id} calibration quality low: R²={getattr(cal, 'r_squared', 0):.3f}")
 
             if errors:
-                return self._fail_result_new("Calibration failure", errors, warnings, orientation)
+                return self._fail_result("Calibration failure", errors, warnings, orientation)
         except Exception as e:
             errors.append(f"Calibration failed: {e}")
-            return self._fail_result_new("Calibration", errors, warnings, orientation)
+            return self._fail_result("Calibration", errors, warnings, orientation)
 
         # Stage 5: Baseline detection (composition with ModularBaselineDetector)
         try:
@@ -179,7 +180,7 @@ class BoxHandler(CartesianExtractionHandler):
             )
         except Exception as e:
             errors.append(f"Baseline detection failed: {e}")
-            return self._fail_result_new("Baseline detection", errors, warnings, orientation)
+            return self._fail_result("Baseline detection", errors, warnings, orientation)
 
         # Stage 6: Data extraction (chart-specific)
         try:
@@ -188,7 +189,7 @@ class BoxHandler(CartesianExtractionHandler):
             )
         except Exception as e:
             errors.append(f"Value extraction failed: {e}")
-            return self._fail_result_new("Value extraction", errors, warnings, orientation)
+            return self._fail_result("Value extraction", errors, warnings, orientation)
 
         # Stage 7: Return structured result with NEW format
         return ExtractionResult(
@@ -203,29 +204,3 @@ class BoxHandler(CartesianExtractionHandler):
             orientation=orientation  # ✅ Use orientation enum object, not string
         )
 
-    def _fail_result_new(self, stage: str, errors: List[str], warnings: List[str], orientation):
-        """Create a failure result in the NEW ExtractionResult format."""
-        from handlers.base_handler import ChartCoordinateSystem
-        from services.orientation_service import Orientation
-
-        # Convert string orientation to enum if needed
-        if isinstance(orientation, str):
-            from services.orientation_service import OrientationService
-            try:
-                orientation_enum = OrientationService.from_any(orientation)
-            except:
-                orientation_enum = Orientation.VERTICAL  # Default
-        else:
-            orientation_enum = orientation
-
-        return ExtractionResult(
-            chart_type=self.get_chart_type(),
-            coordinate_system=ChartCoordinateSystem.CARTESIAN,  # ✅ NEW: Required parameter
-            elements=[],
-            baselines={},
-            calibration={},
-            diagnostics={'stage_failed': stage},
-            errors=errors,
-            warnings=warnings,
-            orientation=orientation_enum
-        )

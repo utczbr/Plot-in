@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from services.color_mapping_service import ColorMappingService
+from services.heatmap.color_mapping_service import ColorMappingService
 from services.heatmap.color_inverter import LUTColorInverter
 
 logger = logging.getLogger(__name__)

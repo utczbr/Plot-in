@@ -35,11 +35,6 @@ class ServiceContainer:
             self._singletons[name] = None
         logger.debug(f"Registered service: {name} (singleton={singleton})")
     
-    def register_instance(self, name: str, instance: Any):
-        """Register a pre-existing service instance."""
-        self._services[name] = instance
-        logger.debug(f"Registered instance: {name}")
-    
     def get(self, name: str) -> Any:
         """
         Retrieve a service by name.
@@ -84,10 +79,6 @@ class ServiceContainer:
         if key is None:
             return self._config
         return self._config.get(key, default)
-    
-    def has(self, name: str) -> bool:
-        """Check if service is registered."""
-        return name in self._factories or name in self._services
     
     def reset(self):
         """Reset all services (useful for testing)."""
@@ -149,19 +140,6 @@ def _register_core_services(container: ServiceContainer):
     container.register(
         'export_manager',
         lambda c: _create_export_manager(),
-        singleton=True
-    )
-    
-    # NEW: Thread safety and state management
-    container.register(
-        'thread_safety',
-        lambda c: _create_thread_safety_manager(max_concurrent_analyses=4),
-        singleton=True
-    )
-    
-    container.register(
-        'state_manager',
-        lambda c: _create_state_manager(),
         singleton=True
     )
 
@@ -229,12 +207,7 @@ def _register_ui_services(container: ServiceContainer):
         lambda c: _get_visualization_service(),  # Static class, no instantiation needed
         singleton=True
     )
-    
-    container.register(
-        'app_config',
-        lambda c: _create_app_config(),
-        singleton=True
-    )
+
 
 
 def _create_ocr_engine(container: ServiceContainer):
@@ -268,18 +241,6 @@ def _create_export_manager():
     from core.export_manager import ExportManager
 
     return ExportManager()
-
-
-def _create_thread_safety_manager(max_concurrent_analyses: int):
-    from core.thread_safety import ThreadSafetyManager
-
-    return ThreadSafetyManager(max_concurrent_analyses=max_concurrent_analyses)
-
-
-def _create_state_manager():
-    from core.app_state import StateManager
-
-    return StateManager()
 
 
 def _create_model_manager():
@@ -332,8 +293,3 @@ def _get_visualization_service():
 
     return VisualizationService
 
-
-def _create_app_config():
-    from visual.config_manager import AppConfig
-
-    return AppConfig()

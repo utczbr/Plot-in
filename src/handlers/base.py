@@ -295,6 +295,9 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             classified = _empty_classification
             diagnostics["label_classification"] = None
 
+        self._classified_labels = classified
+        self._tag_classified_labels(classified)
+
         # Stage 3: Dual-axis detection
         try:
             dual_decision = self.dual_axis_service.detect(
@@ -377,6 +380,70 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             warnings=warnings,
             orientation=orientation,
         )
+
+    @staticmethod
+    def _tag_classified_labels(classified: Any) -> None:
+        """Tag Stage 2 classified label dicts with explicit label_type metadata."""
+        if classified is None:
+            return
+        for lbl in getattr(classified, "scale_labels", []) or []:
+            if isinstance(lbl, dict):
+                lbl["label_type"] = "scale_label"
+        for lbl in getattr(classified, "axis_titles", []) or []:
+            if isinstance(lbl, dict):
+                lbl["label_type"] = "axis_title"
+        for lbl in getattr(classified, "tick_labels", []) or []:
+            if isinstance(lbl, dict):
+                lbl["label_type"] = "tick_label"
+
+    def _get_extractor_axis_labels(self, detections: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return independent-axis tick labels from Stage 2 classification with fallback."""
+        classified = getattr(self, "_classified_labels", None)
+        if classified is not None:
+            tick_labels = list(getattr(classified, "tick_labels", []) or [])
+            if tick_labels:
+                result: List[Dict[str, Any]] = []
+                seen_keys = set()
+                for lbl in tick_labels:
+                    if not isinstance(lbl, dict):
+                        continue
+                    tagged = dict(lbl, label_type="tick_label")
+                    bbox = tagged.get("xyxy") or tagged.get("bbox")
+                    key = (
+                        tuple(bbox[:4]) if bbox and len(bbox) >= 4 else None,
+                        str(tagged.get("text", "")).strip(),
+                    )
+                    seen_keys.add(key)
+                    result.append(tagged)
+
+                scale_keys = {
+                    (
+                        tuple((lbl.get("xyxy") or lbl.get("bbox"))[:4])
+                        if (lbl.get("xyxy") or lbl.get("bbox"))
+                        and len(lbl.get("xyxy") or lbl.get("bbox")) >= 4
+                        else None,
+                        str(lbl.get("text", "")).strip(),
+                    )
+                    for lbl in (getattr(classified, "scale_labels", []) or [])
+                    + (getattr(classified, "axis_titles", []) or [])
+                    if isinstance(lbl, dict)
+                }
+                raw_labels = getattr(self, "_axis_labels", None) or detections.get("axis_labels", []) or []
+                for lbl in raw_labels:
+                    if not isinstance(lbl, dict):
+                        continue
+                    if lbl.get("label_type") in ("scale_label", "axis_title"):
+                        continue
+                    bbox = lbl.get("xyxy") or lbl.get("bbox")
+                    key = (
+                        tuple(bbox[:4]) if bbox and len(bbox) >= 4 else None,
+                        str(lbl.get("text", "")).strip(),
+                    )
+                    if key not in seen_keys and key not in scale_keys:
+                        seen_keys.add(key)
+                        result.append(lbl)
+                return result
+        return getattr(self, "_axis_labels", None) or detections.get("axis_labels", [])
 
     def _create_clusterer_from_recommendation(self, rec, img_shape):
         """Instantiate clustering backend based on recommendation."""

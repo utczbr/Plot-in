@@ -76,7 +76,7 @@ class HistogramHandler(CartesianExtractionHandler):
         # Return list of histogram bin dictionaries with tick labels and legend associations
         bars = extraction_result.get('bars', [])
         from extractors.tick_label_associator import TickLabelAssociator
-        axis_lbls = getattr(self, '_axis_labels', None) or detections.get('axis_labels', [])
+        axis_lbls = self._get_extractor_axis_labels(detections)
         bars = TickLabelAssociator.associate(
             bars, detections, orientation_enum.value, axis_labels=axis_lbls
         )

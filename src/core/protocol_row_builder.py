@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from pipelines.types import ProtocolRow
 
@@ -338,6 +339,7 @@ def build_protocol_rows(
                 pie_pct = round(v * 100.0, 4)
 
         row: Dict[str, Any] = {
+            '_uid': uuid4().hex,
             'source_file': str(source_file),
             'page_index': page_index,
             'chart_type': chart_type,
@@ -374,6 +376,18 @@ def build_protocol_rows(
 _CONTEXT_FIELDS = frozenset({'group', 'outcome', 'unit', 'error_bar_type', 'series_id', 'value_x'})
 
 
+def ensure_row_uids(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ensure every protocol row dict has a non-empty string '_uid'."""
+    if not isinstance(rows, list):
+        return []
+    for row in rows:
+        if isinstance(row, dict):
+            uid = row.get('_uid')
+            if not isinstance(uid, str) or not uid:
+                row['_uid'] = uuid4().hex
+    return rows
+
+
 def merge_context_into_rows(
     existing_rows: List[Dict[str, Any]],
     pipeline_result: Dict[str, Any],
@@ -398,15 +412,26 @@ def merge_context_into_rows(
 
     for row in existing_rows:
         elem_idx = row.get('element_index', -1)
+        existing_uid = row.get('_uid') if isinstance(row.get('_uid'), str) and row.get('_uid') else None
         is_untouched = (
             row.get('review_status') == 'auto'
             and row.get('_original') is None
         )
 
         if is_untouched and elem_idx in fresh_by_idx:
-            # Fully replace with fresh row
-            merged.append(fresh_by_idx[elem_idx])
+            # Fully replace with fresh row; carry existing _uid only if element_index matches
+            fresh_row = fresh_by_idx[elem_idx]
+            if existing_uid and elem_idx != -1 and elem_idx == fresh_row.get('element_index', -1):
+                fresh_row['_uid'] = existing_uid
+            elif not fresh_row.get('_uid'):
+                fresh_row['_uid'] = uuid4().hex
+            merged.append(fresh_row)
         else:
+            # Preserve existing _uid on kept rows (or assign new if missing)
+            if existing_uid:
+                row['_uid'] = existing_uid
+            else:
+                row['_uid'] = uuid4().hex
             # Fill only empty context fields
             fresh = fresh_by_idx.get(elem_idx, {})
             for field in _CONTEXT_FIELDS:
@@ -426,6 +451,8 @@ def merge_context_into_rows(
     # Add any new rows from fresh that weren't in existing
     for row in fresh_rows:
         if row.get('element_index', -1) not in seen_indices:
+            if not row.get('_uid'):
+                row['_uid'] = uuid4().hex
             merged.append(row)
 
     return merged

@@ -52,6 +52,7 @@ class BoxHandler(CartesianExtractionHandler):
 
         # Instantiate the extractor and perform extraction
         extractor = BoxExtractor()
+        axis_labels = self._get_extractor_axis_labels(detections)
         extraction_data = extractor.extract(
             img=img,
             detections=detections,
@@ -59,11 +60,18 @@ class BoxHandler(CartesianExtractionHandler):
             baseline_coord=baseline_coord,
             img_dimensions=img_dimensions,
             mode='optimized', # or other modes as needed
-            axis_labels=self._axis_labels  # Pass stored axis labels for tick label grouping
+            axis_labels=axis_labels  # Pass classified tick labels for box grouping
         )
 
         # The extractor returns a dictionary, we need to return the list of boxes
-        return extraction_data.get('boxes', [])
+        boxes = extraction_data.get('boxes', [])
+        if boxes and axis_labels:
+            from extractors.tick_label_associator import TickLabelAssociator
+            orient_str = orientation.value if hasattr(orientation, 'value') else str(orientation or 'vertical')
+            boxes = TickLabelAssociator.associate(
+                boxes, detections, orient_str, axis_labels=axis_labels
+            )
+        return boxes
     
     def process(self, image, detections, axis_labels,
                chart_elements, orientation) -> ExtractionResult:
@@ -140,6 +148,8 @@ class BoxHandler(CartesianExtractionHandler):
                 orientation=orientation.value
             )
             diagnostics['label_classification'] = classified
+            self._classified_labels = classified
+            self._tag_classified_labels(classified)
         except Exception as e:
             errors.append(f"Label classification failed: {e}")
             return self._fail_result("Label classification", errors, warnings, orientation)

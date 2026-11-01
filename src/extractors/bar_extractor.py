@@ -111,9 +111,11 @@ class BarExtractor(BaseExtractor):
 
         axis_labels = axis_labels or []
         
-        # Identify tick_labels using heuristic
+        # Identify tick_labels using Stage 2 classification first, then heuristic fallback
         tick_labels = []
         for lbl in axis_labels:
+            if lbl.get('label_type') in ('scale_label', 'axis_title'):
+                continue
             text = lbl.get('text', '')
             if lbl.get('label_type') == 'tick_label':
                 tick_labels.append(lbl)

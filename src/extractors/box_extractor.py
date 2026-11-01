@@ -97,22 +97,29 @@ class BoxExtractor(BaseExtractor):
             'cv_height': orientation_result.cv_height
         }
 
+        # Filter out dependent-axis scale_labels when Stage 2 label_type metadata is present
+        filtered_tick_labels = [
+            lbl for lbl in (axis_labels or [])
+            if isinstance(lbl, dict) and lbl.get('label_type') not in ('scale_label', 'axis_title')
+        ]
+        box_tick_labels = filtered_tick_labels if filtered_tick_labels else (axis_labels or [])
+
         # Topology-aware grouping
         groups = group_box_plot_elements(
             boxes=boxes,
             range_indicators=whiskers,
             median_lines=median_lines,
             outliers=outliers,
-            tick_labels=axis_labels or [],
+            tick_labels=box_tick_labels,
             orientation=orientation
         )
 
         # Enhance box elements with improved tick label association
-        if axis_labels:
+        if box_tick_labels:
             associator = BoxElementAssociator(logger=self.logger)
             enhanced_boxes = associator.associate_elements_with_layout_detection(
                 boxes=[group['box'] for group in groups],
-                tick_labels=axis_labels,
+                tick_labels=box_tick_labels,
                 orientation=orientation
             )
             for i, group in enumerate(groups):
@@ -133,6 +140,12 @@ class BoxExtractor(BaseExtractor):
         for i, group in enumerate(groups):
             box = group['box']
             box_info = {'index': i, 'xyxy': box['xyxy'], 'orientation': orientation}
+            assoc_labels = box.get('associated_tick_labels') or []
+            if assoc_labels:
+                box_info['tick_label'] = assoc_labels[0]
+                box_info['associated_tick_labels'] = assoc_labels
+            elif group.get('tick_label') is not None:
+                box_info['tick_label'] = group['tick_label']
             x1, y1, x2, y2 = box['xyxy']
 
             if scale_model:

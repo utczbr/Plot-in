@@ -129,9 +129,12 @@ class ReviewSession(QObject):
     ) -> None:
         self._result = result
         self._context = context
-        if self._result is not None and "protocol_rows" not in self._result:
-            from core.protocol_row_builder import build_protocol_rows
-            self._result["protocol_rows"] = build_protocol_rows(self._result, self._context or {})
+        if self._result is not None:
+            from core.protocol_row_builder import build_protocol_rows, ensure_row_uids
+            if "protocol_rows" not in self._result:
+                self._result["protocol_rows"] = build_protocol_rows(self._result, self._context or {})
+            elif isinstance(self._result.get("protocol_rows"), list):
+                ensure_row_uids(self._result["protocol_rows"])
         rows = self._result.get("protocol_rows", []) if self._result else []
         self.reset_filters()
         self.mark_clean()
@@ -169,6 +172,8 @@ class ReviewSession(QObject):
         rows = self._result.get("protocol_rows", [])
         if not isinstance(rows, list):
             return []
+        from core.protocol_row_builder import ensure_row_uids
+        ensure_row_uids(rows)
 
         status_filter = self._filters.get("status", "All")
         outcome_filter = self._filters.get("outcome", "All")
@@ -192,6 +197,9 @@ class ReviewSession(QObject):
     def set_protocol_rows(self, rows: List[Dict[str, Any]]) -> None:
         if self._result is None:
             self._result = {}
+        if isinstance(rows, list):
+            from core.protocol_row_builder import ensure_row_uids
+            ensure_row_uids(rows)
         self._result["protocol_rows"] = rows
         self.protocol_rows_changed.emit(rows)
 
@@ -203,6 +211,8 @@ class ReviewSession(QObject):
         rows = self._result["protocol_rows"]
         if not isinstance(rows, list):
             return
+        from core.protocol_row_builder import ensure_row_uids
+        ensure_row_uids(rows)
 
         if isinstance(row_index_or_uid, int):
             if 0 <= row_index_or_uid < len(rows):
@@ -210,12 +220,11 @@ class ReviewSession(QObject):
                 if isinstance(target_row, dict):
                     target_row[field] = value
                     self.protocol_rows_changed.emit(rows)
-        else:
+        elif row_index_or_uid is not None:
             for r in rows:
                 if isinstance(r, dict) and (
                     r.get("_uid") == row_index_or_uid
                     or r.get("id") == row_index_or_uid
-                    or id(r) == row_index_or_uid
                 ):
                     r[field] = value
                     self.protocol_rows_changed.emit(rows)

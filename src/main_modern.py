@@ -2780,7 +2780,13 @@ Click to configure advanced options."""
         }
         default_overlay_class = overlay_class_map.get(chart_type, 'other')
 
+        from uuid import uuid4
         for r_idx, row_dict in enumerate(filtered_rows):
+            row_uid = row_dict.get('_uid')
+            if not isinstance(row_uid, str) or not row_uid:
+                row_uid = uuid4().hex
+                row_dict['_uid'] = row_uid
+
             bbox = row_dict.get('bbox')
             overlay_data = None
             if bbox:
@@ -2791,7 +2797,7 @@ Click to configure advanced options."""
                 raw  = row_dict.get(col_id, '')
                 text = '' if raw is None else str(raw)
                 item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, id(row_dict))
+                item.setData(Qt.ItemDataRole.UserRole, row_uid)
                 if overlay_data:
                     item.setData(Qt.ItemDataRole.UserRole + 1, overlay_data)
 
@@ -2822,12 +2828,16 @@ Click to configure advanced options."""
         item = table.item(row_idx, 0)
         if item is None:
             return
-        row_id = item.data(Qt.ItemDataRole.UserRole)
+        row_uid = item.data(Qt.ItemDataRole.UserRole)
+        if not row_uid:
+            return
 
         rows = (self.current_analysis_result or {}).get('protocol_rows', [])
+        from core.protocol_row_builder import ensure_row_uids
+        ensure_row_uids(rows)
         row_dict = None
         for r in rows:
-            if id(r) == row_id:
+            if isinstance(r, dict) and r.get('_uid') == row_uid:
                 row_dict = r
                 break
         if row_dict is None:
@@ -2959,6 +2969,18 @@ Click to configure advanced options."""
                 filtered = [r for r in filtered if r.get('group') == group_f]
             if status_f != "All":
                 filtered = [r for r in filtered if r.get('review_status') == status_f]
+
+        from pathlib import Path as _Path
+        default_dir = ""
+        if hasattr(self, 'output_path_edit'):
+            default_dir = self.output_path_edit.text().strip()
+        stem = _Path(self.current_image_path).stem if getattr(self, 'current_image_path', None) else "protocol"
+        default_path = str(_Path(default_dir) / f"{stem}_protocol.csv") if default_dir else f"{stem}_protocol.csv"
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Export Results CSV", default_path, "CSV Files (*.csv);;All Files (*)"
+        )
+        if not dest:
+            return
 
         # --- Use the same dynamic column list shown in the table ---
         from core.protocol_row_builder import get_protocol_columns

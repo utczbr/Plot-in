@@ -13,12 +13,25 @@ class _DummyNavFrame:
     def __init__(self):
         self.visible = True
         self.deleted = False
+        self.state_calls = []
 
     def setVisible(self, value):
         self.visible = bool(value)
 
     def deleteLater(self):
         self.deleted = True
+
+    def set_state(self, index, total, can_prev, can_next, busy, review_progress=None):
+        self.state_calls.append(
+            {
+                "index": index,
+                "total": total,
+                "can_prev": can_prev,
+                "can_next": can_next,
+                "busy": busy,
+                "review_progress": review_progress,
+            }
+        )
 
 
 class _DummyResultsTab:
@@ -69,6 +82,7 @@ def test_on_analysis_complete_error_payload(monkeypatch):
     monkeypatch.setattr("main_modern.QMessageBox.critical", lambda *args, **kwargs: None)
 
     window = _DummyWindow()
+    nav_before = window.nav_frame
     ModernChartAnalysisApp._on_analysis_complete(window, {"error": "Model loading failed"})
 
     assert window.is_processing is False
@@ -79,6 +93,10 @@ def test_on_analysis_complete_error_payload(monkeypatch):
     assert window.update_ui_calls == 0
     assert window.update_display_calls == 0
     assert window.setup_nav_calls == 0
+    # T-010.4: nav bar remains alive and visible on analysis error
+    assert window.nav_frame is nav_before
+    assert window.nav_frame.deleted is False
+    assert window.nav_frame.visible is True
     assert any(msg.startswith("❌") for msg in window.status_messages)
 
 

@@ -401,6 +401,8 @@ class FileListCacheMixin:
                 child.widget().deleteLater()
 
         if not self.image_files:
+            if hasattr(self, "_sync_navigation_bar"):
+                self._sync_navigation_bar()
             failures = getattr(self, '_pdf_failures', [])
             detail = "\n".join(f"• {p.name}: {reason}" for p, reason in failures) if failures else "No charts found"
             label = QLabel(detail)
@@ -511,6 +513,8 @@ class FileListCacheMixin:
             else False
         )
         is_batch_active = (getattr(self, "is_processing", False) is True) or is_batch_running
+        if hasattr(self, "_sync_navigation_bar"):
+            self._sync_navigation_bar()
         if not is_batch_active and self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
             self.load_image_by_index(0)
 

@@ -14,6 +14,7 @@ from core.model_manager import ModelManager
 from models.config import MODELS_CONFIG
 from core.chart_registry import get_chart_element_key, normalize_chart_type
 from utils import run_inference_on_image, sanitize_for_json
+from core.review_summary import build_summary, write_summary, clear_failure_marker
 from utils.validation_utils import is_numeric
 from services.orientation_detection_service import OrientationDetectionService
 from services.orientation_service import Orientation
@@ -1387,6 +1388,13 @@ class ChartAnalysisPipeline(BasePipeline):
         json_path = output_dir / f"{stem}_analysis.json"
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(sanitize_for_json(result), f, indent=2, ensure_ascii=False)
+
+        # Save summary sidecar and clear failure marker (T-014.1b)
+        try:
+            write_summary(output_dir / f"{stem}_summary.json", build_summary(result))
+            clear_failure_marker(output_dir, stem)
+        except Exception as e:
+            self.logger.warning(f"Failed to write review summary sidecar: {e}")
             
         # Export edited detections to a separate file if manually corrected or reviewed
         if result.get('review_status') in ('reviewed', 'corrected'):

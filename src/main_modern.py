@@ -912,7 +912,8 @@ Click to configure advanced options."""
         self.conf_slider.setMaximum(9)
         self.conf_slider.setValue(4)
         self.conf_slider.valueChanged.connect(self.update_slider_label)
-        config_layout.addWidget(self.conf_slider)
+        self.conf_slider.setVisible(False)
+        self.conf_label.setVisible(False)
 
         self.chart_type_label = QLabel("CHART TYPE")
         self.chart_type_label.setProperty("sectionHeader", True)
@@ -1032,8 +1033,8 @@ Click to configure advanced options."""
         self.recal_btn.clicked.connect(self.recalibrate_scale)
         self.recal_btn.setMaximumWidth(140)
         self.recal_btn.setStyleSheet(
-            "QPushButton { background-color: #FF9800; font-size: 10px; padding: 4px 8px; max-height: 28px; } "
-            "QPushButton:hover { background-color: #FFB74D; } "
+            "QPushButton { background-color: #FF9800; color: #1e1e1e; font-size: 10px; padding: 4px 8px; max-height: 28px; } "
+            "QPushButton:hover { background-color: #FFB74D; color: #1e1e1e; } "
             "QPushButton:disabled { background-color: #5a5a5a; color: #9a9a9a; }"
         )
         scale_info_layout.addWidget(self.recal_btn)
@@ -1557,12 +1558,16 @@ Click to configure advanced options."""
     def highlight_selected_file(self, selected_index):
         if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
             return
-        for i, btn in self._file_list_buttons.items():
+        prev = getattr(self, "_previous_selected_index", None)
+        to_update = {selected_index} if prev is None or prev not in self._file_list_buttons else {prev, selected_index}
+        self._previous_selected_index = selected_index
+        for i in to_update:
+            btn = self._file_list_buttons.get(i)
             if not isinstance(btn, QPushButton):
                 continue
             is_sel = (i == selected_index)
             is_low = getattr(btn, "_is_low_conf", False)
-            bg = ("#5a4520" if is_low else "#4a90e2") if is_sel else ("#1e1910" if is_low else "transparent")
+            bg = ("#5a4520" if is_low else "#264f78") if is_sel else ("#1e1910" if is_low else "transparent")
             color = "white" if is_sel else ("#e5c07b" if is_low else "#d4d4d4")
             border = f"2px solid {color}" if is_sel else f"1px solid {'#5a4520' if is_low else '#454545'}"
             btn.setStyleSheet(

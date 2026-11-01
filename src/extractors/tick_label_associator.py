@@ -37,17 +37,22 @@ class TickLabelAssociator:
         # 1. Gather all candidate labels
         candidates = []
         seen_ids = set()
+        seen_keys = set()
 
         def _add_label(lbl: Any):
             if not isinstance(lbl, dict):
+                return
+            if lbl.get('label_type') in ('scale_label', 'axis_title'):
                 return
             bbox = lbl.get('xyxy') or lbl.get('bbox')
             if not bbox or len(bbox) < 4:
                 return
             lbl_id = id(lbl)
-            if lbl_id in seen_ids:
+            lbl_key = (tuple(bbox[:4]), str(lbl.get('text', '')).strip())
+            if lbl_id in seen_ids or lbl_key in seen_keys:
                 return
             seen_ids.add(lbl_id)
+            seen_keys.add(lbl_key)
             candidates.append(lbl)
 
         # Check explicit axis_labels argument

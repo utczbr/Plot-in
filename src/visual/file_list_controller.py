@@ -669,6 +669,9 @@ class FileListCacheMixin:
         image_size = self.original_pil_image.size
         try:
             normalized_raw = _normalize_result_payload_for_gui(raw, image_size=image_size)
+            if isinstance(normalized_raw, dict) and isinstance(normalized_raw.get("protocol_rows"), list):
+                from core.protocol_row_builder import ensure_row_uids
+                ensure_row_uids(normalized_raw["protocol_rows"])
             self.current_analysis_result = self._normalize_result_for_gui(normalized_raw)
         except Exception as norm_exc:
             logging.getLogger(__name__).warning(

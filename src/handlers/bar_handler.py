@@ -50,7 +50,7 @@ class BarHandler(CartesianExtractionHandler):
         
         extractor = BarExtractor()
         h, w = img.shape[:2]
-        axis_labels = detections.get('axis_labels', [])
+        axis_labels = self._get_extractor_axis_labels(detections)
 
         has_secondary_cal = (
             'secondary' in calibration

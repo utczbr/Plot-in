@@ -147,7 +147,7 @@ class LineHandler(CartesianExtractionHandler):
                 
         # Associate tick labels along the independent axis
         from extractors.tick_label_associator import TickLabelAssociator
-        axis_lbls = getattr(self, '_axis_labels', None) or detections.get('axis_labels', [])
+        axis_lbls = self._get_extractor_axis_labels(detections)
         extracted = TickLabelAssociator.associate(
             extracted, detections, orientation_enum.value, axis_labels=axis_lbls
         )

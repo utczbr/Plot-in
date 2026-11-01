@@ -291,3 +291,234 @@ def test_navigation_guard_supports_zero_and_one_argument_signatures():
     assert session.request_navigation() is False
     assert len(calls_0) == 2
 
+
+# ---------------------------------------------------------------------------
+# ADR-007 T-007.3 — Stable Row Identity (_uid)
+# ---------------------------------------------------------------------------
+
+
+def test_t007_3_rebuild_preserves_edited_row_uid_and_subsequent_edits(offscreen_window):
+    """
+    Given a result with 5 rows, when _refresh_protocol_rows_from_result() rebuilds
+    the list, then every previously edited row keeps its _uid and an edit made
+    after the rebuild still lands on the right row.
+    """
+    from PyQt6.QtCore import Qt
+    from core.protocol_row_builder import get_protocol_columns
+
+    elements = [
+        {"index": i, "type": "bar", "bbox": [i * 10, 0, i * 10 + 8, 50], "tick_label": {"text": f"G{i}"}, "value": float((i + 1) * 10)}
+        for i in range(5)
+    ]
+    offscreen_window.current_analysis_result = {
+        "image_file": "five_bars.png",
+        "chart_type": "bar",
+        "elements": elements,
+    }
+    offscreen_window._refresh_protocol_rows_from_result()
+
+    rows_before = offscreen_window.current_analysis_result["protocol_rows"]
+    assert len(rows_before) == 5
+    uids_before = [r["_uid"] for r in rows_before]
+    assert len(set(uids_before)) == 5
+    assert all(isinstance(u, str) and len(u) == 32 for u in uids_before)
+
+    # Verify table stores _uid in Qt.UserRole
+    table = offscreen_window.protocol_table
+    for r_idx in range(5):
+        assert table.item(r_idx, 0).data(Qt.ItemDataRole.UserRole) == uids_before[r_idx]
+
+    # Edit row 1 and row 3 via the table
+    active_cols = get_protocol_columns("bar")
+    val_col_idx = next(i for i, (cid, _, _) in enumerate(active_cols) if cid == "value")
+    notes_col_idx = next(i for i, (cid, _, _) in enumerate(active_cols) if cid == "notes")
+
+    table.item(1, val_col_idx).setText("222.5")
+    table.item(3, notes_col_idx).setText("checked row 3")
+
+    assert rows_before[1]["value"] == 222.5
+    assert rows_before[1]["review_status"] == "corrected"
+    assert rows_before[3]["notes"] == "checked row 3"
+
+    # Rebuild via _refresh_protocol_rows_from_result()
+    offscreen_window._refresh_protocol_rows_from_result()
+    rows_after = offscreen_window.current_analysis_result["protocol_rows"]
+    assert len(rows_after) == 5
+
+    # Every edited row keeps its exact _uid (and matching untouched rows do too)
+    assert rows_after[1]["_uid"] == uids_before[1]
+    assert rows_after[3]["_uid"] == uids_before[3]
+    assert [r["_uid"] for r in rows_after] == uids_before
+
+    # Make an edit after the rebuild and verify it lands on the exact target row
+    table.item(1, notes_col_idx).setText("post-rebuild note")
+    table.item(4, val_col_idx).setText("555.0")
+    assert rows_after[1]["notes"] == "post-rebuild note"
+    assert rows_after[1]["value"] == 222.5
+    assert rows_after[4]["value"] == 555.0
+
+
+def test_t007_3_cached_json_without_uid_assigns_distinct_uids_and_no_none_collision(
+    offscreen_window, tmp_path
+):
+    """
+    Given a cached analysis JSON saved without _uid, when loaded and edited in
+    the table, then every row receives a distinct _uid and an edit on row k
+    updates row k without colliding on None.
+    """
+    import json
+    from PIL import Image
+    from core.protocol_row_builder import get_protocol_columns
+
+    img_path = tmp_path / "legacy_chart.png"
+    Image.new("RGB", (120, 90), color=(255, 255, 255)).save(img_path)
+
+    legacy_rows = [
+        {
+            "source_file": "legacy_chart.png",
+            "chart_type": "bar",
+            "element_index": k,
+            "group": f"Cat{k}",
+            "outcome": "",
+            "value": float(k * 10),
+            "unit": "",
+            "error_bar_type": "",
+            "error_bar_value": None,
+            "baseline_value": 0.0,
+            "confidence": 0.9,
+            "review_status": "auto",
+            "notes": "",
+            "_original": None,
+        }
+        for k in range(4)
+    ]
+    json_path = tmp_path / "legacy_chart_analysis.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "original_image_path": str(img_path),
+                "image_file": "legacy_chart.png",
+                "chart_type": "bar",
+                "elements": [{"index": k, "type": "bar", "value": float(k * 10)} for k in range(4)],
+                "protocol_rows": legacy_rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    offscreen_window.image_files = [str(img_path)]
+    offscreen_window.current_image_index = 0
+    offscreen_window._load_result_from_cache(str(img_path), str(json_path))
+
+    loaded_rows = offscreen_window.current_analysis_result["protocol_rows"]
+    assert len(loaded_rows) == 4
+    uids = [r.get("_uid") for r in loaded_rows]
+    assert all(isinstance(u, str) and len(u) > 0 for u in uids)
+    assert len(set(uids)) == 4
+
+    # Edit row k=2 in the table and verify ONLY row 2 is modified
+    active_cols = get_protocol_columns("bar")
+    val_col_idx = next(i for i, (cid, _, _) in enumerate(active_cols) if cid == "value")
+    offscreen_window.protocol_table.item(2, val_col_idx).setText("999.25")
+
+    assert loaded_rows[0]["value"] == 0.0
+    assert loaded_rows[1]["value"] == 10.0
+    assert loaded_rows[2]["value"] == 999.25
+    assert loaded_rows[3]["value"] == 30.0
+
+
+def test_t007_3_uid_excluded_from_export_protocol_csv_and_gui_csv(
+    offscreen_window, tmp_path, monkeypatch
+):
+    """
+    Given export_protocol_csv and the GUI CSV export, then _uid never appears
+    in output (assert header equality with existing PROTOCOL_COLUMNS / active columns).
+    """
+    import csv
+    from core.export_manager import ExportManager
+    from core.protocol_row_builder import build_protocol_rows, get_protocol_columns
+
+    result = {
+        "image_file": "bar_export.png",
+        "chart_type": "bar",
+        "elements": [
+            {"index": 0, "type": "bar", "bbox": [0, 0, 10, 50], "tick_label": {"text": "A"}, "value": 12.5},
+            {"index": 1, "type": "bar", "bbox": [20, 0, 30, 50], "tick_label": {"text": "B"}, "value": 25.0},
+        ],
+    }
+    rows = build_protocol_rows(result)
+    assert all("_uid" in r for r in rows)
+    result["protocol_rows"] = rows
+
+    # 1. ExportManager.export_protocol_csv
+    core_csv = tmp_path / "core_protocol.csv"
+    ExportManager.export_protocol_csv(rows, str(core_csv))
+    with open(core_csv, newline="", encoding="utf-8") as f:
+        reader = list(csv.reader(f))
+    assert reader[0] == list(ExportManager.PROTOCOL_COLUMNS)
+    assert "_uid" not in reader[0]
+    for row_vals in reader[1:]:
+        for r in rows:
+            assert r["_uid"] not in row_vals
+
+    # 2. GUI _export_protocol_csv
+    gui_csv = tmp_path / "gui_protocol.csv"
+    offscreen_window.current_analysis_result = result
+    offscreen_window._refresh_protocol_rows_from_result()
+    monkeypatch.setattr(
+        "main_modern.QFileDialog.getSaveFileName",
+        lambda *a, **kw: (str(gui_csv), "CSV Files (*.csv)"),
+    )
+    monkeypatch.setattr(
+        "main_modern.QMessageBox.information",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(
+        "main_modern.QMessageBox.warning",
+        lambda *a, **kw: None,
+    )
+    offscreen_window._export_protocol_csv()
+
+    with open(gui_csv, newline="", encoding="utf-8") as f:
+        gui_reader = list(csv.reader(f))
+    expected_gui_cols = [c[0] for c in get_protocol_columns("bar")]
+    assert gui_reader[0] == expected_gui_cols
+    assert "_uid" not in gui_reader[0]
+
+
+def test_t007_3_merge_context_into_rows_uid_matching_and_non_matching_element_index():
+    """
+    merge_context_into_rows preserves _uid on kept rows, carries _uid on untouched
+    replaced rows only when element_index matches, and generates a new _uid otherwise.
+    """
+    from core.protocol_row_builder import build_protocol_rows, merge_context_into_rows
+
+    pipeline_result = {
+        "image_file": "chart.png",
+        "chart_type": "bar",
+        "elements": [
+            {"index": 0, "type": "bar", "bbox": [0, 0, 10, 50], "value": 10.0},
+            {"index": 1, "type": "bar", "bbox": [20, 0, 30, 50], "value": 20.0},
+        ],
+    }
+    rows = build_protocol_rows(pipeline_result)
+    uid0 = rows[0]["_uid"]
+    uid1 = rows[1]["_uid"]
+
+    # Mark row 0 as edited
+    rows[0]["review_status"] = "corrected"
+    rows[0]["_original"] = {"value": 10.0}
+    rows[0]["value"] = 99.0
+
+    # Add a third row with element_index=-1 (no valid element_index match)
+    orphan_row = dict(rows[1])
+    orphan_row["_uid"] = "orphan_uid_should_not_carry_if_replaced"
+    orphan_row["element_index"] = -1
+
+    # Add an element with index -1 to pipeline_result to test non-matching element_index=-1 replacement
+    merged = merge_context_into_rows([rows[0], rows[1]], pipeline_result, {"outcomes": ["Y"]})
+    assert merged[0]["_uid"] == uid0
+    assert merged[0]["value"] == 99.0
+    assert merged[1]["_uid"] == uid1
+
+

@@ -844,16 +844,32 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(tab, "Calibration")
 
     def _create_processing_tab(self):
-        """Create image processing settings tab."""
+        """Create image processing settings tab with scrollable, evenly spaced groups."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(12, 12, 12, 12)
+        scroll_layout.setSpacing(12)
 
         method_group = QGroupBox("Spatial Classification Method")
         method_layout = QGridLayout(method_group)
-        
+        method_layout.setContentsMargins(12, 14, 12, 12)
+        method_layout.setHorizontalSpacing(12)
+        method_layout.setVerticalSpacing(8)
+        method_layout.setColumnStretch(0, 1)
+        method_layout.setColumnStretch(1, 1)
+
         # Pipeline Mode (SOTA feature)
         method_layout.addWidget(QLabel("Pipeline Mode:"), 0, 0)
         self.pipeline_mode_combo = QComboBox()
+        self.pipeline_mode_combo.setMinimumHeight(28)
         safe_combo_populate(self.pipeline_mode_combo, ['standard', 'vlm', 'chart_to_table', 'hybrid', 'auto'])
         self.pipeline_mode_combo.setToolTip("Select the overall pipeline routing strategy (SOTA)")
         method_layout.addWidget(self.pipeline_mode_combo, 0, 1)
@@ -861,12 +877,14 @@ class SettingsDialog(QDialog):
         # Spatial Method
         method_layout.addWidget(QLabel("Spatial Method:"), 1, 0)
         self.spatial_method_combo = QComboBox()
+        self.spatial_method_combo.setMinimumHeight(28)
         safe_combo_populate(self.spatial_method_combo, ['Diagonal', 'LYLAA-Reduced', 'LYLLA'])
         method_layout.addWidget(self.spatial_method_combo, 1, 1)
 
         # Scatter Subpixel Mode (SOTA feature)
         method_layout.addWidget(QLabel("Scatter Subpixel Mode:"), 2, 0)
         self.scatter_subpixel_combo = QComboBox()
+        self.scatter_subpixel_combo.setMinimumHeight(28)
         safe_combo_populate(self.scatter_subpixel_combo, ['otsu', 'gaussian'])
         self.scatter_subpixel_combo.setToolTip("Algorithm used to refine scatter point centers natively")
         method_layout.addWidget(self.scatter_subpixel_combo, 2, 1)
@@ -874,52 +892,68 @@ class SettingsDialog(QDialog):
         # Bar Association Mode (SOTA feature)
         method_layout.addWidget(QLabel("Bar Association Mode:"), 3, 0)
         self.bar_association_combo = QComboBox()
+        self.bar_association_combo.setMinimumHeight(28)
         safe_combo_populate(self.bar_association_combo, ['heuristic', 'metric_learning'])
         self.bar_association_combo.setToolTip("Method used to associate text labels to bars")
         method_layout.addWidget(self.bar_association_combo, 3, 1)
 
-        layout.addWidget(method_group)
-        
+        scroll_layout.addWidget(method_group)
+
         group = QGroupBox("Image Processing Parameters")
         grid = QGridLayout(group)
-        
+        grid.setContentsMargins(12, 14, 12, 12)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
         img_proc = self.settings.get('image_processing', {})
         # CLAHE settings
         grid.addWidget(QLabel("CLAHE Clip Limit:"), 0, 0)
         self.clahe_clip_spin = QDoubleSpinBox()
+        self.clahe_clip_spin.setMinimumHeight(28)
         self.clahe_clip_spin.setRange(0.5, 5.0)
         self.clahe_clip_spin.setSingleStep(0.1)
         self.clahe_clip_spin.setValue(img_proc.get('clahe_clip_limit', 1.0))
         self.clahe_clip_spin.setToolTip("Contrast limiting (lower = less enhancement)")
         grid.addWidget(self.clahe_clip_spin, 0, 1)
-        
+
         grid.addWidget(QLabel("CLAHE Grid Size:"), 1, 0)
         self.clahe_grid_spin = QSpinBox()
+        self.clahe_grid_spin.setMinimumHeight(28)
         self.clahe_grid_spin.setRange(2, 16)
         self.clahe_grid_spin.setValue(img_proc.get('clahe_grid_size', 8))
         grid.addWidget(self.clahe_grid_spin, 1, 1)
-        
+
         # Bilateral filter
         grid.addWidget(QLabel("Bilateral Filter Diameter:"), 2, 0)
         self.bilateral_d_spin = QSpinBox()
+        self.bilateral_d_spin.setMinimumHeight(28)
         self.bilateral_d_spin.setRange(3, 15)
         self.bilateral_d_spin.setValue(img_proc.get('bilateral_filter_d', 5))
         grid.addWidget(self.bilateral_d_spin, 2, 1)
-        
+
         # Performance
         perf_group = QGroupBox("Performance Settings")
         perf_layout = QGridLayout(perf_group)
+        perf_layout.setContentsMargins(12, 14, 12, 12)
+        perf_layout.setHorizontalSpacing(12)
+        perf_layout.setVerticalSpacing(8)
+        perf_layout.setColumnStretch(0, 1)
+        perf_layout.setColumnStretch(1, 1)
         perf_settings = self.settings.get('performance', {})
-        
+
         perf_layout.addWidget(QLabel("Batch Processing Workers:"), 0, 0)
         self.batch_workers_spin = QSpinBox()
+        self.batch_workers_spin.setMinimumHeight(28)
         self.batch_workers_spin.setRange(1, 16)
         self.batch_workers_spin.setValue(perf_settings.get('batch_workers', 4))
         self.batch_workers_spin.setToolTip("Number of parallel processes for batch analysis")
         perf_layout.addWidget(self.batch_workers_spin, 0, 1)
-        
+
         perf_layout.addWidget(QLabel("OCR Parallel Workers:"), 1, 0)
         self.ocr_workers_spin = QSpinBox()
+        self.ocr_workers_spin.setMinimumHeight(28)
         self.ocr_workers_spin.setRange(1, 16)
         self.ocr_workers_spin.setValue(perf_settings.get('ocr_workers', 2))
         perf_layout.addWidget(self.ocr_workers_spin, 1, 1)
@@ -928,42 +962,55 @@ class SettingsDialog(QDialog):
         self.perf_use_gpu_check.setChecked(perf_settings.get('use_gpu', sys.platform != "darwin"))
         self.perf_use_gpu_check.setToolTip("Enable GPU acceleration for detection models via ONNX Runtime.")
         perf_layout.addWidget(self.perf_use_gpu_check, 2, 0, 1, 2)
-        
-        layout.addWidget(group)
-        layout.addWidget(perf_group)
-        layout.addStretch()
+
+        scroll_layout.addWidget(group)
+        scroll_layout.addWidget(perf_group)
+        scroll_layout.addStretch()
+
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
         self.tabs.addTab(tab, "Processing")
 
     def _create_heatmap_tab(self):
         """Create heatmap-specific extraction settings tab."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(12, 12, 12, 12)
+        scroll_layout.setSpacing(12)
 
         # ── Next-Gen Pipeline Mode ───────────────────────────────────────────
-        pipeline_group = QGroupBox("Next-Gen Extraction Pipeline")
+        pipeline_group = QGroupBox("Heatmap Extraction Pipeline")
         pipeline_layout = QGridLayout(pipeline_group)
+        pipeline_layout.setContentsMargins(12, 14, 12, 12)
+        pipeline_layout.setHorizontalSpacing(12)
+        pipeline_layout.setVerticalSpacing(8)
+        pipeline_layout.setColumnStretch(0, 0)
+        pipeline_layout.setColumnStretch(1, 1)
 
         mode_label = QLabel("Pipeline Mode:")
         mode_label.setToolTip(
             "Select the heatmap extraction optimisation level.\n"
-            "Higher modes add FFT grid detection, 3D LUT colour inversion,\n"
-            "and affine-gap sequence alignment at the cost of calibration time."
+            "Higher modes add Goertzel FFT lattice detection, 3D LUT CIEDE2000 colour\n"
+            "inversion, and Banded Gotoh affine-gap label alignment."
         )
         pipeline_layout.addWidget(mode_label, 0, 0)
 
         self.heatmap_mode_combo = QComboBox()
+        self.heatmap_mode_combo.setMinimumHeight(28)
         self.heatmap_mode_combo.setToolTip(mode_label.toolTip())
         safe_combo_populate(self.heatmap_mode_combo, [
-            "Legacy  (DBSCAN + HSV)",
-            "FFT Grid  (Goertzel lattice)",
-            "FFT Grid + 3D LUT Color  (CIEDE2000)",
-            "Full  (FFT + LUT + PROSAC + Gotoh)",
+            "Legacy  (Adaptive DBSCAN + Piecewise Colorbar)",
+            "FFT Grid  (Goertzel Lattice + Phase Fusion)",
+            "FFT Grid + 3D LUT Color  (CIEDE2000 + Bimodal Router)",
+            "Full  (FFT + 3D LUT + Artifact Rejector + Gotoh DP)",
         ])
         pipeline_layout.addWidget(self.heatmap_mode_combo, 0, 1)
 
@@ -971,7 +1018,7 @@ class SettingsDialog(QDialog):
         self._heatmap_mode_desc = QLabel()
         self._heatmap_mode_desc.setWordWrap(True)
         self._heatmap_mode_desc.setStyleSheet(
-            "color: #aaaaaa; font-style: italic; font-size: 9px; padding: 4px;"
+            "color: #d4d4d4; font-style: italic; font-size: 11px; padding: 6px 4px;"
         )
         pipeline_layout.addWidget(self._heatmap_mode_desc, 1, 0, 1, 2)
 
@@ -981,35 +1028,54 @@ class SettingsDialog(QDialog):
         pipeline_group.setLayout(pipeline_layout)
         scroll_layout.addWidget(pipeline_group)
 
-        # ── Grid Detection Info ───────────────────────────────────────────────
+        # ── Grid Reconstruction Info ─────────────────────────────────────────
         grid_info_group = QGroupBox("Grid Reconstruction Info")
         grid_info_layout = QVBoxLayout(grid_info_group)
+        grid_info_layout.setContentsMargins(12, 12, 12, 12)
         grid_info_text = QLabel(
-            "Legacy: 2-pass DBSCAN clustering on YOLO cell centroids.\n"
-            "FFT modes: Goertzel IIR frequency pruning (O(N·K)) + circular-mean\n"
-            "phase fusion with R\u0305 coherence guard. Falls back to DBSCAN if\n"
-            "the period is ambiguous or coherence R\u0305 < 0.20."
+            "• Macro ROI & DBSCAN (Legacy): Uses detected chart ROI (or cell bounding union) "
+            "with 2-pass adaptive DBSCAN clustering on cell centroids.\n"
+            "• Goertzel Lattice + HybridGridAnchor (FFT modes): Applies Goertzel IIR frequency "
+            "pruning (O(N\u00b7K)) with circular-mean phase fusion and coherence guard "
+            "(R\u0305 \u2265 0.20), automatically falling back to adaptive DBSCAN when period is ambiguous."
         )
         grid_info_text.setWordWrap(True)
-        grid_info_text.setStyleSheet("color: #888888; font-size: 9px;")
+        grid_info_text.setStyleSheet("color: #b0b0b0; font-size: 11px;")
         grid_info_layout.addWidget(grid_info_text)
         scroll_layout.addWidget(grid_info_group)
 
-        # ── Color Inversion Info ──────────────────────────────────────────────
-        color_info_group = QGroupBox("Color Inversion Info")
+        # ── Color Calibration & Inversion Info ───────────────────────────────
+        color_info_group = QGroupBox("Color Bar Calibration & Inversion Info")
         color_info_layout = QVBoxLayout(color_info_group)
+        color_info_layout.setContentsMargins(12, 12, 12, 12)
         color_info_text = QLabel(
-            "Legacy: HSV V-channel brightness (no calibration).\n"
-            "3D LUT modes: CIEDE2000 \u0394E\u2080\u2080 precomputed into a 33\u00b3 RGB \u2192 scalar\n"
-            "look-up table at calibration time; runtime inference is O(1)\n"
-            "branchless trilinear interpolation (SIMD-friendly).\n\n"
-            "Discrete colorbars are routed through MeanShift \u2192 nearest-bin\n"
-            "CIEDE2000 matching instead."
+            "• Piecewise Colorbar Calibration (All modes): Dense 100-point RGB sampling along "
+            "the detected color_bar with piecewise-linear interpolation between OCR color_bar_label "
+            "anchors (falls back to [0, 1] normalized scale or HSV V-channel only if no colorbar is found).\n"
+            "• 3D LUT + Bimodal Router (FFT+Color & Full): Precomputes a 33\u00b3 RGB \u2192 scalar "
+            "CIEDE2000 (\u0394E\u2080\u2080) lookup table for O(1) branchless trilinear interpolation, "
+            "routing discrete colorbars through MeanShift nearest-bin CIEDE2000 matching."
         )
         color_info_text.setWordWrap(True)
-        color_info_text.setStyleSheet("color: #888888; font-size: 9px;")
+        color_info_text.setStyleSheet("color: #b0b0b0; font-size: 11px;")
         color_info_layout.addWidget(color_info_text)
         scroll_layout.addWidget(color_info_group)
+
+        # ── Axis Label Alignment Info ────────────────────────────────────────
+        label_info_group = QGroupBox("Axis Label Alignment Info")
+        label_info_layout = QVBoxLayout(label_info_group)
+        label_info_layout.setContentsMargins(12, 12, 12, 12)
+        label_info_text = QLabel(
+            "• Hungarian IoU Matching (Legacy / FFT / FFT+Color): Partitions axis_labels into "
+            "X-column and Y-row pools relative to grid bounds and solves 1D interval IoU assignment.\n"
+            "• Banded Gotoh DP + Label Interpolation (Full): Aligns OCR tick sequences with "
+            "affine-gap dynamic programming (O(N\u00b7k)) and fills missing numeric ticks when "
+            "numeric label density exceeds 30%."
+        )
+        label_info_text.setWordWrap(True)
+        label_info_text.setStyleSheet("color: #b0b0b0; font-size: 11px;")
+        label_info_layout.addWidget(label_info_text)
+        scroll_layout.addWidget(label_info_group)
 
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
@@ -1019,23 +1085,21 @@ class SettingsDialog(QDialog):
     def _update_heatmap_mode_desc(self, index: int):
         """Update the description label when the pipeline mode combo changes."""
         descriptions = [
-            "Safe default. Uses 2-pass DBSCAN for grid reconstruction and HSV "
-            "V-channel for colour mapping. No additional dependencies.",
+            "Default mode: 2-pass adaptive DBSCAN grid reconstruction, dense 100-point "
+            "piecewise-linear colorbar calibration (with HSV V-channel fallback when no "
+            "colorbar is present), and Hungarian 1D IoU row/column label matching.",
 
-            "Adds Goertzel O(N\u00b7K) lattice detection with harmonic energy folding "
-            "and parabolic subpixel refinement. Grid lines are snapped to YOLO "
-            "centroids via circular-mean phase fusion. Falls back to DBSCAN if "
-            "the circular coherence R\u0305 < 0.20.",
+            "Adds Goertzel O(N\u00b7K) lattice frequency detection with harmonic energy folding "
+            "and circular-mean phase fusion (HybridGridAnchor) to snap grid lines to YOLO "
+            "cell centroids. Falls back to adaptive DBSCAN if coherence R\u0305 < 0.20.",
 
-            "FFT Grid + precomputed 3D RGB\u2192scalar LUT using CIEDE2000 \u0394E\u2080\u2080. "
-            "Calibration runs once per colour bar (\u223c3\u20135 s for 33\u00b3 nodes); "
-            "runtime colour inversion is O(1) branchless trilinear interpolation. "
-            "Discrete colorbars are detected automatically via gradient sparsity.",
+            "FFT Grid + BimodalColorMapper + precomputed 33\u00b3 RGB\u2192scalar CIEDE2000 "
+            "(\u0394E\u2080\u2080) LUT for O(1) branchless trilinear colour inversion. "
+            "Automatically routes discrete colorbars to MeanShift nearest-bin matching.",
 
-            "All optimisations enabled: FFT grid + 3D LUT colour + PROSAC "
-            "(OCR-confidence-sorted homography) + Banded Gotoh affine-gap "
-            "DP (O(N\u00b7k)) for label alignment + arithmetic/geometric label "
-            "interpolation. Recommended for publication-quality extraction.",
+            "Full publication pipeline: FFT Grid + 3D LUT CIEDE2000 + bimodal colorbar router + "
+            "cell text/overlay artifact rejection + Banded Gotoh affine-gap DP (O(N\u00b7k)) "
+            "label alignment + density-guarded (>30%) arithmetic/geometric tick interpolation.",
         ]
         desc = descriptions[index] if 0 <= index < len(descriptions) else ""
         self._heatmap_mode_desc.setText(desc)

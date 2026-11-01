@@ -184,3 +184,35 @@ def test_settings_dialog_no_legacy_easyocr_keys():
     assert 'easyocr_gpu' not in collected['ocr_settings']
     assert 'easyocr_contrast_ths' not in collected['ocr_settings']
 
+
+def test_settings_dialog_processing_and_heatmap_tabs_layout_and_info():
+    """Verify Processing tab uses QScrollArea and Heatmap tab reflects current pipeline."""
+    from PyQt6.QtWidgets import QScrollArea, QGroupBox
+
+    dialog = SettingsDialog()
+    tab_names = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+    assert "Processing" in tab_names
+    assert "Heatmap" in tab_names
+
+    proc_widget = dialog.tabs.widget(tab_names.index("Processing"))
+    proc_scrolls = proc_widget.findChildren(QScrollArea)
+    assert len(proc_scrolls) == 1
+    assert proc_scrolls[0].widgetResizable() is True
+    proc_groups = [g.title() for g in proc_widget.findChildren(QGroupBox)]
+    assert "Spatial Classification Method" in proc_groups
+    assert "Image Processing Parameters" in proc_groups
+    assert "Performance Settings" in proc_groups
+
+    heatmap_widget = dialog.tabs.widget(tab_names.index("Heatmap"))
+    heatmap_groups = [g.title() for g in heatmap_widget.findChildren(QGroupBox)]
+    assert "Heatmap Extraction Pipeline" in heatmap_groups
+    assert "Grid Reconstruction Info" in heatmap_groups
+    assert "Color Bar Calibration & Inversion Info" in heatmap_groups
+    assert "Axis Label Alignment Info" in heatmap_groups
+
+    # Check mode descriptions update across all 4 modes
+    for idx in range(4):
+        dialog.heatmap_mode_combo.setCurrentIndex(idx)
+        assert len(dialog._heatmap_mode_desc.text()) > 30
+
+

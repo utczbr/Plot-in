@@ -409,3 +409,139 @@ class TestContextFieldsAndBackfill:
         assert merged[2]['series_id'] == 'S3'
         assert merged[2]['value_x'] == 3.0
 
+
+class TestStage2NumericTickLabelAssociation:
+    """Verify Stage 2 classified.tick_labels (including numeric X-axis ticks) associate with bars, boxes, and points."""
+
+    def test_bar_extractor_keeps_numeric_classified_tick_labels_and_excludes_scale_labels(self):
+        import numpy as np
+        from types import SimpleNamespace
+        from handlers.bar_handler import BarHandler
+        from extractors.bar_extractor import BarExtractor
+
+        img = np.zeros((300, 400, 3), dtype=np.uint8)
+        detections = {
+            "bar": [
+                {"xyxy": [90, 100, 110, 250], "confidence": 0.95},
+                {"xyxy": [190, 150, 210, 250], "confidence": 0.95},
+            ],
+            "axis_labels": [
+                {"xyxy": [20, 95, 50, 110], "text": "100"},
+                {"xyxy": [20, 240, 50, 255], "text": "0"},
+                {"xyxy": [85, 260, 115, 275], "text": "2020"},
+                {"xyxy": [185, 260, 215, 275], "text": "2021"},
+            ],
+        }
+        classified = SimpleNamespace(
+            scale_labels=[
+                {"xyxy": [20, 95, 50, 110], "text": "100"},
+                {"xyxy": [20, 240, 50, 255], "text": "0"},
+            ],
+            tick_labels=[
+                {"xyxy": [85, 260, 115, 275], "text": "2020"},
+                {"xyxy": [185, 260, 215, 275], "text": "2021"},
+            ],
+            axis_titles=[],
+        )
+        BarHandler._tag_classified_labels(classified)
+        dummy_handler = SimpleNamespace(_classified_labels=classified, _axis_labels=detections["axis_labels"])
+        axis_labels = BarHandler._get_extractor_axis_labels(dummy_handler, detections)
+
+        res = BarExtractor().extract(
+            img=img,
+            detections=detections,
+            scale_model=lambda y: float(250 - y),
+            baseline_coord=250.0,
+            img_dimensions={"width": 400, "height": 300},
+            axis_labels=axis_labels,
+        )
+        bars = res["bars"]
+        assert len(bars) == 2
+        rows = build_protocol_rows({"image_file": "years.png", "chart_type": "bar", "elements": bars})
+        assert [r["group"] for r in rows] == ["2020", "2021"]
+
+    def test_box_extractor_populates_tick_label_on_box_info_for_numeric_ticks(self):
+        import numpy as np
+        from types import SimpleNamespace
+        from handlers.box_handler import BoxHandler
+        from extractors.box_extractor import BoxExtractor
+
+        img = np.zeros((300, 400, 3), dtype=np.uint8)
+        detections = {
+            "box": [
+                {"xyxy": [80, 120, 120, 200], "confidence": 0.9},
+                {"xyxy": [180, 100, 220, 190], "confidence": 0.9},
+            ],
+            "median_line": [
+                {"xyxy": [80, 160, 120, 162], "confidence": 0.9},
+                {"xyxy": [180, 145, 220, 147], "confidence": 0.9},
+            ],
+            "range_indicator": [
+                {"xyxy": [98, 90, 102, 230], "confidence": 0.9},
+                {"xyxy": [198, 80, 202, 220], "confidence": 0.9},
+            ],
+            "outlier": [],
+            "axis_labels": [
+                {"xyxy": [20, 95, 50, 110], "text": "100"},
+                {"xyxy": [85, 260, 115, 275], "text": "2020"},
+                {"xyxy": [185, 260, 215, 275], "text": "2021"},
+            ],
+        }
+        classified = SimpleNamespace(
+            scale_labels=[{"xyxy": [20, 95, 50, 110], "text": "100"}],
+            tick_labels=[
+                {"xyxy": [85, 260, 115, 275], "text": "2020"},
+                {"xyxy": [185, 260, 215, 275], "text": "2021"},
+            ],
+            axis_titles=[],
+        )
+        BoxHandler._tag_classified_labels(classified)
+        dummy_handler = SimpleNamespace(_classified_labels=classified, _axis_labels=detections["axis_labels"])
+        axis_labels = BoxHandler._get_extractor_axis_labels(dummy_handler, detections)
+
+        scale_model = SimpleNamespace(func=lambda y: float(250 - y), is_inverted=True)
+        res = BoxExtractor().extract(
+            img=img,
+            detections=detections,
+            scale_model=scale_model,
+            baseline_coord=250.0,
+            img_dimensions={"width": 400, "height": 300, "r_squared": 0.99},
+            axis_labels=axis_labels,
+        )
+        boxes = res["boxes"]
+        assert len(boxes) == 2
+        rows = build_protocol_rows({"image_file": "box_years.png", "chart_type": "box", "elements": boxes})
+        assert [r["group"] for r in rows] == ["2020", "2021"]
+
+    def test_tick_label_associator_uses_classified_tick_labels_and_skips_scale_labels(self):
+        from types import SimpleNamespace
+        from handlers.line_handler import LineHandler
+        from extractors.tick_label_associator import TickLabelAssociator
+
+        detections = {
+            "axis_labels": [
+                {"xyxy": [85, 100, 115, 115], "text": "999"},
+                {"xyxy": [85, 260, 115, 275], "text": "2020"},
+                {"xyxy": [185, 260, 215, 275], "text": "2021"},
+            ]
+        }
+        classified = SimpleNamespace(
+            scale_labels=[detections["axis_labels"][0]],
+            tick_labels=detections["axis_labels"][1:],
+            axis_titles=[],
+        )
+        LineHandler._tag_classified_labels(classified)
+        dummy_handler = SimpleNamespace(_classified_labels=classified, _axis_labels=detections["axis_labels"])
+        axis_labels = LineHandler._get_extractor_axis_labels(dummy_handler, detections)
+
+        elements = [
+            {"type": "line_segment", "bbox": [95, 150, 105, 160], "value": 50.0},
+            {"type": "line_segment", "bbox": [195, 120, 205, 130], "value": 80.0},
+        ]
+        associated = TickLabelAssociator.associate(
+            elements, detections, "vertical", axis_labels=axis_labels
+        )
+        rows = build_protocol_rows({"image_file": "line_years.png", "chart_type": "line", "elements": associated})
+        assert [r["group"] for r in rows] == ["2020", "2021"]
+
+

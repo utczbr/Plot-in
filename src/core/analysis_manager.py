@@ -13,6 +13,13 @@ from .image_manager import ImageManager
 from pipelines.chart_pipeline import ChartAnalysisPipeline
 from ocr.ocr_factory import OCREngineFactory
 from calibration.calibration_factory import CalibrationFactory
+from .result_utils import is_error_result, record_failure, FailedItem
+
+try:
+    from .review_summary import write_failure_marker
+except ImportError:
+    write_failure_marker = None
+
 
 class AnalysisManager:
     """Service for managing analysis operations and threading."""
@@ -211,7 +218,9 @@ class AnalysisManager:
     def run_batch_analysis(self, input_path: str, output_path: str, models_dir: str, conf: float,
                             status_callback=None, cancel_event=None,
                             output_stems: Optional[Dict[str, str]] = None,
-                            assets_callback=None) -> Tuple[int, int]:
+                            assets_callback=None,
+                            failure_sink: Optional[Any] = None,
+                            target_files: Optional[List[str]] = None) -> Tuple[int, int]:
         """Run analysis on multiple images."""
         if self._models and hasattr(self._models, "load_models"):
             self._models.load_models(models_dir)
@@ -233,6 +242,16 @@ class AnalysisManager:
             cancel_event=cancel_event,
             model_manager=self._models,
         )
+
+        if target_files is not None:
+            target_set = {str(Path(f).resolve()) for f in target_files} | {str(f) for f in target_files} | {Path(f).name for f in target_files}
+            assets = [
+                a for a in assets
+                if str(a.image_path) in target_set
+                or str(a.image_path.resolve()) in target_set
+                or a.image_path.name in target_set
+            ]
+
         if assets_callback:
             try:
                 assets_callback(assets)
@@ -249,13 +268,14 @@ class AnalysisManager:
             if status_callback:
                 status_callback.emit(f"Processing {i+1}/{total}: {asset.image_path.name}")
 
+            output_stem = None
+            if output_stems:
+                output_stem = output_stems.get(str(asset.image_path))
+            stem = output_stem or asset.image_path.stem
+
             try:
                 prov = asset_provenance_dict(asset)
-                output_stem = None
-                if output_stems:
-                    output_stem = output_stems.get(str(asset.image_path))
-                
-                pipeline.run(
+                res = pipeline.run(
                     image_input=asset.image_path,
                     output_dir=output_path,
                     annotated=True,
@@ -264,9 +284,31 @@ class AnalysisManager:
                     output_stem=output_stem,
                     image_buffer=getattr(asset, 'image_buffer', None),
                 )
-                processed += 1
             except Exception as e:
                 self.logger.error(f"Batch error on {asset.image_path}: {e}")
+                reason = str(e) if str(e) else type(e).__name__
+                record_failure(failure_sink, str(asset.image_path), reason)
+                if write_failure_marker is not None:
+                    try:
+                        write_failure_marker(output_path, stem, reason)
+                    except Exception as marker_exc:
+                        self.logger.warning(f"Could not write failure marker: {marker_exc}")
+                continue
+
+            err_check = is_error_result(res)
+            if err_check:
+                reason = err_check.reason
+                self.logger.warning(f"Batch failure on {asset.image_path}: {reason}")
+                record_failure(failure_sink, str(asset.image_path), reason)
+                if write_failure_marker is not None:
+                    try:
+                        write_failure_marker(output_path, stem, reason)
+                    except Exception as marker_exc:
+                        self.logger.warning(f"Could not write failure marker: {marker_exc}")
+                continue
+
+            processed += 1
 
         return processed, total
+
 

@@ -327,7 +327,7 @@ def build_protocol_rows(
 
 
 # Context fields that can be filled non-destructively on edited rows
-_CONTEXT_FIELDS = frozenset({'group', 'outcome', 'unit', 'error_bar_type'})
+_CONTEXT_FIELDS = frozenset({'group', 'outcome', 'unit', 'error_bar_type', 'series_id', 'value_x'})
 
 
 def merge_context_into_rows(
@@ -366,9 +366,16 @@ def merge_context_into_rows(
             # Fill only empty context fields
             fresh = fresh_by_idx.get(elem_idx, {})
             for field in _CONTEXT_FIELDS:
-                current = row.get(field, '')
-                if not current and fresh.get(field):
-                    row[field] = fresh[field]
+                if field == 'series_id':
+                    if not row.get('series_id') and fresh.get('series_id'):
+                        row['series_id'] = fresh['series_id']
+                elif field == 'value_x':
+                    if row.get('value_x') is None and fresh.get('value_x') is not None:
+                        row['value_x'] = fresh['value_x']
+                else:
+                    current = row.get(field, '')
+                    if not current and fresh.get(field):
+                        row[field] = fresh[field]
             merged.append(row)
         seen_indices.add(elem_idx)
 

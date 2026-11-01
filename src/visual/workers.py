@@ -1,13 +1,30 @@
 """Background worker threads extracted from main_modern.py."""
 
+from dataclasses import dataclass, field
 import logging
-import multiprocessing
+from pathlib import Path
 import threading
-from typing import Optional
+from typing import List, Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from core.app_context import ApplicationContext
+from core.result_utils import FailedItem
+
+try:
+    from core.review_summary import write_failure_marker
+except ImportError:
+    write_failure_marker = None
+
+
+@dataclass
+class BatchResult:
+    """Typed completion payload emitted by BatchAnalysisThread.batch_finished (ADR-010 T-010.1)."""
+    processed: int
+    total: int
+    failed: List[FailedItem] = field(default_factory=list)
+    cancelled: bool = False
+    fatal_error: Optional[str] = None
 
 
 def safely_stop_thread(
@@ -36,6 +53,7 @@ def safely_stop_thread(
         "progress_updated",
         "analysis_complete",
         "batch_complete",
+        "batch_finished",
         "assets_resolved",
         "finished_signal",
         "status_signal",
@@ -207,6 +225,7 @@ class BatchAnalysisThread(QThread):
     status_updated = pyqtSignal(str)
     progress_updated = pyqtSignal(int, int)
     batch_complete = pyqtSignal(str)
+    batch_finished = pyqtSignal(object)
     assets_resolved = pyqtSignal(list)
 
     def __init__(
@@ -219,21 +238,31 @@ class BatchAnalysisThread(QThread):
         advanced_settings=None,
         context: Optional["ApplicationContext"] = None,
         output_stems=None,
+        target_files=None,
     ):
-        super().__init__()
+        super().__init__(None)
         self.output_stems = output_stems
         self.input_path = input_path
         self.output_path = output_path
         self.models_dir = models_dir
         self.conf = conf
         self.advanced_settings = advanced_settings
-        self._cancel_event = multiprocessing.Event()
+        self.target_files = target_files
+        self._cancel_event = threading.Event()
+        self._stop_event = self._cancel_event
         self.context = context or ApplicationContext.get_instance()
 
     def cancel(self):
         self._cancel_event.set()
 
+    def is_cancelled(self) -> bool:
+        return self._cancel_event.is_set()
+
     def run(self):
+        processed = 0
+        total = 0
+        failed_items: List[FailedItem] = []
+        fatal_error: Optional[str] = None
         try:
             analysis_manager = self.context.analysis_manager
             analysis_manager.set_models(self.context.model_manager)
@@ -244,15 +273,62 @@ class BatchAnalysisThread(QThread):
                 if not self._cancel_event.is_set():
                     self.assets_resolved.emit(assets)
 
-            processed, total = analysis_manager.run_batch_analysis(
-                self.input_path, self.output_path, self.models_dir, self.conf,
-                self.status_updated, self._cancel_event,
-                output_stems=self.output_stems,
-                assets_callback=_on_assets,
-            )
+            def _on_failure(file_or_item, reason=None):
+                if isinstance(file_or_item, FailedItem):
+                    item = file_or_item
+                else:
+                    item = FailedItem(file=str(file_or_item), reason=str(reason or "Analysis failed"))
+                failed_items.append(item)
+                if write_failure_marker is not None and self.output_path:
+                    try:
+                        stem = (self.output_stems or {}).get(item.file) or Path(item.file).stem
+                        write_failure_marker(self.output_path, stem, item.reason)
+                    except Exception as marker_exc:
+                        logging.getLogger(__name__).warning("Failed to write failure marker: %s", marker_exc)
+
+            try:
+                kwargs = {
+                    "output_stems": self.output_stems,
+                    "assets_callback": _on_assets,
+                    "failure_sink": _on_failure,
+                }
+                if self.target_files is not None:
+                    kwargs["target_files"] = self.target_files
+                processed, total = analysis_manager.run_batch_analysis(
+                    self.input_path,
+                    self.output_path,
+                    self.models_dir,
+                    self.conf,
+                    self.status_updated,
+                    self._cancel_event,
+                    **kwargs,
+                )
+            except TypeError:
+                # Fallback for legacy mocks that do not accept failure_sink / target_files
+                processed, total = analysis_manager.run_batch_analysis(
+                    self.input_path,
+                    self.output_path,
+                    self.models_dir,
+                    self.conf,
+                    self.status_updated,
+                    self._cancel_event,
+                    output_stems=self.output_stems,
+                    assets_callback=_on_assets,
+                )
 
             self.progress_updated.emit(processed, total)
             if not self._cancel_event.is_set():
                 self.batch_complete.emit(f"Batch complete! {processed}/{total} images processed.")
         except Exception as e:
-            self.status_updated.emit(f"Batch error: {str(e)}")
+            fatal_error = str(e) if str(e) else type(e).__name__
+            self.status_updated.emit(f"Batch error: {fatal_error}")
+        finally:
+            result_obj = BatchResult(
+                processed=processed,
+                total=total,
+                failed=list(failed_items),
+                cancelled=self._cancel_event.is_set(),
+                fatal_error=fatal_error,
+            )
+            self.batch_finished.emit(result_obj)
+

@@ -240,3 +240,63 @@ def test_cleanup_resources_safely_stops_all_threads(qapp):
     assert app.batch_thread is None
     assert app._resolve_worker is None
     assert app._recalibration_thread is None
+
+
+def test_batch_thread_uses_threading_event_and_emits_batch_finished_on_fatal_error():
+    """T-010.1: BatchAnalysisThread uses threading.Event and emits batch_finished once on fatal error before loop."""
+    import threading
+    from visual.workers import BatchResult
+
+    ctx = MagicMock()
+    ctx.model_manager.load_models.side_effect = RuntimeError("Model load explosion")
+
+    bat = BatchAnalysisThread(
+        input_path="/tmp/in",
+        output_path="/tmp/out",
+        models_dir="/tmp/models",
+        context=ctx,
+    )
+    assert isinstance(bat._cancel_event, threading.Event)
+    assert bat._stop_event is bat._cancel_event
+
+    finished_payloads = []
+    bat.batch_finished.connect(lambda res: finished_payloads.append(res))
+
+    bat.run()
+
+    assert len(finished_payloads) == 1
+    res = finished_payloads[0]
+    assert isinstance(res, BatchResult)
+    assert res.processed == 0
+    assert res.total == 0
+    assert res.failed == []
+    assert res.cancelled is False
+    assert "Model load explosion" in (res.fatal_error or "")
+
+
+def test_safely_stop_thread_disconnects_batch_finished():
+    """T-010.1: safely_stop_thread disconnects batch_finished so aborted batches cannot fire UI callbacks."""
+    class _SlowBatch(QThread):
+        batch_finished = pyqtSignal(object)
+
+        def __init__(self):
+            super().__init__()
+            self._cancelled = False
+
+        def cancel(self):
+            self._cancelled = True
+
+        def run(self):
+            while not self._cancelled:
+                time.sleep(0.01)
+
+    worker = _SlowBatch()
+    received = []
+    worker.batch_finished.connect(lambda res: received.append(res))
+
+    worker.start()
+    safely_stop_thread(worker, timeout_ms=500, force_terminate=True)
+
+    worker.batch_finished.emit("late_payload")
+    assert received == []
+

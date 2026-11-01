@@ -16,9 +16,10 @@ from calibration.calibration_factory import CalibrationFactory
 from .result_utils import is_error_result, record_failure, FailedItem
 
 try:
-    from .review_summary import write_failure_marker
+    from .review_summary import write_failure_marker, clear_failure_marker
 except ImportError:
     write_failure_marker = None
+    clear_failure_marker = None
 
 
 class AnalysisManager:
@@ -306,6 +307,12 @@ class AnalysisManager:
                     except Exception as marker_exc:
                         self.logger.warning(f"Could not write failure marker: {marker_exc}")
                 continue
+
+            if clear_failure_marker is not None and output_path:
+                try:
+                    clear_failure_marker(output_path, stem)
+                except Exception as marker_exc:
+                    self.logger.warning(f"Could not clear failure marker: {marker_exc}")
 
             processed += 1
 

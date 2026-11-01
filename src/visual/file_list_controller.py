@@ -34,9 +34,25 @@ from visual.workers import BatchAnalysisThread, ResolveWorker, safely_stop_threa
 
 CONFIG_FILE = "gui_config.json"
 
+REVIEW_STATE_ICONS = {
+    "pending": "circle-regular-full.svg",
+    "auto": "circle-solid-full.svg",
+    "needs_review": "triangle-exclamation-solid-full.svg",
+    "reviewed": "check-solid-full.svg",
+    "failed": "xmark-solid-full.svg",
+    "unknown": "circle-question-regular-full.svg",
+}
+
 
 class FileListCacheMixin:
     """Mixin for file list population, PDF resolution, path validation, and benchmark caching."""
+
+    def _get_low_confidence_threshold_percent(self) -> int:
+        """Return the low confidence threshold as an integer percentage."""
+        threshold = 0.60
+        if hasattr(self, "advanced_settings") and isinstance(self.advanced_settings, dict):
+            threshold = self.advanced_settings.get("review_settings", {}).get("low_confidence_threshold", 0.60)
+        return int(round(threshold * 100))
 
     def save_config(self):
         config_data = {
@@ -426,8 +442,8 @@ class FileListCacheMixin:
                     conf_pct = asset.confidence_info.get('average', 0.0) * 100.0
                 display_name = f"[{conf_pct:.0f}%] {base_name}" if conf_pct > 0 else base_name
                 icon_name = (
-                    "warning-solid.svg"
-                    if hasattr(self, 'has_icon') and self.has_icon("warning-solid.svg")
+                    "triangle-exclamation-solid-full.svg"
+                    if (not hasattr(self, 'has_icon') or self.has_icon("triangle-exclamation-solid-full.svg"))
                     else "image-solid-full.svg"
                 )
                 icon_color = "#e5c07b"
@@ -470,14 +486,15 @@ class FileListCacheMixin:
 
         self._low_conf_count = len(low_conf_indices)
 
+        thresh_pct = self._get_low_confidence_threshold_percent()
         if not normal_indices and low_conf_indices:
             self.low_conf_scroll.setVisible(True)
-            info_label = QLabel(f"All {len(low_conf_indices)} item(s) in Low Confidence (<60%) tab below:")
+            info_label = QLabel(f"All {len(low_conf_indices)} item(s) in Low Confidence (<{thresh_pct}%) tab below:")
             info_label.setStyleSheet("QLabel { color: #e5c07b; font-size: 9px; padding: 4px; font-style: italic; }")
             self.file_list_layout.addWidget(info_label)
 
         arrow = "▾" if self.low_conf_scroll.isVisible() else "▸"
-        self.low_conf_header_btn.setText(f"LOW CONFIDENCE (<60%) [{self._low_conf_count}] {arrow}")
+        self.low_conf_header_btn.setText(f"LOW CONFIDENCE (<{thresh_pct}%) [{self._low_conf_count}] {arrow}")
 
         if not low_conf_indices:
             placeholder = QLabel("No low-confidence items")
@@ -510,17 +527,22 @@ class FileListCacheMixin:
             self.batch_thread = None
 
         self.is_processing = True
+        session = getattr(self, "session", None)
+        if session is not None:
+            from visual.review_session import ProcessingState
+            session.processing = ProcessingState.BATCH
         self.run_batch_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setFormat("Batch: %v/%m files")
 
         output_stems = getattr(self, "_unique_stems", None)
+        conf_val = self.conf_slider.value() / 10.0 if hasattr(self, "conf_slider") and self.conf_slider else 0.4
         self.batch_thread = BatchAnalysisThread(
             self.input_path_edit.text(),
             self.output_path_edit.text(),
             self.models_dir_edit.text(),
             None,
-            self.conf_slider.value() / 10.0,
+            conf_val,
             self.advanced_settings,
             context=self.context,
             output_stems=output_stems,
@@ -528,7 +550,10 @@ class FileListCacheMixin:
 
         self.batch_thread.status_updated.connect(self.update_status)
         self.batch_thread.progress_updated.connect(self.update_batch_progress)
-        self.batch_thread.batch_complete.connect(self.on_batch_complete)
+        if hasattr(self.batch_thread, "batch_finished"):
+            self.batch_thread.batch_finished.connect(self.on_batch_finished)
+        else:
+            self.batch_thread.batch_complete.connect(self.on_batch_complete)
         self.batch_thread.assets_resolved.connect(self._on_batch_assets_resolved)
 
         self.batch_thread.start()
@@ -543,8 +568,49 @@ class FileListCacheMixin:
         if assets:
             self._finish_populate_file_list(assets)
 
+    def on_batch_finished(self, result):
+        """Unified batch completion handler invoked on all exit paths (success, failure, cancel, exception)."""
+        self.is_processing = False
+        session = getattr(self, "session", None)
+        if session is not None:
+            from visual.review_session import ProcessingState
+            session.processing = ProcessingState.IDLE
+        self.progress_bar.setVisible(False)
+        self.run_batch_btn.setEnabled(True)
+        self._last_batch_result = result
+
+        if getattr(result, "fatal_error", None):
+            self.update_status(f"❌ Batch error: {result.fatal_error}")
+            self._refresh_cache_from_output_dir()
+            self._refresh_file_list_button_states()
+            self.refresh_low_confidence_tab()
+            return
+
+        if getattr(result, "cancelled", False):
+            processed = getattr(result, "processed", 0)
+            total = getattr(result, "total", 0)
+            self.update_status(f"Cancelled after {processed} of {total}")
+            if not self.image_files:
+                self.populate_file_list()
+            self._refresh_cache_from_output_dir()
+            self._refresh_file_list_button_states()
+            self.refresh_low_confidence_tab()
+            return
+
+        processed = getattr(result, "processed", 0)
+        total = getattr(result, "total", 0)
+        failed = getattr(result, "failed", []) or []
+        msg = f"Batch complete! {processed}/{total} images processed."
+        if failed:
+            msg += f" ({len(failed)} failed)"
+        self.on_batch_complete(msg)
+
     def on_batch_complete(self, message):
         self.is_processing = False
+        session = getattr(self, "session", None)
+        if session is not None:
+            from visual.review_session import ProcessingState
+            session.processing = ProcessingState.IDLE
         self.progress_bar.setVisible(False)
         self.run_batch_btn.setEnabled(True)
         self.update_status("✅ " + message)
@@ -675,7 +741,8 @@ class FileListCacheMixin:
         self.low_conf_scroll.setVisible(not is_visible)
         count = getattr(self, '_low_conf_count', 0)
         arrow = "▾" if not is_visible else "▸"
-        self.low_conf_header_btn.setText(f"⚠️ LOW CONFIDENCE (<60%) [{count}] {arrow}")
+        thresh_pct = self._get_low_confidence_threshold_percent()
+        self.low_conf_header_btn.setText(f"⚠️ LOW CONFIDENCE (<{thresh_pct}%) [{count}] {arrow}")
 
     def refresh_low_confidence_tab(self):
         """Refresh the low-confidence sidebar tab using cached analysis JSON data."""

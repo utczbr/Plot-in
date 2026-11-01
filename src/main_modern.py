@@ -1867,6 +1867,17 @@ Click to configure advanced options."""
 
         if result is None or self._is_error_result(result):
             error_message = result.get("error") if isinstance(result, dict) else "Analysis failed."
+            if getattr(self, "current_image_path", None) and hasattr(self, "output_path_edit"):
+                out_txt = self.output_path_edit.text().strip()
+                if out_txt:
+                    try:
+                        from core.review_summary import write_failure_marker
+                        stem = getattr(self, "_unique_stems", {}).get(
+                            self.current_image_path, Path(self.current_image_path).stem
+                        )
+                        write_failure_marker(out_txt, stem, str(error_message))
+                    except Exception as marker_exc:
+                        logging.warning("Failed to write single-image failure marker: %s", marker_exc)
             self.current_analysis_result = None
             user_message = self._format_analysis_error_message(str(error_message))
             self.update_status(f"❌ {str(error_message)}")
@@ -1900,6 +1911,11 @@ Click to configure advanced options."""
                     self.current_image_path, Path(self.current_image_path).stem
                 )
                 output_dir = Path(self.output_path_edit.text())
+                try:
+                    from core.review_summary import clear_failure_marker
+                    clear_failure_marker(output_dir, stem)
+                except Exception:
+                    pass
                 json_candidate = output_dir / f"{stem}_analysis.json"
                 if json_candidate.exists():
                     self._benchmark_result_cache[self.current_image_path] = str(json_candidate)

@@ -120,14 +120,55 @@ from visual.workers import (
 )
 from visual.canvas_editor_controller import CanvasEditorMixin
 from visual.file_list_controller import FileListCacheMixin
+from visual.review_session import ReviewSession, ProcessingState
 
 
 class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow):
     _safely_stop_thread = staticmethod(safely_stop_thread)
 
+    @property
+    def current_analysis_result(self) -> Optional[Dict[str, Any]]:
+        session = getattr(self, "session", None)
+        if session is not None:
+            return session.current_analysis_result
+        return getattr(self, "_current_analysis_result", None)
+
+    @current_analysis_result.setter
+    def current_analysis_result(self, value: Optional[Dict[str, Any]]) -> None:
+        session = getattr(self, "session", None)
+        if session is not None:
+            context = None
+            if hasattr(self, "context") and getattr(self.context, "data_manager", None):
+                try:
+                    context = self.context.data_manager.get_context()
+                except Exception:
+                    context = None
+            session.set_result(value, context=context)
+        else:
+            self._current_analysis_result = value
+
+    @property
+    def is_processing(self) -> bool:
+        session = getattr(self, "session", None)
+        if session is not None:
+            return session.is_processing
+        return getattr(self, "_is_processing", False)
+
+    @is_processing.setter
+    def is_processing(self, value: bool) -> None:
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.is_processing = bool(value)
+        else:
+            self._is_processing = bool(value)
+
     def __init__(self, context: Optional[ApplicationContext] = None):
         super().__init__()
         self.context = context or ApplicationContext.get_instance()
+        self.session = ReviewSession(self)
+        self.session.filters_changed.connect(self._apply_protocol_filters)
+        self.session.dirty_changed.connect(self._on_session_dirty_changed)
+        self.session.register_navigation_guard(self._check_unsaved_changes_guard)
         self._is_macos = sys.platform == "darwin"
         self._orphaned_threads = []
         
@@ -1102,6 +1143,11 @@ Click to configure advanced options."""
         from visual.detection_editor_state import EditorStateManager
 
         self._editor_state = EditorStateManager(self)
+        if hasattr(self._editor_state, "_undo_stack"):
+            self._editor_state._undo_stack.cleanChanged.connect(
+                lambda is_clean: self.session.set_source_dirty("boxes", not is_clean)
+                if getattr(self, "session", None) else None
+            )
         self._editor_toolbar = EditorToolbar(self, scale_fn=self._scaled_ui_px)
         view_layout.addWidget(self._editor_toolbar)
 
@@ -1143,19 +1189,19 @@ Click to configure advanced options."""
         filter_layout.addWidget(QLabel("Legend:"))
         self.proto_outcome_combo = QComboBox()
         safe_combo_populate(self.proto_outcome_combo, ["All"])
-        self.proto_outcome_combo.currentIndexChanged.connect(self._apply_protocol_filters)
+        self.proto_outcome_combo.currentIndexChanged.connect(self._on_proto_outcome_filter_changed)
         filter_layout.addWidget(self.proto_outcome_combo)
 
         filter_layout.addWidget(QLabel("Tick label:"))
         self.proto_group_combo = QComboBox()
         safe_combo_populate(self.proto_group_combo, ["All"])
-        self.proto_group_combo.currentIndexChanged.connect(self._apply_protocol_filters)
+        self.proto_group_combo.currentIndexChanged.connect(self._on_proto_group_filter_changed)
         filter_layout.addWidget(self.proto_group_combo)
 
         filter_layout.addWidget(QLabel("Status:"))
         self.proto_status_combo = QComboBox()
         safe_combo_populate(self.proto_status_combo, ["All", "auto", "corrected", "reviewed"])
-        self.proto_status_combo.currentIndexChanged.connect(self._apply_protocol_filters)
+        self.proto_status_combo.currentIndexChanged.connect(self._on_proto_status_filter_changed)
         filter_layout.addWidget(self.proto_status_combo)
 
         self.proto_load_ctx_btn = QPushButton("Load Context...")
@@ -1183,6 +1229,33 @@ Click to configure advanced options."""
         proto_layout.addWidget(export_btn)
 
         self.results_tab_widget.addTab(proto_tab, "Results")
+
+    def _on_proto_outcome_filter_changed(self):
+        text = self.proto_outcome_combo.currentText() if hasattr(self, 'proto_outcome_combo') else "All"
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.set_filter("outcome", text)
+        else:
+            self._apply_protocol_filters()
+
+    def _on_proto_group_filter_changed(self):
+        text = self.proto_group_combo.currentText() if hasattr(self, 'proto_group_combo') else "All"
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.set_filter("group", text)
+        else:
+            self._apply_protocol_filters()
+
+    def _on_proto_status_filter_changed(self):
+        text = self.proto_status_combo.currentText() if hasattr(self, 'proto_status_combo') else "All"
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.set_filter("status", text)
+        else:
+            self._apply_protocol_filters()
+
+    def _on_session_dirty_changed(self, is_dirty: bool) -> None:
+        pass
 
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
@@ -1409,7 +1482,83 @@ Click to configure advanced options."""
         
         gc.collect()
 
+    def _discard_current_draft(self) -> None:
+        """Safely delete any autosaved draft for the current image."""
+        try:
+            from visual.draft_store import delete_draft, get_draft_path
+            output_dir = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") else ""
+            if output_dir and getattr(self, "current_image_path", None):
+                stem = getattr(self, "_unique_stems", {}).get(
+                    self.current_image_path, Path(self.current_image_path).stem
+                )
+                draft_path = get_draft_path(output_dir, stem)
+                delete_draft(draft_path)
+        except Exception as exc:
+            logging.warning("Error deleting draft: %s", exc)
+
+    def _check_unsaved_changes_guard(self, target_index: Optional[int] = None) -> bool:
+        """Prompt user if there are unsaved edits before destructive transitions.
+
+        Returns:
+            bool: True if safe to proceed (clean, or user saved/discarded),
+                  False if aborted (user cancelled or save failed).
+        """
+        session = getattr(self, "session", None)
+        if session is None or not getattr(session, "is_dirty", False):
+            return True
+
+        if target_index is not None and target_index == getattr(self, "current_image_index", None):
+            return True
+
+        dirty_sources = getattr(session, "dirty_sources", set())
+
+        # Case A: Box edits are dirty (unapplied bboxes require Apply to re-extract)
+        if "boxes" in dirty_sources:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Box Edits",
+                "You have unapplied box edits. To save them, click Cancel and press Apply (re-extract) on the canvas editor. Discard box edits and continue?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Discard:
+                if self._editor_state:
+                    self._editor_state.clear()
+                self._discard_current_draft()
+                session.mark_clean()
+                return True
+            return False
+
+        # Case B: Table / OCR text edits only
+        reply = QMessageBox.question(
+            self,
+            "Unsaved Changes",
+            "You have unsaved changes. Save before continuing?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Save:
+            if not self._save_analysis_results():
+                return False  # Save failed: keep user on current image
+            self._discard_current_draft()
+            session.mark_clean()
+            return True
+        elif reply == QMessageBox.StandardButton.Discard:
+            self._discard_current_draft()
+            session.mark_clean()
+            return True
+        return False
+
     def closeEvent(self, event: QCloseEvent):
+        session = getattr(self, "session", None)
+        can_proceed = (
+            session.request_navigation(None)
+            if session is not None
+            else self._check_unsaved_changes_guard()
+        )
+        if not can_proceed:
+            event.ignore()
+            return
         self.cleanup_resources()
         self.save_config()
         self.save_advanced_settings()
@@ -1418,6 +1567,28 @@ Click to configure advanced options."""
             import shutil
             shutil.rmtree(self._pdf_render_temp_dir, ignore_errors=True)
         super().closeEvent(event)
+
+    def browse_input(self, line_edit_widget, on_path_set=None):
+        session = getattr(self, "session", None)
+        can_proceed = (
+            session.request_navigation(None)
+            if session is not None
+            else self._check_unsaved_changes_guard()
+        )
+        if not can_proceed:
+            return
+        super().browse_input(line_edit_widget, on_path_set)
+
+    def start_batch_analysis_thread(self):
+        session = getattr(self, "session", None)
+        can_proceed = (
+            session.request_navigation(None)
+            if session is not None
+            else self._check_unsaved_changes_guard()
+        )
+        if not can_proceed:
+            return
+        super().start_batch_analysis_thread()
 
     @staticmethod
     def _is_error_result(result: Any) -> bool:
@@ -1462,6 +1633,9 @@ Click to configure advanced options."""
 
     def load_image_by_index(self, index):
         """Load image with proper concurrency control."""
+        if index == getattr(self, "current_image_index", None):
+            return
+
         batch_thread = getattr(self, "batch_thread", None)
         is_batch_running = (
             bool(batch_thread.isRunning())
@@ -1470,6 +1644,17 @@ Click to configure advanced options."""
         )
         if (getattr(self, "is_processing", False) is True) or is_batch_running:
             QMessageBox.information(self, "Processing", "Please wait for current analysis to complete.")
+            return
+
+        session = getattr(self, "session", None)
+        can_proceed = (
+            session.request_navigation(index)
+            if session is not None
+            else self._check_unsaved_changes_guard(index)
+        )
+        if not can_proceed:
+            if hasattr(self, "current_image_index") and self.current_image_index >= 0:
+                self.highlight_selected_file(self.current_image_index)
             return
         
         # Cancel any running threads
@@ -1592,6 +1777,10 @@ Click to configure advanced options."""
         if self._editor_toolbar:
             self._editor_toolbar.update_undo_state(
                 can_undo=False, can_redo=False, is_dirty=False)
+
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.mark_clean()
 
         if hasattr(self, 'results_tab_widget'):
             self.results_tab_widget.setVisible(False)
@@ -1758,13 +1947,19 @@ Click to configure advanced options."""
             self.protocol_table.blockSignals(False)
 
         if hasattr(self, 'proto_outcome_combo'):
-            safe_combo_populate(self.proto_outcome_combo, [])
+            safe_combo_populate(self.proto_outcome_combo, ["All"])
             
         if hasattr(self, 'proto_group_combo'):
-            safe_combo_populate(self.proto_group_combo, [])
+            safe_combo_populate(self.proto_group_combo, ["All"])
             
         if hasattr(self, 'proto_status_combo'):
-            safe_combo_populate(self.proto_status_combo, [])
+            self.proto_status_combo.blockSignals(True)
+            self.proto_status_combo.setCurrentIndex(0)
+            self.proto_status_combo.blockSignals(False)
+
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.reset_filters()
 
     def _update_ui_with_results(self):
         logging.debug("_update_ui_with_results called")
@@ -1860,6 +2055,7 @@ Click to configure advanced options."""
 
                     entry_text = text if text else str(cleaned_value)
                     entry = QLineEdit(entry_text)
+                    entry.textEdited.connect(self._on_ocr_text_edited)
                     entry.setMinimumWidth(140)
                     entry.setMaximumHeight(30)
                     entry.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1882,7 +2078,8 @@ Click to configure advanced options."""
 
                     if cleaned_value is not None and text:
                         try:
-                            cleaned_repr = f"{float(cleaned_value):.2f}"
+                            from core.numeric_format import format_display
+                            cleaned_repr = format_display(cleaned_value) or str(cleaned_value)
                         except (TypeError, ValueError):
                             cleaned_repr = str(cleaned_value)
                         cleaned_label = QLabel(f"→ {cleaned_repr}")
@@ -1914,6 +2111,21 @@ Click to configure advanced options."""
         finally:
             self.data_content_widget.setUpdatesEnabled(True)
             self.data_content_widget.update()
+
+    def _on_ocr_text_edited(self):
+        session = getattr(self, "session", None)
+        if session is not None:
+            is_dirty = False
+            for w in self.analysis_results_widgets.values():
+                entry = w.get("entry")
+                orig_item = w.get("original_item")
+                if entry is not None and isinstance(orig_item, dict):
+                    orig_val = orig_item.get("bar_label") if w.get("type") == "bar_label" else orig_item.get("text")
+                    orig_str = str(orig_val) if orig_val is not None else ""
+                    if entry.text() != orig_str:
+                        is_dirty = True
+                        break
+            session.set_source_dirty("ocr_text", is_dirty)
 
     def _go_to_prev_data_page(self):
         if not self.current_analysis_result:
@@ -2013,6 +2225,9 @@ Click to configure advanced options."""
         edit["value"] = item.text()
         apply_data_tab_edits(self.current_analysis_result, [edit])
         self._refresh_protocol_rows_from_result()
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.set_source_dirty("data_table", True)
 
     def eventFilter(self, watched, event):
         if (
@@ -2437,9 +2652,13 @@ Click to configure advanced options."""
             return
         if 'protocol_rows' not in self.current_analysis_result:
             from core.protocol_row_builder import build_protocol_rows
-            context = self.context.data_manager.get_context()
+            context = self.context.data_manager.get_context() if hasattr(self, 'context') and self.context else {}
             rows = build_protocol_rows(self.current_analysis_result, context)
-            self.current_analysis_result['protocol_rows'] = rows
+            session = getattr(self, 'session', None)
+            if session is not None:
+                session.set_protocol_rows(rows)
+            else:
+                self.current_analysis_result['protocol_rows'] = rows
         self._refresh_filter_combos()
         self._apply_protocol_filters()
 
@@ -2448,29 +2667,42 @@ Click to configure advanced options."""
         Refresh protocol filter comboboxes with unique outcome/group values.
         Uses safe_combo_populate to prevent macOS NSRangeException with empty lists.
         """
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.reset_filters()
+
+        if hasattr(self, 'proto_status_combo'):
+            self.proto_status_combo.blockSignals(True)
+            self.proto_status_combo.setCurrentIndex(0)
+            self.proto_status_combo.blockSignals(False)
+
         rows = (self.current_analysis_result or {}).get('protocol_rows', [])
         outcomes = sorted({r.get('outcome', '') for r in rows} - {''})
         groups = sorted({r.get('group', '') for r in rows} - {''})
 
         # Use safe_combo_populate to prevent macOS crash on empty list
-        safe_combo_populate(self.proto_outcome_combo, ["All"] + outcomes)
-        safe_combo_populate(self.proto_group_combo, ["All"] + groups)
+        if hasattr(self, 'proto_outcome_combo'):
+            safe_combo_populate(self.proto_outcome_combo, ["All"] + outcomes)
+        if hasattr(self, 'proto_group_combo'):
+            safe_combo_populate(self.proto_group_combo, ["All"] + groups)
 
     def _apply_protocol_filters(self):
-        rows = (self.current_analysis_result or {}).get('protocol_rows', [])
-        
-        # Safely get current combobox text, default to "All" if empty
-        outcome_filter = self.proto_outcome_combo.currentText() if self.proto_outcome_combo.count() > 0 else "All"
-        group_filter = self.proto_group_combo.currentText() if self.proto_group_combo.count() > 0 else "All"
-        status_filter = self.proto_status_combo.currentText() if self.proto_status_combo.count() > 0 else "All"
+        session = getattr(self, 'session', None)
+        if session is not None:
+            filtered = session.filtered_rows()
+        else:
+            rows = (self.current_analysis_result or {}).get('protocol_rows', [])
+            outcome_filter = self.proto_outcome_combo.currentText() if hasattr(self, 'proto_outcome_combo') and self.proto_outcome_combo.count() > 0 else "All"
+            group_filter = self.proto_group_combo.currentText() if hasattr(self, 'proto_group_combo') and self.proto_group_combo.count() > 0 else "All"
+            status_filter = self.proto_status_combo.currentText() if hasattr(self, 'proto_status_combo') and self.proto_status_combo.count() > 0 else "All"
 
-        filtered = rows
-        if outcome_filter != "All":
-            filtered = [r for r in filtered if r.get('outcome') == outcome_filter]
-        if group_filter != "All":
-            filtered = [r for r in filtered if r.get('group') == group_filter]
-        if status_filter != "All":
-            filtered = [r for r in filtered if r.get('review_status') == status_filter]
+            filtered = rows
+            if outcome_filter != "All":
+                filtered = [r for r in filtered if r.get('outcome') == outcome_filter]
+            if group_filter != "All":
+                filtered = [r for r in filtered if r.get('group') == group_filter]
+            if status_filter != "All":
+                filtered = [r for r in filtered if r.get('review_status') == status_filter]
         self._render_protocol_table(filtered)
 
     def _render_protocol_table(self, filtered_rows):
@@ -2567,20 +2799,38 @@ Click to configure advanced options."""
         if row_dict is None:
             return
 
-        new_text = table.item(row_idx, col_idx).text()
+        cell_item = table.item(row_idx, col_idx)
+        if cell_item is None:
+            return
+        new_text = cell_item.text()
 
-        # Snapshot _original on first edit
+        # Coerce and validate numeric columns before mutating row_dict
+        if is_numeric:
+            import math
+            from core.numeric_format import parse_user_float
+            res = parse_user_float(new_text, allow_empty=True)
+            if res.error or (res.value is not None and not math.isfinite(res.value)):
+                prev_val = row_dict.get(col_id)
+                table.blockSignals(True)
+                cell_item.setText("" if prev_val is None else str(prev_val))
+                table.blockSignals(False)
+                if hasattr(self, 'statusBar') and self.statusBar():
+                    err_msg = res.error or "Non-finite numeric values (NaN, Inf) not allowed"
+                    self.statusBar().showMessage(f"Invalid input: {err_msg}", 4000)
+                return
+            new_val = res.value
+        else:
+            new_val = new_text
+
+        # No-op if value is unchanged
+        if new_val == row_dict.get(col_id):
+            return
+
+        # Snapshot _original on first valid edit
         if row_dict.get('_original') is None:
             row_dict['_original'] = {k: row_dict.get(k) for k, _, _ in active_cols}
 
-        # Coerce numeric columns
-        if is_numeric:
-            try:
-                row_dict[col_id] = float(new_text) if new_text.strip() else None
-            except ValueError:
-                pass
-        else:
-            row_dict[col_id] = new_text
+        row_dict[col_id] = new_val
 
         # Auto-set corrected status on value edits
         if col_id != 'review_status':
@@ -2595,6 +2845,11 @@ Click to configure advanced options."""
                     status_item.setText('corrected')
                     status_item.setForeground(QColor('#FF9800'))
                 table.blockSignals(False)
+
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.set_source_dirty("results_table", True)
+            session.protocol_rows_changed.emit(rows)
 
     def _load_context_file(self):
         # Start the dialog in the input folder if available, else home dir
@@ -2621,49 +2876,55 @@ Click to configure advanced options."""
                 existing_rows = self.current_analysis_result.get('protocol_rows')
                 if existing_rows:
                     from core.protocol_row_builder import merge_context_into_rows
-                    self.current_analysis_result['protocol_rows'] = merge_context_into_rows(
+                    rows = merge_context_into_rows(
                         existing_rows, self.current_analysis_result, ctx
                     )
                 else:
                     from core.protocol_row_builder import build_protocol_rows
-                    self.current_analysis_result['protocol_rows'] = build_protocol_rows(
+                    rows = build_protocol_rows(
                         self.current_analysis_result, ctx
                     )
+                session = getattr(self, 'session', None)
+                if session is not None:
+                    session.set_protocol_rows(rows)
+                else:
+                    self.current_analysis_result['protocol_rows'] = rows
                 self._populate_protocol_tab()
         except Exception as e:
             QMessageBox.warning(self, "Context Error", f"Failed to load context: {e}")
 
     def _export_protocol_csv(self):
-        if not self.current_analysis_result:
-            QMessageBox.information(self, "Export", "No analysis results to export.")
-            return
-        rows = self.current_analysis_result.get('protocol_rows', [])
-        if not rows:
-            QMessageBox.information(self, "Export", "No protocol rows to export.")
-            return
+        session = getattr(self, 'session', None)
+        if session is not None:
+            filtered = session.filtered_rows()
+            if not filtered and not session.current_analysis_result:
+                QMessageBox.information(self, "Export", "No analysis results to export.")
+                return
+            if not filtered:
+                total_rows = (session.current_analysis_result or {}).get('protocol_rows', [])
+                if not total_rows:
+                    QMessageBox.information(self, "Export", "No protocol rows to export.")
+                    return
+        else:
+            if not self.current_analysis_result:
+                QMessageBox.information(self, "Export", "No analysis results to export.")
+                return
+            rows = self.current_analysis_result.get('protocol_rows', [])
+            if not rows:
+                QMessageBox.information(self, "Export", "No protocol rows to export.")
+                return
 
-        # --- Always ask the user where to save ---
-        # Build a sensible default filename/directory.
-        default_dir = self.output_path_edit.text().strip()
-        default_path = str(Path(default_dir) / "_protocol_export.csv") if default_dir else ""
-        dest, _ = QFileDialog.getSaveFileName(
-            self, "Save Results CSV", default_path, "CSV Files (*.csv)"
-        )
-        if not dest:
-            return  # user cancelled
+            outcome_f = self.proto_outcome_combo.currentText() if hasattr(self, 'proto_outcome_combo') and self.proto_outcome_combo.count() > 0 else "All"
+            group_f   = self.proto_group_combo.currentText()   if hasattr(self, 'proto_group_combo') and self.proto_group_combo.count()   > 0 else "All"
+            status_f  = self.proto_status_combo.currentText()  if hasattr(self, 'proto_status_combo') and self.proto_status_combo.count()  > 0 else "All"
 
-        # --- Collect exactly the filters that are active in the table ---
-        outcome_f = self.proto_outcome_combo.currentText() if self.proto_outcome_combo.count() > 0 else "All"
-        group_f   = self.proto_group_combo.currentText()   if self.proto_group_combo.count()   > 0 else "All"
-        status_f  = self.proto_status_combo.currentText()  if self.proto_status_combo.count()  > 0 else "All"
-
-        filtered = rows
-        if outcome_f != "All":
-            filtered = [r for r in filtered if r.get('outcome') == outcome_f]
-        if group_f != "All":
-            filtered = [r for r in filtered if r.get('group') == group_f]
-        if status_f != "All":
-            filtered = [r for r in filtered if r.get('review_status') == status_f]
+            filtered = rows
+            if outcome_f != "All":
+                filtered = [r for r in filtered if r.get('outcome') == outcome_f]
+            if group_f != "All":
+                filtered = [r for r in filtered if r.get('group') == group_f]
+            if status_f != "All":
+                filtered = [r for r in filtered if r.get('review_status') == status_f]
 
         # --- Use the same dynamic column list shown in the table ---
         from core.protocol_row_builder import get_protocol_columns
@@ -2905,7 +3166,11 @@ Click to configure advanced options."""
             rows = merge_context_into_rows(existing_rows, self.current_analysis_result, context)
         else:
             rows = build_protocol_rows(self.current_analysis_result, context)
-        self.current_analysis_result['protocol_rows'] = rows
+        session = getattr(self, 'session', None)
+        if session is not None:
+            session.set_protocol_rows(rows)
+        else:
+            self.current_analysis_result['protocol_rows'] = rows
         if hasattr(self, 'protocol_table'):
             self._refresh_filter_combos()
             self._apply_protocol_filters()
@@ -2942,6 +3207,21 @@ Click to configure advanced options."""
         if not self.current_analysis_result:
             QMessageBox.warning(self, "No Data", "No analysis results to save.")
             return False
+
+        session = getattr(self, "session", None)
+        if session is not None and "boxes" in getattr(session, "dirty_sources", set()):
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Box Edits",
+                "You have unapplied box edits. To save them, click Cancel and press Apply (re-extract) on the canvas editor. Discard box edits and save current table results?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Discard:
+                return False
+            if getattr(self, "_editor_state", None):
+                self._editor_state.clear()
+            session.set_source_dirty("boxes", False)
             
         try:
             self._update_results_from_gui()
@@ -2983,6 +3263,9 @@ Click to configure advanced options."""
             self._benchmark_result_cache[str(self.current_image_path)] = str(json_path)
             self._update_file_list_button_cached_state(self.current_image_index, cached=True)
             self.refresh_low_confidence_tab()
+            session = getattr(self, 'session', None)
+            if session is not None:
+                session.mark_clean()
             return True
             
         except Exception as e:

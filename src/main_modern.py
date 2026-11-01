@@ -120,11 +120,16 @@ from visual.workers import (
 )
 from visual.canvas_editor_controller import CanvasEditorMixin
 from visual.file_list_controller import FileListCacheMixin
+from visual.navigation_bar import NavigationBar
 from visual.review_session import ReviewSession, ProcessingState
 
 
 class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow):
     _safely_stop_thread = staticmethod(safely_stop_thread)
+    _det_scene: Optional[Any] = None
+    _det_canvas_view: Optional[Any] = None
+    _editor_state: Optional[Any] = None
+    _editor_toolbar: Optional[Any] = None
 
     @property
     def current_analysis_result(self) -> Optional[Dict[str, Any]]:
@@ -168,6 +173,7 @@ class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow)
         self.session = ReviewSession(self)
         self.session.filters_changed.connect(self._apply_protocol_filters)
         self.session.dirty_changed.connect(self._on_session_dirty_changed)
+        self.session.processing_changed.connect(lambda _state: self._sync_navigation_bar())
         self.session.register_navigation_guard(self._check_unsaved_changes_guard)
         self._is_macos = sys.platform == "darwin"
         self._orphaned_threads = []
@@ -846,6 +852,19 @@ Click to configure advanced options."""
 
         self._setup_results_ui_once()
         self.results_tab_widget.setVisible(False)
+
+        self.nav_frame = NavigationBar(
+            self,
+            icon_loader=self.get_icon,
+            scale_fn=self._scaled_icon_px,
+        )
+        self.nav_bar = self.nav_frame
+        self.nav_frame.prev_requested.connect(self.prev_image)
+        self.nav_frame.next_requested.connect(self.next_image)
+        self.nav_frame.save_requested.connect(self._save_analysis_results)
+        self.nav_frame.save_and_next_requested.connect(self.save_and_next)
+        self.bottom_container_layout.addWidget(self.nav_frame)
+        self._sync_navigation_bar()
 
         # Calculate initial sizes based on available space for dynamic layout
         available_height = right_panel.height() - 40  # Account for margins
@@ -1684,6 +1703,10 @@ Click to configure advanced options."""
         
         # Update index and load
         self.current_image_index = index
+        if getattr(self, "session", None) is not None:
+            self.session.image_index = index
+            self.session.image_path = self.image_files[index]
+        self._sync_navigation_bar()
         self.update_status(f"📷 Loading {os.path.basename(self.image_files[index])}...")
         self.highlight_selected_file(index)
 
@@ -1784,10 +1807,6 @@ Click to configure advanced options."""
 
         if hasattr(self, 'results_tab_widget'):
             self.results_tab_widget.setVisible(False)
-        
-        if hasattr(self, 'nav_frame') and self.nav_frame:
-            self.nav_frame.deleteLater()
-            self.nav_frame = None
 
 
     def load_image_for_assisted_analysis(self):
@@ -1860,11 +1879,6 @@ Click to configure advanced options."""
         self.is_processing = False
         self.progress_bar.setVisible(False)
 
-        if self.nav_frame:
-            self.nav_frame.setVisible(False)
-            self.nav_frame.deleteLater()
-            self.nav_frame = None
-
         if result is None or self._is_error_result(result):
             error_message = result.get("error") if isinstance(result, dict) else "Analysis failed."
             if getattr(self, "current_image_path", None) and hasattr(self, "output_path_edit"):
@@ -1883,6 +1897,8 @@ Click to configure advanced options."""
             self.update_status(f"❌ {str(error_message)}")
             self._clear_display()
             self.results_tab_widget.setVisible(False)
+            if hasattr(self, "_sync_navigation_bar"):
+                self._sync_navigation_bar()
             QMessageBox.critical(self, "Analysis Error", user_message)
         else:
             logging.debug(
@@ -1896,6 +1912,8 @@ Click to configure advanced options."""
                 logging.exception("_normalize_result_for_gui raised an exception: %s", norm_exc)
                 self._clear_display()
                 self.results_tab_widget.setVisible(False)
+                if hasattr(self, "_sync_navigation_bar"):
+                    self._sync_navigation_bar()
                 QMessageBox.critical(self, "Display Error",
                                      f"Analysis succeeded but the result could not be displayed:\n{norm_exc}")
                 return
@@ -2993,89 +3011,30 @@ Click to configure advanced options."""
         # Schedule image update
         self.update_timer.start(100)
 
+    def _sync_navigation_bar(self) -> None:
+        """Update persistent NavigationBar state in place without recreating widgets."""
+        nav = getattr(self, "nav_frame", None)
+        if nav is None or not hasattr(nav, "set_state"):
+            return
+        image_files = getattr(self, "image_files", None) or []
+        total = len(image_files)
+        idx = int(getattr(self, "current_image_index", -1))
+        busy = bool(getattr(self, "is_processing", False))
+        can_prev = (total > 0) and (idx > 0)
+        can_next = (total > 0) and (0 <= idx < total - 1)
+        has_result = getattr(self, "current_analysis_result", None) is not None
+        if hasattr(nav, "set_save_enabled"):
+            nav.set_save_enabled(has_result)
+        nav.set_state(
+            index=idx,
+            total=total,
+            can_prev=can_prev,
+            can_next=can_next,
+            busy=busy,
+        )
+
     def _setup_navigation_controls(self):
-        self.nav_frame = QFrame()
-        self.nav_frame.setObjectName("navigationBar")
-        nav_frame_style = (
-            "QFrame#navigationBar {"
-            "    border-top: 1px solid #454545;"
-            "    background-color: #252526;"
-            "    padding: 0px;"
-            "}"
-        )
-        self.nav_frame.setStyleSheet(nav_frame_style)
-        self.nav_frame.setMaximumHeight(38)
-        
-        nav_layout = QHBoxLayout(self.nav_frame)
-        nav_layout.setSpacing(8)
-        nav_layout.setContentsMargins(8, 4, 8, 4)
-
-        prev_btn = self._create_icon_button(
-            "circle-chevron-left-solid-full.svg",
-            "Previous image",
-            icon_color="#c5c5c5",
-            button_size=26,
-            icon_size=14,
-        )
-        prev_btn.clicked.connect(self.prev_image)
-        prev_btn.setEnabled(self.current_image_index > 0)
-        nav_layout.addWidget(prev_btn)
-
-        counter_label = QLabel(f"{self.current_image_index + 1}/{len(self.image_files)}")
-        counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        counter_label.setStyleSheet(
-            "QLabel { color: #d4d4d4; font-weight: 600; font-size: 10px; min-width: 56px; }"
-        )
-        nav_layout.addWidget(counter_label)
-        nav_layout.addSpacing(4)
-
-        save_btn = self._create_icon_button(
-            "floppy-disk-solid-full.svg",
-            "Save current analysis",
-            icon_color="#ffffff",
-            button_size=26,
-            icon_size=14,
-            accent=True,
-        )
-        save_btn.clicked.connect(self._save_analysis_results)
-        nav_layout.addWidget(save_btn)
-
-        save_next_btn = QPushButton("Save Next")
-        save_next_icon_px = self._scaled_icon_px(14)
-        save_next_btn.setIcon(self.get_icon("floppy-disk-solid-full.svg", color="#ffffff", size=save_next_icon_px))
-        save_next_btn.setIconSize(QSize(save_next_icon_px, save_next_icon_px))
-        save_next_btn.clicked.connect(self.save_and_next)
-        save_next_btn_style = (
-            "QPushButton {"
-            "    background-color: #007acc;"
-            "    border: 1px solid #007acc;"
-            "    color: #ffffff;"
-            "    font-size: 10px;"
-            "    font-weight: 600;"
-            "    min-height: 24px;"
-            "    padding: 3px 10px;"
-            "}"
-            "QPushButton:hover {"
-            "    background-color: #1685d1;"
-            "    border-color: #1685d1;"
-            "}"
-        )
-        save_next_btn.setStyleSheet(save_next_btn_style)
-        nav_layout.addWidget(save_next_btn)
-        nav_layout.addStretch()
-
-        next_btn = self._create_icon_button(
-            "circle-chevron-right-solid-full.svg",
-            "Next image",
-            icon_color="#c5c5c5",
-            button_size=26,
-            icon_size=14,
-        )
-        next_btn.clicked.connect(self.next_image)
-        next_btn.setEnabled(self.current_image_index < len(self.image_files) - 1)
-        nav_layout.addWidget(next_btn)
-
-        self.bottom_container_layout.addWidget(self.nav_frame)
+        self._sync_navigation_bar()
 
     def update_displayed_image(self, highlight_bbox=None, highlight_class=None, force_refresh: bool = False):
         """Update displayed image on detection scene."""

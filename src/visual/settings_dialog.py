@@ -1,7 +1,9 @@
 import json
 import copy
+import math
 import sys
 from pathlib import Path
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QTabWidget, QWidget, QLabel,
     QGridLayout, QGroupBox, QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -12,8 +14,150 @@ from PyQt6.QtCore import pyqtSignal, QSize, Qt, QThread, QMutex
 from PyQt6.QtGui import QFont, QIcon, QCloseEvent
 from visual.qt_utils import safe_combo_populate
 
+LIVE_GUI_SECTIONS: FrozenSet[str] = frozenset({
+    "appearance",
+    "display_settings",
+    "review_settings",
+})
+
+
+def _normalize_calibration_method(val: Any) -> Any:
+    """Normalize calibration engine names and aliases for canonical comparison."""
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ('siegel', 'siegel (robust)', 'robust', 'prosac', 'adaptive', 'ransac', 'precise'):
+            return 'siegel'
+        if v in ('linear', 'fast'):
+            return 'fast'
+        if v in ('visual', 'tick', 'visual_tick'):
+            return 'visual'
+        if v in ('neural', 'adaptive_neural', 'mlp'):
+            return 'neural'
+        if v in ('log', 'logarithmic'):
+            return 'log'
+        return v
+    return val
+
+
+def deep_merge_settings(
+    saved: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Recursively merge default keys into saved settings.
+
+    Missing keys in `saved` are populated from `defaults` without overwriting
+    values that are already present in `saved`. Neither input dictionary is modified.
+
+    Args:
+        saved: Saved user configuration dictionary (may be partial, legacy, or empty).
+        defaults: Baseline default settings dictionary.
+
+    Returns:
+        A new dictionary with default keys deeply merged into saved settings.
+    """
+    if saved is None:
+        return copy.deepcopy(defaults) if defaults is not None else {}
+    if defaults is None:
+        return copy.deepcopy(saved)
+
+    result: Dict[str, Any] = {}
+
+    for key, def_val in defaults.items():
+        if key in saved:
+            saved_val = saved[key]
+            if isinstance(saved_val, dict) and isinstance(def_val, dict):
+                result[key] = deep_merge_settings(saved_val, def_val)
+            else:
+                result[key] = copy.deepcopy(saved_val)
+        else:
+            result[key] = copy.deepcopy(def_val)
+
+    for key, saved_val in saved.items():
+        if key not in defaults:
+            result[key] = copy.deepcopy(saved_val)
+
+    return result
+
+
+def _values_differ(v1: Any, v2: Any, key: Optional[str] = None) -> bool:
+    """Return True if v1 and v2 differ meaningfully."""
+    if key == 'calibration_method' or (
+        isinstance(v1, str)
+        and isinstance(v2, str)
+        and ('siegel' in v1.lower() or 'siegel' in v2.lower())
+    ):
+        return _normalize_calibration_method(v1) != _normalize_calibration_method(v2)
+
+    if isinstance(v1, bool) or isinstance(v2, bool):
+        if type(v1) is not type(v2):
+            return True
+        return v1 != v2
+
+    if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+        return not math.isclose(float(v1), float(v2), rel_tol=1e-7, abs_tol=1e-9)
+
+    if isinstance(v1, dict) and isinstance(v2, dict):
+        if set(v1.keys()) != set(v2.keys()):
+            return True
+        for sub_k in v1:
+            if _values_differ(v1[sub_k], v2[sub_k], key=sub_k):
+                return True
+        return False
+
+    if isinstance(v1, list) and isinstance(v2, list):
+        if len(v1) != len(v2):
+            return True
+        for item1, item2 in zip(v1, v2):
+            if _values_differ(item1, item2):
+                return True
+        return False
+
+    return v1 != v2
+
+
+def compute_custom_settings_diff(
+    current: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> Tuple[bool, List[str]]:
+    """
+    Compare current settings against defaults.
+
+    Pre-merges default keys into current settings so that missing sections/keys
+    in legacy saved settings do not falsely mark settings as custom.
+    Normalizes known aliases such as 'siegel' vs 'Siegel (Robust)'.
+
+    Returns:
+        (is_custom, changed_sections):
+            is_custom: True if any setting value differs from defaults, False otherwise.
+            changed_sections: Sorted list of top-level section names that differ.
+    """
+    if defaults is None:
+        defaults = {}
+    if current is None:
+        current = {}
+
+    merged = deep_merge_settings(current, defaults)
+
+    changed_sections: List[str] = []
+    all_sections = sorted(set(merged.keys()) | set(defaults.keys()))
+
+    for section in all_sections:
+        if section not in defaults:
+            changed_sections.append(section)
+        elif section not in merged:
+            changed_sections.append(section)
+        elif _values_differ(merged[section], defaults[section], key=section):
+            changed_sections.append(section)
+
+    return len(changed_sections) > 0, changed_sections
+
+
 class SettingsDialog(QDialog):
     settings_changed = pyqtSignal(dict)
+    LIVE_GUI_SECTIONS = LIVE_GUI_SECTIONS
+    deep_merge_settings = staticmethod(deep_merge_settings)
+    compute_custom_settings_diff = staticmethod(compute_custom_settings_diff)
 
     def __init__(self, parent=None, current_settings=None):
         super().__init__(parent)
@@ -55,7 +199,9 @@ class SettingsDialog(QDialog):
 
     def _merge_settings(self, new_settings):
         """Merge new settings into defaults using a deep merge."""
-        self._recursive_merge(new_settings, self.settings)
+        merged = deep_merge_settings(new_settings, self.settings)
+        self.settings.clear()
+        self.settings.update(merged)
 
     def _setup_ui(self):
         """Setup the user interface."""
@@ -832,7 +978,7 @@ class SettingsDialog(QDialog):
             'spatial_method': 'LYLLA',
             'scatter_subpixel_mode': 'gaussian',
             'bar_association_mode': 'metric_learning',
-            'calibration_method': 'Siegel (Robust)',
+            'calibration_method': 'siegel',
             'ocr_whitelists': {
                 'scale_label': '0123456789.,-eE+',
                 'axis_title': '',
@@ -903,7 +1049,24 @@ class SettingsDialog(QDialog):
                 'use_robust_gd': True
             },
             'use_doclayout_text': True,
+            'use_doclayout_regions': True,
             'heatmap_mode': 'legacy',
+            'review_settings': {
+                'low_confidence_threshold': 0.60,
+                'autosave_draft': True,
+                'autosave_interval_ms': 2000,
+            },
+            'display_settings': {
+                'significant_digits': 5,
+            },
+            'workflow_settings': {
+                'auto_analyse_on_open': True,
+                'enable_manual_calibration': False,
+            },
+            'appearance': {
+                'theme': 'dark',
+                'ui_scale_percent': 100,
+            },
         }
         config_path = Path(__file__).resolve().parents[2] / "config" / "advanced_settings.json"
         if config_path.exists():
@@ -911,13 +1074,11 @@ class SettingsDialog(QDialog):
                 with open(config_path, "r", encoding="utf-8") as f:
                     file_defaults = json.load(f)
                 if isinstance(file_defaults, dict):
-                    for key, value in file_defaults.items():
-                        if isinstance(value, dict) and isinstance(defaults.get(key), dict):
-                            defaults[key].update(copy.deepcopy(value))
-                        else:
-                            defaults[key] = copy.deepcopy(value)
+                    defaults = deep_merge_settings(file_defaults, defaults)
             except Exception:
                 pass
+        if defaults.get('calibration_method') in ('Siegel (Robust)', 'robust', 'siegel', 'PROSAC', 'Adaptive'):
+            defaults['calibration_method'] = 'siegel'
         return defaults
 
     _get_default_settings = get_default_settings
@@ -1010,6 +1171,7 @@ class SettingsDialog(QDialog):
         self.retry_suspicious_check.setChecked(ocr_settings.get('retry_on_suspicious', True))
         self.aggressive_preprocess_check.setChecked(ocr_settings.get('aggressive_preprocessing', False))
         self.use_doclayout_check.setChecked(self.settings.get('use_doclayout_text', True))
+        self.use_doclayout_regions_check.setChecked(self.settings.get('use_doclayout_regions', True))
         self.scale_factor_spin.setValue(ocr_settings.get('scale_factor', 3.0))
         self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', ocr_settings.get('easyocr_contrast_ths', 0.1)))
         
@@ -1105,7 +1267,11 @@ class SettingsDialog(QDialog):
         self.settings['bar_label_settings']['use_sorted_assignment'] = self.sorted_assignment_check.isChecked()
         
         # Calibration
-        self.settings['calibration_method'] = self.calibration_method_combo.currentText()
+        cal_val = self.calibration_method_combo.currentText()
+        if cal_val in ('Siegel (Robust)', 'robust'):
+            self.settings['calibration_method'] = 'siegel'
+        else:
+            self.settings['calibration_method'] = cal_val
         self.settings['calibration_settings']['min_r_squared'] = self.min_r2_spin.value()
         self.settings['calibration_settings']['outlier_threshold_std'] = self.outlier_thresh_spin.value()
         self.settings['calibration_settings']['min_scale_labels'] = self.min_scale_labels_spin.value()

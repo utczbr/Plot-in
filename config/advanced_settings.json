@@ -79,5 +79,22 @@
     "use_robust_gd": true
   },
   "use_doclayout_text": true,
-  "heatmap_mode": "full"
+  "use_doclayout_regions": true,
+  "heatmap_mode": "full",
+  "review_settings": {
+    "low_confidence_threshold": 0.60,
+    "autosave_draft": true,
+    "autosave_interval_ms": 2000
+  },
+  "display_settings": {
+    "significant_digits": 5
+  },
+  "workflow_settings": {
+    "auto_analyse_on_open": true,
+    "enable_manual_calibration": false
+  },
+  "appearance": {
+    "theme": "dark",
+    "ui_scale_percent": 100
+  }
 }

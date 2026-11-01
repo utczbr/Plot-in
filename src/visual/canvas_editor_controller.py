@@ -339,6 +339,45 @@ class CanvasEditorMixin:
                 )
                 return
 
+        # T-008.4: Warn before Apply discards text and Results-table edits
+        ocr_edits = 0
+        if hasattr(self, "analysis_results_widgets") and isinstance(self.analysis_results_widgets, dict):
+            for widget_info in self.analysis_results_widgets.values():
+                if not isinstance(widget_info, dict):
+                    continue
+                entry = widget_info.get("entry")
+                orig_item = widget_info.get("original_item", {})
+                if entry is None or not isinstance(orig_item, dict):
+                    continue
+                orig_val = orig_item.get("bar_label") if widget_info.get("type") == "bar_label" else orig_item.get("text")
+                if entry.text() != (str(orig_val) if orig_val is not None else ""):
+                    ocr_edits += 1
+
+        protocol_edits = 0
+        rows = (self.current_analysis_result or {}).get("protocol_rows", [])
+        if isinstance(rows, list):
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                original = r.get("_original")
+                if isinstance(original, dict):
+                    diffs = sum(1 for k, orig_v in original.items() if r.get(k) != orig_v)
+                    protocol_edits += diffs if diffs > 0 else 1
+                elif r.get("review_status") == "corrected":
+                    protocol_edits += 1
+
+        total_edits = ocr_edits + protocol_edits
+        if total_edits > 0:
+            reply = QMessageBox.question(
+                self,
+                "Confirm Apply",
+                f"Re-extracting re-runs the pipeline. {total_edits} cell and text edits will be replaced. Continue?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply not in (QMessageBox.StandardButton.Ok, QMessageBox.StandardButton.Yes):
+                return
+
         try:
             self._update_results_from_gui()
         except Exception:
@@ -387,7 +426,7 @@ class CanvasEditorMixin:
         image_path = self.current_image_path
         output_path = self.output_path_edit.text()
         models_dir = self.models_dir_edit.text()
-        conf = self.conf_slider.value() / 10.0
+        conf = (self.conf_slider.value() / 10.0) if hasattr(self, "conf_slider") else 0.4
 
         if self.analysis_thread:
             if getattr(self.analysis_thread, "isRunning", lambda: False)():
@@ -428,6 +467,18 @@ class CanvasEditorMixin:
 
     def _on_editor_reset(self):
         """Reset all edits to auto-detected boxes."""
+        if self._editor_state and getattr(self._editor_state, "is_dirty", False):
+            n = getattr(self._editor_state, "edit_count", 0)
+            reply = QMessageBox.question(
+                self,
+                "Confirm Reset",
+                f"Discard {n} box edits and clear undo history?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply not in (QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.Ok):
+                return
+
         if self._editor_state:
             self._editor_state.clear()
         if hasattr(self, '_scene_first_fit_done'):

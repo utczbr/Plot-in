@@ -8,6 +8,7 @@ and Apply & Re-Extract button. Designed to sit at the top of the View tab.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel
@@ -19,6 +20,32 @@ from PyQt6.QtGui import QIcon
 
 from visual.detection_scene import EditorMode
 from visual.qt_utils import safe_combo_populate
+
+_ICONS_DIR = Path(__file__).resolve().parent.parent / "ui" / "rendering" / "icons"
+
+
+def _load_icon(icon_name: str) -> QIcon:
+    path = _ICONS_DIR / icon_name
+    if path.exists():
+        return QIcon(str(path))
+    return QIcon()
+
+
+EDITOR_TOOLBAR_ICONS = {
+    "view": "eye-solid-full.svg",
+    "edit": "pen-to-square-solid-full.svg",
+    "create": "draw-polygon-solid-full.svg",
+    "edit_kps": "location-crosshairs-solid-full.svg",
+    "create_slice": "chart-pie-solid-full.svg",
+    "undo": "arrow-rotate-left-solid-full.svg",
+    "redo": "arrow-rotate-right-solid-full.svg",
+    "apply": "check-solid-full.svg",
+    "reset": "repeat-solid-full.svg",
+    "calibrate": "ruler-combined-solid-full.svg",
+    "delete": "trash-can-solid-full.svg",
+    "more": "ellipsis-solid-full.svg",
+    "shortcuts": "keyboard-regular-full.svg",
+}
 
 
 class EditorToolbar(QWidget):
@@ -68,14 +95,15 @@ class EditorToolbar(QWidget):
         self._btn_group = QButtonGroup(self)
         self._btn_group.setExclusive(True)
 
-        self._btn_view = self._make_mode_btn("👁 View", "View mode — pan and zoom (V)")
-        self._btn_edit = self._make_mode_btn("✏️ Edit", "Edit mode — select, move, resize boxes (E)")
-        self._btn_create = self._make_mode_btn("➕ Create", "Create mode — draw new detection boxes (C)")
-        self._btn_edit_kps = self._make_mode_btn("🎯 Edit Key Point", "Edit mode — move pie keypoints (K)")
-        self._btn_create_kp = self._make_mode_btn("📍 Add Key Point", "Create mode — add new pie keypoint (A)")
+        self._btn_view = self._make_mode_btn("View", "View mode — pan and zoom (V)", "eye-solid-full.svg")
+        self._btn_edit = self._make_mode_btn("Edit", "Edit mode — select, move, resize boxes (E)", "pen-to-square-solid-full.svg")
+        self._btn_create = self._make_mode_btn("Create", "Create mode — draw new detection boxes (C)", "draw-polygon-solid-full.svg")
+        self._btn_edit_kps = self._make_mode_btn("Edit Key Point", "Edit mode — move pie keypoints (K)", "location-crosshairs-solid-full.svg")
+        self._btn_create_kp = self._make_mode_btn("Add Key Point", "Create mode — add new pie keypoint (A)", "location-crosshairs-solid-full.svg")
         self._btn_create_slice = self._make_mode_btn(
-            "🥧 Create Slice",
+            "Create Slice",
             "Create mode — add 5 pie keypoints sequentially (S)",
+            "chart-pie-solid-full.svg",
         )
 
         self._btn_group.addButton(self._btn_view, EditorMode.VIEW.value)
@@ -108,14 +136,14 @@ class EditorToolbar(QWidget):
         _btn_sz = self._scale(28)
 
         self._btn_undo = QToolButton()
-        self._btn_undo.setText("↩")
+        self._btn_undo.setIcon(_load_icon("arrow-rotate-left-solid-full.svg"))
         self._btn_undo.setToolTip("Undo (Ctrl+Z)")
         self._btn_undo.setEnabled(False)
         self._btn_undo.setFixedSize(_btn_sz, _btn_sz)
         self._btn_undo.clicked.connect(self.undo_requested)
 
         self._btn_redo = QToolButton()
-        self._btn_redo.setText("↪")
+        self._btn_redo.setIcon(_load_icon("arrow-rotate-right-solid-full.svg"))
         self._btn_redo.setToolTip("Redo (Ctrl+Y)")
         self._btn_redo.setEnabled(False)
         self._btn_redo.setFixedSize(_btn_sz, _btn_sz)
@@ -181,7 +209,8 @@ class EditorToolbar(QWidget):
         row2.addWidget(sep2)
 
         # Apply button
-        self._btn_apply = QPushButton("✅ Apply & Re-Extract")
+        self._btn_apply = QPushButton("Apply && Re-Extract")
+        self._btn_apply.setIcon(_load_icon("check-solid-full.svg"))
         self._btn_apply.setToolTip("Apply edits and re-run data extraction (Ctrl+Enter)")
         self._btn_apply.setEnabled(False)
         self._btn_apply.setStyleSheet(
@@ -194,7 +223,8 @@ class EditorToolbar(QWidget):
         row2.addWidget(self._btn_apply)
 
         # Reset button
-        self._btn_reset = QPushButton("🔄 Reset")
+        self._btn_reset = QPushButton("Reset")
+        self._btn_reset.setIcon(_load_icon("repeat-solid-full.svg"))
         self._btn_reset.setToolTip("Reset all edits to auto-detected boxes")
         self._btn_reset.setEnabled(False)
         self._btn_reset.setStyleSheet(
@@ -226,8 +256,12 @@ class EditorToolbar(QWidget):
             "EditorToolbar { background-color: #333; border-bottom: 1px solid #555; }"
         )
 
-    def _make_mode_btn(self, text: str, tooltip: str) -> QPushButton:
+    def _make_mode_btn(self, text: str, tooltip: str, icon_name: str | None = None) -> QPushButton:
         btn = QPushButton(text)
+        if icon_name:
+            icon = _load_icon(icon_name)
+            if not icon.isNull():
+                btn.setIcon(icon)
         btn.setToolTip(tooltip)
         btn.setCheckable(True)
         btn.setFixedHeight(self._scale(28))

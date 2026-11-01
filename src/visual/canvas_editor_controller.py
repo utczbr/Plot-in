@@ -13,7 +13,7 @@ from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QMessageBox
 
 from visual.detection_editor_state import (
-    ChangeClassCommand,
+    ChangeClassCommand as BaseChangeClassCommand,
     CreateCommand,
     CreateKeypointCommand,
     DeleteCommand,
@@ -26,23 +26,104 @@ from visual.detection_scene import EditableRectItem, EditorMode
 from visual.workers import ModernAnalysisThread, safely_stop_thread
 
 
+class ChangeClassCommand(BaseChangeClassCommand):
+    """
+    Enhanced Undo-able class reassignment of a detection item.
+    Captures and preserves OCR text, confidence, and bounding metadata across Undo/Redo (T-016.4).
+    """
+
+    def __init__(
+        self,
+        item: EditableRectItem,
+        old_class: str,
+        new_class: str,
+        colors_map: dict,
+        old_text: str = "",
+        new_text: str = "",
+        old_conf: float = 0.0,
+        new_conf: float = 0.0,
+        toolbar=None,
+        description: str = "Change Class",
+    ):
+        super().__init__(item, old_class, new_class, colors_map, description)
+        self._item = item
+        self._old_class = old_class
+        self._new_class = new_class
+        self._colors_map = colors_map
+        self._toolbar = toolbar
+
+        det = getattr(item, "detection", {}) if hasattr(item, "detection") and isinstance(item.detection, dict) else {}
+        self._old_text = old_text if old_text else str(det.get("text", ""))
+        self._new_text = str(new_text)
+        self._old_conf = float(old_conf if old_conf else det.get("ocr_confidence", 0.0))
+        self._new_conf = float(new_conf if new_conf else 0.0)
+        self._xyxy = list(item.current_xyxy()) if hasattr(item, "current_xyxy") else list(det.get("xyxy", []))
+
+    def set_new_text(self, text: str, conf: float = 0.0) -> None:
+        """Record the fresh OCR text extracted after class change."""
+        self._new_text = str(text)
+        self._new_conf = float(conf)
+
+    def redo(self) -> None:
+        self._apply_state(self._new_class, self._new_text, self._new_conf)
+
+    def undo(self) -> None:
+        self._apply_state(self._old_class, self._old_text, self._old_conf)
+
+    def _apply_state(self, class_name: str, text: str, conf: float) -> None:
+        from visual.detection_editor_state import _item_is_alive
+        if not _item_is_alive(self._item):
+            logging.debug("ChangeClassCommand._apply: item has been deleted — skipping")
+            return
+
+        from visual.detection_scene import DEFAULT_COLORS
+        self._item.class_name = class_name
+        palette = self._colors_map.get(
+            class_name,
+            DEFAULT_COLORS.get(class_name, DEFAULT_COLORS.get("other", {"normal": (200, 200, 200), "highlight": (255, 255, 0)}))
+        )
+        from PyQt6.QtGui import QColor
+        r, g, b = palette["normal"]
+        self._item._normal_color = QColor(r, g, b)
+        rh, gh, bh = palette["highlight"]
+        self._item._highlight_color = QColor(rh, gh, bh)
+        pen = self._item.pen()
+        pen.setColor(self._item._normal_color)
+        self._item.setPen(pen)
+
+        if hasattr(self._item, "detection") and isinstance(self._item.detection, dict):
+            self._item.detection["text"] = text
+            self._item.detection["ocr_confidence"] = conf
+            if self._xyxy:
+                self._item.detection["xyxy"] = list(self._xyxy)
+
+        if hasattr(self._item, "update_text_and_tooltip"):
+            self._item.update_text_and_tooltip(text, conf)
+
+        if self._toolbar and hasattr(self._toolbar, "sync_class_to_selection"):
+            self._toolbar.sync_class_to_selection(class_name)
+
+
+import visual.detection_editor_state as _des_mod
+_des_mod.ChangeClassCommand = ChangeClassCommand
+
+
 class CanvasEditorMixin:
     """Mixin providing interactive detection canvas editing, re-OCR, undo/redo, and zoom."""
 
     _CHART_TYPE_CLASSES: dict = {
-        'bar':       ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'error_bar', 'significance_marker', 'connector_line'],
-        'histogram': ['bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'line':      ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'scatter':   ['data_point', 'error_bar', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
-        'area':      ['data_point', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
-        'box':       ['box', 'outlier', 'range_indicator', 'median_line', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label', 'significance_marker', 'connector_line'],
+        'bar':       ['bar', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'data_label', 'error_bar', 'significance_marker', 'connector_line'],
+        'histogram': ['bar', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'data_label', 'significance_marker', 'connector_line'],
+        'line':      ['data_point', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'error_bar', 'data_label', 'significance_marker', 'connector_line'],
+        'scatter':   ['data_point', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'error_bar', 'data_label', 'significance_marker', 'connector_line'],
+        'area':      ['data_point', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'data_label'],
+        'box':       ['box', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'outlier', 'median_line', 'range_indicator', 'data_label', 'significance_marker', 'connector_line'],
         'pie':       ['slice', 'chart_title', 'legend', 'data_label'],
-        'heatmap':   ['cell', 'color_bar', 'color_bar_label', 'color_bar_title', 'axis_title', 'chart_title', 'legend', 'axis_labels', 'data_label'],
+        'heatmap':   ['cell', 'axis_labels', 'chart_title', 'axis_title', 'legend', 'color_bar', 'color_bar_label', 'color_bar_title', 'data_label'],
     }
     _CHART_TYPE_CLASSES_FALLBACK = [
-        'bar', 'scatter', 'data_point', 'chart_title',
-        'axis_title', 'axis_labels', 'legend',
-        'box', 'outlier', 'range_indicator', 'median_line',
+        'bar', 'axis_labels', 'chart_title', 'axis_title', 'legend',
+        'data_point', 'box', 'outlier', 'data_label',
         'significance_marker', 'connector_line',
     ]
 
@@ -204,14 +285,27 @@ class CanvasEditorMixin:
         self._det_scene.clear_highlight()
 
     def _on_scene_item_class_changed(self, item, new_class):
-        """Handle class change from context menu."""
+        """Handle class change from context menu or shortcut."""
         if not self._editor_state or not self._det_scene:
             return
         colors_map = getattr(self._det_scene, '_colors', {})
         old_class = item.class_name
-        self._editor_state.push(ChangeClassCommand(item, old_class, new_class, colors_map))
+        det = getattr(item, "detection", {}) if hasattr(item, "detection") and isinstance(item.detection, dict) else {}
+        old_text = det.get("text", "")
+        old_conf = det.get("ocr_confidence", 0.0)
+
+        cmd = ChangeClassCommand(
+            item, old_class, new_class, colors_map,
+            old_text=old_text, old_conf=old_conf,
+            toolbar=self._editor_toolbar,
+        )
+        self._editor_state.push(cmd)
         self._re_ocr_detection_item(item)
+        new_det = getattr(item, "detection", {}) if hasattr(item, "detection") and isinstance(item.detection, dict) else {}
+        cmd.set_new_text(new_det.get("text", ""), new_det.get("ocr_confidence", 0.0))
         self._refresh_scene_highlight(item.current_xyxy(), new_class)
+        if self._editor_toolbar:
+            self._editor_toolbar.sync_class_to_selection(new_class)
 
     def _on_scene_item_created(self, class_name, xyxy):
         """Handle new box drawn via rubber band."""
@@ -296,7 +390,11 @@ class CanvasEditorMixin:
             self._editor_toolbar.set_available_classes(classes)
             self._editor_toolbar.set_keypoint_buttons_visible(ct in ("pie",))
             self._editor_toolbar._btn_apply.setEnabled(True)
-        self.statusBar().showMessage(f"Chart type set to '{ct}'. Click Apply & Re-Extract to re-analyze.", 5000)
+        if self._det_scene and hasattr(self._det_scene, "set_available_classes"):
+            self._det_scene.set_available_classes(classes)
+        if self._det_scene and hasattr(self._det_scene, "set_chart_type"):
+            self._det_scene.set_chart_type(ct)
+        self.statusBar().showMessage(f"Chart type set to '{ct}'. Click Apply && Re-Extract to re-analyze.", 5000)
 
     def _on_editor_undo(self):
         if self._editor_state:
@@ -305,6 +403,10 @@ class CanvasEditorMixin:
                 self.highlighted_bbox,
                 self.get_class_for_bbox(self.highlighted_bbox),
             )
+            if self._editor_toolbar and self._det_scene:
+                selected = self._det_scene.selectedItems()
+                if len(selected) == 1 and hasattr(selected[0], "class_name"):
+                    self._editor_toolbar.sync_class_to_selection(selected[0].class_name)
 
     def _on_editor_redo(self):
         if self._editor_state:
@@ -313,6 +415,10 @@ class CanvasEditorMixin:
                 self.highlighted_bbox,
                 self.get_class_for_bbox(self.highlighted_bbox),
             )
+            if self._editor_toolbar and self._det_scene:
+                selected = self._det_scene.selectedItems()
+                if len(selected) == 1 and hasattr(selected[0], "class_name"):
+                    self._editor_toolbar.sync_class_to_selection(selected[0].class_name)
 
     def _refresh_scene_highlight(self, bbox=None, class_name=None):
         """Update only the highlight in the scene without reloading detections."""
@@ -497,6 +603,10 @@ class CanvasEditorMixin:
                 chart_type, self._CHART_TYPE_CLASSES_FALLBACK
             )
             self._editor_toolbar.set_available_classes(classes)
+            if self._det_scene and hasattr(self._det_scene, "set_available_classes"):
+                self._det_scene.set_available_classes(classes)
+            if self._det_scene and hasattr(self._det_scene, "set_chart_type"):
+                self._det_scene.set_chart_type(chart_type)
 
         self._update_scene_display()
         self.statusBar().showMessage("🔄 Detections reset to auto-detected", 2000)
@@ -525,8 +635,37 @@ class CanvasEditorMixin:
                     self._CHART_TYPE_CLASSES_FALLBACK,
                 )
                 self._editor_toolbar.set_available_classes(classes)
+                if self._det_scene and hasattr(self._det_scene, "set_available_classes"):
+                    self._det_scene.set_available_classes(classes)
+                if self._det_scene and hasattr(self._det_scene, "set_chart_type"):
+                    self._det_scene.set_chart_type(chart_type.lower())
                 has_keypoints = chart_type.lower() in ("pie",)
                 self._editor_toolbar.set_keypoint_buttons_visible(has_keypoints)
+                if hasattr(self._editor_toolbar, "_btn_apply"):
+                    btn = self._editor_toolbar._btn_apply
+                    if hasattr(btn, "text") and "&" in btn.text() and "&&" not in btn.text():
+                        btn.setText(btn.text().replace("&", "&&"))
+
+    @staticmethod
+    def format_apply_button_label(text: str = "Apply & Re-Extract") -> str:
+        """Escape single ampersand for Qt mnemonic accelerator handling (NF-16.11)."""
+        if "&" in text and "&&" not in text:
+            return text.replace("&", "&&")
+        return text
+
+    def create_apply_confirmation_dialog(self, total_edits: int) -> QMessageBox:
+        """Create Apply confirmation dialog with escaped 'Apply && Re-Extract' button (NF-16.11)."""
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "Confirm Apply",
+            f"Re-extracting re-runs the pipeline. {total_edits} cell and text edits will be replaced. Continue?",
+            QMessageBox.StandardButton.NoButton,
+            self,
+        )
+        box.addButton("Apply && Re-Extract", QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(cancel_btn)
+        return box
 
     def get_class_for_bbox(self, bbox):
         if not self.current_analysis_result or not bbox or 'detections' not in self.current_analysis_result:
@@ -587,6 +726,30 @@ class CanvasEditorMixin:
                     and self._editor_state.is_dirty
                 ):
                     self._on_editor_apply()
+                    return
+
+        # Digit-key class assignment (1-9) for selected detection items
+        if Qt.Key.Key_1 <= key <= Qt.Key.Key_9 and not (modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+            idx = key - Qt.Key.Key_1
+            classes = None
+            if self._det_scene and hasattr(self._det_scene, "get_available_classes"):
+                classes = self._det_scene.get_available_classes()
+            if not classes and self._editor_toolbar:
+                classes = getattr(self._editor_toolbar, "_available_classes", None)
+            if not classes and self.current_analysis_result:
+                ct = str(self.current_analysis_result.get('chart_type', '')).lower()
+                classes = self._CHART_TYPE_CLASSES.get(ct, self._CHART_TYPE_CLASSES_FALLBACK)
+            if not classes:
+                classes = self._CHART_TYPE_CLASSES_FALLBACK
+            if idx < len(classes) and self._det_scene:
+                selected = self._det_scene.selectedItems()
+                rect_items = [it for it in selected if isinstance(it, EditableRectItem)]
+                if rect_items:
+                    new_class = classes[idx]
+                    for item in rect_items:
+                        if item.class_name != new_class:
+                            self._on_scene_item_class_changed(item, new_class)
+                    event.accept()
                     return
 
         if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):

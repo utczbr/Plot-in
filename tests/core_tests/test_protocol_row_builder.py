@@ -212,7 +212,66 @@ class TestBuildFromScatterElements:
         rows = build_protocol_rows(result)
         assert len(rows) == 1
         assert rows[0]['value'] == 9.81
-        assert rows[0]['series_id'] == '3.14'
+        assert rows[0]['series_id'] == ''
+
+    def test_scatter_series_id_legend_label_preserved(self):
+        el = _scatter_element(x=3.14, y=9.81)
+        el['legend_label'] = 'Cluster 1'
+        result = _pipeline_result([el], chart_type='scatter')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'Cluster 1'
+
+    def test_scatter_series_id_float_leakage_normalized_to_empty(self):
+        el = _scatter_element(x=3.14, y=9.81)
+        el['series_id'] = '3.14'
+        result = _pipeline_result([el], chart_type='scatter')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == ''
+
+
+class TestExtractSeriesIdPrecedence:
+    def test_line_int_series_zero_to_series_one(self):
+        el = _line_element(value=10.0)
+        el['series_id'] = 0
+        result = _pipeline_result([el], chart_type='line')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'Series 1'
+
+    def test_line_digit_string_zero_to_series_one(self):
+        el = _line_element(value=10.0)
+        el['series_id'] = '0'
+        result = _pipeline_result([el], chart_type='line')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'Series 1'
+
+    def test_line_int_series_one_to_series_two(self):
+        el = _line_element(value=10.0)
+        el['series_id'] = 1
+        result = _pipeline_result([el], chart_type='line')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'Series 2'
+
+    def test_line_legend_label_takes_precedence_over_int_series(self):
+        el = _line_element(value=10.0)
+        el['series_id'] = 0
+        el['legend_label'] = 'Control'
+        result = _pipeline_result([el], chart_type='line')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'Control'
+
+    def test_line_string_series_preserved(self):
+        el = _line_element(value=10.0)
+        el['series_id'] = 'A'
+        result = _pipeline_result([el], chart_type='line')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'A'
+
+    def test_area_int_series_zero_to_series_one(self):
+        el = _area_element(value=5.5)
+        el['series_id'] = 0
+        result = _pipeline_result([el], chart_type='area')
+        rows = build_protocol_rows(result)
+        assert rows[0]['series_id'] == 'Series 1'
 
 
 # ---------------------------------------------------------------------------

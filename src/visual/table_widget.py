@@ -1,6 +1,6 @@
 """Table widget and undo/redo command extracted from main_modern.py."""
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QUndoCommand, QUndoStack
 from PyQt6.QtWidgets import QApplication, QTableWidget
 
@@ -40,6 +40,8 @@ class TableEditCommand(QUndoCommand):
 
 class MultiSelectTableWidget(QTableWidget):
     """QTableWidget subclass with Ctrl+C, Ctrl+V, Delete multi-cell support and Undo/Redo."""
+
+    paste_completed = pyqtSignal(int, int, list)  # (success_count, rejected_count, details)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -116,15 +118,43 @@ class MultiSelectTableWidget(QTableWidget):
             return
         start_r, start_c = current.row(), current.column()
         changes = []
-        for r_off, row_text in enumerate(text.split("\n")):
+        success_count = 0
+        rejected_count = 0
+        details = []
+
+        from visual.numeric_delegate import NumericCellDelegate
+        from core.numeric_format import parse_user_float
+
+        rows_text = text.rstrip("\r\n").split("\n")
+        for r_off, row_text in enumerate(rows_text):
             for c_off, cell_text in enumerate(row_text.split("\t")):
                 r, c = start_r + r_off, start_c + c_off
                 if r < self.rowCount() and c < self.columnCount():
                     item = self.item(r, c)
-                    if item and (item.flags() & Qt.ItemFlag.ItemIsEditable) and item.text() != cell_text:
-                        changes.append((r, c, item.text(), cell_text))
+                    if not item or not (item.flags() & Qt.ItemFlag.ItemIsEditable):
+                        continue
+
+                    delegate = self.itemDelegateForColumn(c)
+                    if isinstance(delegate, NumericCellDelegate):
+                        parsed = parse_user_float(cell_text, allow_empty=delegate.allow_empty)
+                        if parsed.error is not None:
+                            rejected_count += 1
+                            details.append((r, c, cell_text, parsed.error))
+                            continue
+
+                        success_count += 1
+                        new_val = "" if parsed.value is None else str(parsed.value)
+                        if item.text() != new_val:
+                            changes.append((r, c, item.text(), new_val))
+                    else:
+                        success_count += 1
+                        if item.text() != cell_text:
+                            changes.append((r, c, item.text(), cell_text))
+
         if changes:
             self._apply_and_push(changes, "Paste")
+
+        self.paste_completed.emit(success_count, rejected_count, details)
 
     def _delete_selection(self):
         changes = [

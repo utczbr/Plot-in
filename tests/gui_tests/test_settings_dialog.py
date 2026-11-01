@@ -56,3 +56,131 @@ def test_settings_dialog_static_default_settings():
     assert isinstance(defaults, dict)
     assert defaults['ocr_engine'] in ('Paddle', 'Paddle_docs')
     assert 'contrast_ths' in defaults['ocr_settings']
+
+
+def test_settings_dialog_basic_tab_layout_and_groups():
+    """Verify Basic tab is the first tab and contains 5 configuration groups."""
+    dialog = SettingsDialog()
+    assert dialog.tabs.count() >= 1
+    assert dialog.tabs.tabText(0) == "Basic"
+
+    basic_widget = dialog.tabs.widget(0)
+    assert basic_widget is not None
+
+    from PyQt6.QtWidgets import QGroupBox
+    groups = basic_widget.findChildren(QGroupBox)
+    group_titles = [g.title() for g in groups]
+    assert "Review" in group_titles
+    assert "Display" in group_titles
+    assert "Workflow" in group_titles
+    assert "Paths" in group_titles
+    assert "Extraction" in group_titles
+
+
+def test_settings_dialog_review_group_controls():
+    """Verify Review group controls and low_confidence_threshold range (0.30 - 0.95)."""
+    dialog = SettingsDialog()
+    assert hasattr(dialog, "low_confidence_threshold_spin")
+    assert hasattr(dialog, "autosave_draft_check")
+    assert hasattr(dialog, "autosave_interval_spin")
+
+    assert dialog.low_confidence_threshold_spin.minimum() == 0.30
+    assert dialog.low_confidence_threshold_spin.maximum() == 0.95
+    assert dialog.low_confidence_threshold_spin.value() == 0.60
+
+
+def test_settings_dialog_extraction_group_paddle_exclusive():
+    """Verify Extraction group is PaddleOCR-exclusive per DP-12."""
+    dialog = SettingsDialog()
+    assert hasattr(dialog, "basic_ocr_engine_combo")
+    assert hasattr(dialog, "basic_ocr_accuracy_combo")
+
+    engine_items = [dialog.basic_ocr_engine_combo.itemText(i) for i in range(dialog.basic_ocr_engine_combo.count())]
+    assert engine_items == ["Paddle", "Paddle_docs"]
+
+    accuracy_items = [dialog.basic_ocr_accuracy_combo.itemText(i) for i in range(dialog.basic_ocr_accuracy_combo.count())]
+    assert accuracy_items == ["Fast", "Optimized", "Precise"]
+
+
+def test_settings_dialog_bidirectional_sync():
+    """Verify bidirectional synchronization between Basic and Advanced controls."""
+    dialog = SettingsDialog()
+
+    # 1. OCR Engine sync
+    dialog.basic_ocr_engine_combo.setCurrentText("Paddle_docs")
+    assert dialog.ocr_engine_combo.currentText() == "Paddle_docs"
+    dialog.ocr_engine_combo.setCurrentText("Paddle")
+    assert dialog.basic_ocr_engine_combo.currentText() == "Paddle"
+
+    # 2. OCR Accuracy sync
+    dialog.basic_ocr_accuracy_combo.setCurrentText("Precise")
+    assert dialog.ocr_accuracy_combo.currentText() == "Precise"
+    dialog.ocr_accuracy_combo.setCurrentText("Fast")
+    assert dialog.basic_ocr_accuracy_combo.currentText() == "Fast"
+
+    # 3. Calibration Method sync
+    dialog.basic_cal_method_combo.setCurrentText("Linear")
+    assert dialog.calibration_method_combo.currentText() == "Linear"
+    dialog.calibration_method_combo.setCurrentText("Fast")
+    assert dialog.basic_cal_method_combo.currentText() == "Fast"
+
+    # 4. PaddleOCR GPU Checkbox sync
+    dialog.basic_use_gpu_ocr_check.setChecked(True)
+    assert dialog.use_gpu_check.isChecked() is True
+    dialog.use_gpu_check.setChecked(False)
+    assert dialog.basic_use_gpu_ocr_check.isChecked() is False
+
+    # 5. Performance GPU Checkbox sync
+    dialog.basic_use_gpu_performance_check.setChecked(True)
+    assert dialog.perf_use_gpu_check.isChecked() is True
+    dialog.perf_use_gpu_check.setChecked(False)
+    assert dialog.basic_use_gpu_performance_check.isChecked() is False
+
+
+def test_settings_dialog_dual_gpu_keys():
+    """Verify DP-12 dual GPU keys performance.use_gpu and ocr_settings.use_gpu are distinct."""
+    dialog = SettingsDialog()
+
+    # Set Performance GPU = True, OCR GPU = False
+    dialog.basic_use_gpu_performance_check.setChecked(True)
+    dialog.basic_use_gpu_ocr_check.setChecked(False)
+
+    dialog._collect_all_settings()
+    collected = dialog.get_settings()
+    assert collected['performance']['use_gpu'] is True
+    assert collected['ocr_settings']['use_gpu'] is False
+
+    # Set Performance GPU = False, OCR GPU = True
+    dialog.basic_use_gpu_performance_check.setChecked(False)
+    dialog.basic_use_gpu_ocr_check.setChecked(True)
+
+    dialog._collect_all_settings()
+    collected = dialog.get_settings()
+    assert collected['performance']['use_gpu'] is False
+    assert collected['ocr_settings']['use_gpu'] is True
+
+
+def test_settings_dialog_models_dir_not_in_settings():
+    """Verify models_dir is stored locally and never persisted into settings dictionary."""
+    dialog = SettingsDialog()
+    dialog.models_dir_edit.setText("/custom/models/path")
+
+    dialog._collect_all_settings()
+    collected = dialog.get_settings()
+    assert 'models_dir' not in collected
+
+
+def test_settings_dialog_no_legacy_easyocr_keys():
+    """Verify obsolete easyocr_gpu and easyocr_contrast_ths keys are scrubbed."""
+    dirty_settings = {
+        'ocr_settings': {
+            'easyocr_gpu': True,
+            'easyocr_contrast_ths': 0.05,
+        }
+    }
+    dialog = SettingsDialog(current_settings=dirty_settings)
+    dialog._collect_all_settings()
+    collected = dialog.get_settings()
+    assert 'easyocr_gpu' not in collected['ocr_settings']
+    assert 'easyocr_contrast_ths' not in collected['ocr_settings']
+

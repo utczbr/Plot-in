@@ -180,8 +180,8 @@ class TestLineScatterGroupGolden:
         assert rows[0]['group'] == ''
         # value_x is populated for scatter
         assert rows[0]['value_x'] == 3.14
-        # Current behavior (before T-012.1): series_id falls back to str(x)
-        assert rows[0]['series_id'] == '3.14'
+        # After T-012.1 (DP-07): unlabelled scatter point has empty series_id
+        assert rows[0]['series_id'] == ''
 
     def test_scatter_group_with_tick_label(self):
         element = {

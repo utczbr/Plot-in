@@ -6,6 +6,7 @@ import numpy as np
 from typing import Dict, Any, Tuple, Optional
 from pathlib import Path
 from visual.pie_geometry import extract_slice_overlay_points
+from core.numeric_format import format_display
 
 class VisualizationService:
     """Service for creating annotated images and visualizations."""
@@ -283,7 +284,7 @@ class VisualizationService:
                         y1 = int(y1 * h_ratio)
                     else:
                         x1, y1 = map(int, [x1, y1])
-                    cv2.putText(img_annotated, f"{bar['estimated_value']:.2f}", (x1, y1 - int(10 * font_scale)), 
+                    cv2.putText(img_annotated, format_display(bar['estimated_value']), (x1, y1 - int(10 * font_scale)), 
                                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, value_color, thickness)
         if 'boxes' in analysis_data:
             for box in analysis_data['boxes']:
@@ -294,7 +295,7 @@ class VisualizationService:
                         y1 = int(y1 * h_ratio)
                     else:
                         x1, y1 = map(int, [x1, y1])
-                    cv2.putText(img_annotated, f"{box['estimated_value']:.2f}", (x1, y1 - int(10 * font_scale)), 
+                    cv2.putText(img_annotated, format_display(box['estimated_value']), (x1, y1 - int(10 * font_scale)), 
                                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, value_color, thickness)
         if 'data_points' in analysis_data:
             for point in analysis_data['data_points']:
@@ -305,7 +306,7 @@ class VisualizationService:
                         y1 = int(y1 * h_ratio)
                     else:
                         x1, y1 = map(int, [x1, y1])
-                    cv2.putText(img_annotated, f"{point['estimated_value']:.2f}", (x1, y1 - int(10 * font_scale)), 
+                    cv2.putText(img_annotated, format_display(point['estimated_value']), (x1, y1 - int(10 * font_scale)), 
                                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, value_color, thickness)
         if analysis_data.get('chart_type') == 'scatter' and 'points' in analysis_data:
             for point in analysis_data['points']:

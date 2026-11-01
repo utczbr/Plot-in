@@ -436,13 +436,18 @@ class EditableRectItem(QGraphicsRectItem):
         # Number-key class change (1-9)
         if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
             idx = key - Qt.Key.Key_1
-            # Standard classes
-            classes = [k for k in DEFAULT_COLORS.keys() if k not in ("baseline", "other")]
+            scene = self.scene()
+            classes = None
+            if scene and hasattr(scene, "get_available_classes") and callable(scene.get_available_classes):
+                classes = scene.get_available_classes()
+            elif scene and hasattr(scene, "available_classes") and scene.available_classes:
+                classes = scene.available_classes
+            if not classes:
+                classes = [k for k in DEFAULT_COLORS.keys() if k not in ("baseline", "other")]
             if idx < len(classes):
                 new_class = classes[idx]
                 if new_class != self.class_name:
-                    scene = self.scene()
-                    if hasattr(scene, "item_class_changed"):
+                    if scene and hasattr(scene, "item_class_changed"):
                         scene.item_class_changed.emit(self, new_class)
                 event.accept()
                 return
@@ -973,44 +978,73 @@ class DetectionScene(QGraphicsScene):
     def _resolve_cal_func(cal_obj) -> Optional[callable]:
         """
         Extract a pixel→value callable from a CalibrationResult dataclass or
-        legacy dict.  Priority: .func attribute → .coeffs tuple → dict keys.
+        legacy dict. Priority: .func attribute → .coeffs tuple → dict keys.
+        Supports log scale reconstruction via exp(m * px + b).
         """
         if cal_obj is None:
             return None
+
+        # Determine scale type
+        scale_type = "linear"
+        if hasattr(cal_obj, "scale_type") and cal_obj.scale_type:
+            scale_type = cal_obj.scale_type
+        elif hasattr(cal_obj, "scale") and cal_obj.scale:
+            scale_type = cal_obj.scale
+        elif isinstance(cal_obj, dict):
+            scale_type = cal_obj.get("scale_type") or cal_obj.get("scale") or "linear"
+
         # CalibrationResult dataclass (primary path)
-        if hasattr(cal_obj, 'func') and callable(cal_obj.func):
+        if hasattr(cal_obj, "func") and callable(cal_obj.func):
             return cal_obj.func
+
         # Fallback: coeffs tuple (m, b) on dataclass
-        if hasattr(cal_obj, 'coeffs') and cal_obj.coeffs:
+        if hasattr(cal_obj, "coeffs") and cal_obj.coeffs:
             m, b = cal_obj.coeffs
-            return lambda px, _m=m, _b=b: _m * px + _b
+            if scale_type == "log":
+                import math
+                return lambda px, _m=m, _b=b: math.exp(max(-700.0, min(700.0, _m * float(px) + _b)))
+            return lambda px, _m=m, _b=b: _m * float(px) + _b
+
         # Legacy dict shapes
         if isinstance(cal_obj, dict):
-            func = cal_obj.get('func') or cal_obj.get('model_func')
+            func = cal_obj.get("func") or cal_obj.get("model_func")
             if callable(func):
                 return func
-            coeffs = cal_obj.get('coeffs') or cal_obj.get('coefficients')
+            coeffs = cal_obj.get("coeffs") or cal_obj.get("coefficients")
             if coeffs:
                 m, b = coeffs
-                return lambda px, _m=m, _b=b: _m * px + _b
+                if scale_type == "log":
+                    import math
+                    return lambda px, _m=m, _b=b: math.exp(max(-700.0, min(700.0, _m * float(px) + _b)))
+                return lambda px, _m=m, _b=b: _m * float(px) + _b
         return None
 
-    def get_calculated_coords(self, pixel_x: float, pixel_y: float) -> Optional[Tuple[float, float]]:
+    def get_calculated_coords(self, pixel_x: float, pixel_y: float) -> Optional[Tuple[Optional[float], Optional[float]]]:
         """
         Convert pixel coordinates to chart scale values using attached calibration.
 
         The calibration dict uses CalibrationResult objects (frozen dataclass
         with .func callable and .coeffs tuple) keyed by 'x' and 'y'.
-        Falls back to 'primary' if neither axis key is populated.
+        Falls back to 'primary' for Y on vertical charts or X on horizontal charts.
+        Never falls back to vertical calibration formula for X on vertical charts!
 
         Returns None when no usable calibration is available.
         """
-        if not hasattr(self, '_calibration') or not self._calibration:
+        if not hasattr(self, "_calibration") or not self._calibration:
             return None
 
         cal = self._calibration
-        x_func = self._resolve_cal_func(cal.get('x') or cal.get('primary'))
-        y_func = self._resolve_cal_func(cal.get('y') or cal.get('primary'))
+        chart_type = getattr(self, "_chart_type", None)
+
+        if str(chart_type).lower() == "horizontal_bar":
+            x_cal = cal.get("x") or cal.get("primary")
+            y_cal = cal.get("y")
+        else:
+            x_cal = cal.get("x")
+            y_cal = cal.get("y") or cal.get("primary")
+
+        x_func = self._resolve_cal_func(x_cal)
+        y_func = self._resolve_cal_func(y_cal)
 
         calc_x = float(x_func(pixel_x)) if x_func else None
         calc_y = float(y_func(pixel_y)) if y_func else None
@@ -1018,13 +1052,33 @@ class DetectionScene(QGraphicsScene):
         if calc_x is None and calc_y is None:
             return None
 
-        return (calc_x if calc_x is not None else 0.0,
-                calc_y if calc_y is not None else 0.0)
+        return (calc_x, calc_y)
 
-    def set_calibration(self, calibration_data: dict) -> None:
+    def set_calibration(self, calibration_data: dict, chart_type: Optional[str] = None) -> None:
         """Store calibration mapping for real-time coordinate translation."""
         self._calibration = calibration_data or {}
-    
+        if chart_type is not None:
+            self._chart_type = chart_type
+
+    def set_chart_type(self, chart_type: Optional[str]) -> None:
+        """Set the active chart type for axis mapping."""
+        self._chart_type = chart_type
+
+    def set_available_classes(self, classes: list) -> None:
+        """Store available classes for the active chart type."""
+        self._available_classes = list(classes) if classes is not None else None
+
+    def get_available_classes(self) -> Optional[list]:
+        """Get available classes for the active chart type."""
+        return getattr(self, "_available_classes", None)
+
+    def add_rect_item(self, item: EditableRectItem) -> None:
+        """Add an EditableRectItem to the scene and internal tracking list."""
+        if item.scene() != self:
+            self.addItem(item)
+        if item not in self._rect_items:
+            self._rect_items.append(item)
+
     # Phase 3 Editor signals:
     item_edited = pyqtSignal(object, list, bool)  # item, old_xyxy, is_resize
     item_deleted = pyqtSignal(object)             # item
@@ -1049,6 +1103,8 @@ class DetectionScene(QGraphicsScene):
         self._baseline_item: Optional['BaselineItem'] = None
         self._grid_items: List[QGraphicsLineItem] = []
         self._calibration: dict = {}
+        self._chart_type: Optional[str] = None
+        self._available_classes: Optional[list] = None
         self._visible_classes: Dict[str, bool] = {}
         self._colors: Dict[str, Dict[str, Tuple[int, int, int]]] = dict(DEFAULT_COLORS)
         self._image_width = 0
@@ -1463,6 +1519,9 @@ class DetectionCanvasView(QGraphicsView):
     # Signal emitted continuously when hovering over the canvas
     coordinates_hovered = pyqtSignal(QPointF)
 
+    # Signal emitted when mouse leaves the canvas
+    coordinates_left = pyqtSignal()
+
     # Status messages for the host window
     status_message = pyqtSignal(str, int)
 
@@ -1794,6 +1853,11 @@ class DetectionCanvasView(QGraphicsView):
 
         super().mouseReleaseEvent(event)
 
+    def leaveEvent(self, event) -> None:
+        """Clear coordinate readout when mouse exits the canvas area."""
+        super().leaveEvent(event)
+        self.coordinates_left.emit()
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         """
         Right-click anywhere on the canvas → shows pixel + calculated coordinates.
@@ -1803,10 +1867,10 @@ class DetectionCanvasView(QGraphicsView):
         super().contextMenuEvent(event)
         if event.isAccepted():
             return
-            
+
         # 2. It wasn't handled by an item. Build the view-level context info menu.
         event.accept()
-        
+
         scene_pos = self.mapToScene(event.pos())
         scene_rect = self.scene().sceneRect()
 
@@ -1832,23 +1896,41 @@ class DetectionCanvasView(QGraphicsView):
         menu.addAction(f"Pixel: ({pixel_x}, {pixel_y})").setEnabled(False)
 
         # Calculated coordinates placeholder
-        calc_coords = self._det_scene.get_calculated_coords(pixel_x, pixel_y)
-        if calc_coords:
-            calc_x_str = f"{calc_coords[0]:.3f}"
-            calc_y_str = f"{calc_coords[1]:.3f}"
+        calc_coords = self._det_scene.get_calculated_coords(pixel_x, pixel_y) if self._det_scene else None
+        calc_x_val = calc_coords[0] if calc_coords else None
+        calc_y_val = calc_coords[1] if calc_coords else None
+
+        calc_x_str = f"{calc_x_val:.3f}" if calc_x_val is not None else "N/A"
+        calc_y_str = f"{calc_y_val:.3f}" if calc_y_val is not None else "N/A"
+
+        is_calibrated = (calc_x_val is not None) or (calc_y_val is not None)
+        if is_calibrated:
             calc_str = f"({calc_x_str}, {calc_y_str})"
+            menu.addAction(f"Calculated: {calc_str}").setEnabled(False)
         else:
-            calc_x_str = "N/A"
-            calc_y_str = "N/A"
-            calc_str = "N/A – scaling not mapped"
+            cal_action = menu.addAction("Not calibrated — Calibrate axes…")
+            cal_action.setEnabled(False)
+            cal_action.setToolTip("Calibrate axes will be available in manual calibration mode")
 
-        menu.addAction(f"Calculated: {calc_str}").setEnabled(False)
+        # If partially calibrated (e.g. Y calibrated, X categorical), also offer the calibration hint
+        if is_calibrated and (calc_x_val is None or calc_y_val is None):
+            cal_action = menu.addAction("Not calibrated — Calibrate axes…")
+            cal_action.setEnabled(False)
+            cal_action.setToolTip("Calibrate axes will be available in manual calibration mode")
 
-        # ── Copy actions ──
+        # ── Copy actions (X before Y per T-013.2) ──
         menu.addSeparator()
-        copy_calc_y = menu.addAction("Copy Calculated Y")
         copy_calc_x = menu.addAction("Copy Calculated X")
+        copy_calc_y = menu.addAction("Copy Calculated Y")
         copy_pixel = menu.addAction("Copy Pixel Coordinates")
+
+        copy_calc_x.setEnabled(calc_x_val is not None)
+        copy_calc_y.setEnabled(calc_y_val is not None)
+
+        if not copy_calc_x.isEnabled():
+            copy_calc_x.setToolTip("X axis is uncalibrated or categorical")
+        if not copy_calc_y.isEnabled():
+            copy_calc_y.setToolTip("Y axis is uncalibrated")
 
         # ── Detection info (at the end) ──
         if det_info:
@@ -1863,9 +1945,11 @@ class DetectionCanvasView(QGraphicsView):
 
         chosen = menu.exec(event.globalPos())
 
-        if chosen == copy_calc_y:
-            QApplication.clipboard().setText(calc_y_str)
-        elif chosen == copy_calc_x:
-            QApplication.clipboard().setText(calc_x_str)
+        if chosen == copy_calc_x:
+            if calc_x_val is not None:
+                QApplication.clipboard().setText(calc_x_str)
+        elif chosen == copy_calc_y:
+            if calc_y_val is not None:
+                QApplication.clipboard().setText(calc_y_str)
         elif chosen == copy_pixel:
             QApplication.clipboard().setText(f"({pixel_x}, {pixel_y})")

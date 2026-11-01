@@ -43,18 +43,16 @@ _CARTESIAN_TYPES = {"bar", "histogram", "line", "scatter", "box", "area"}
 
 
 def _safe_float(value: Any) -> Optional[float]:
-    """Convert value to finite float when possible."""
+    """Convert value to finite float when possible using parse_user_float."""
     if value is None:
         return None
-    try:
-        if isinstance(value, str):
-            value = value.replace(',', '').replace('٫', '.')
-        parsed = float(value)
-    except (TypeError, ValueError):
+    from core.numeric_format import parse_user_float
+    if isinstance(value, str):
+        value = value.replace('٫', '.')
+    res = parse_user_float(value, allow_empty=True)
+    if res.error or res.value is None or not math.isfinite(res.value):
         return None
-    if not math.isfinite(parsed):
-        return None
-    return parsed
+    return res.value
 
 
 def _value_or_estimated(element: Dict[str, Any]) -> Optional[float]:

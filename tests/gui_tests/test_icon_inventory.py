@@ -30,17 +30,33 @@ ICONS_DIR = REPO_ROOT / "src" / "ui" / "rendering" / "icons"
 SRC_DIR = REPO_ROOT / "src"
 NOTICES_FILE = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 
-# Canonical inventory of shipped SVG icon files in Wave 0
+# Canonical inventory of shipped SVG icon files in Wave 1 (T-018.8)
 SHIPPED_ICONS = frozenset({
+    "arrow-rotate-left-solid-full.svg",
+    "arrow-rotate-right-solid-full.svg",
     "bullseye-solid-full.svg",
+    "chart-pie-solid-full.svg",
     "check-solid-full.svg",
     "circle-chevron-left-solid-full.svg",
     "circle-chevron-right-solid-full.svg",
+    "circle-question-regular-full.svg",
+    "circle-regular-full.svg",
+    "circle-solid-full.svg",
+    "draw-polygon-solid-full.svg",
+    "ellipsis-solid-full.svg",
+    "eye-solid-full.svg",
     "floppy-disk-solid-full.svg",
     "folder-open-solid-full.svg",
     "gear-solid-full.svg",
     "image-solid-full.svg",
+    "keyboard-regular-full.svg",
+    "location-crosshairs-solid-full.svg",
+    "pen-to-square-solid-full.svg",
     "repeat-solid-full.svg",
+    "ruler-combined-solid-full.svg",
+    "trash-can-solid-full.svg",
+    "triangle-exclamation-solid-full.svg",
+    "xmark-solid-full.svg",
 })
 
 
@@ -207,13 +223,9 @@ def test_triangle_exclamation_icon_spec():
         tag_local = tree.getroot().tag.split("}")[-1]
         assert tag_local == "svg", f"{shipped} root element must be <svg>"
 
-    # 2. Specifically assert triangle-exclamation-solid-full.svg
+    # 2. Specifically assert triangle-exclamation-solid-full.svg exists and is valid
     target_icon = ICONS_DIR / "triangle-exclamation-solid-full.svg"
-    if not target_icon.exists():
-        pytest.xfail(
-            "triangle-exclamation-solid-full.svg is scheduled for delivery in Wave 1 "
-            "(T-018.8 per ADR-018 §T-018.8). Unblocked by T-018.7."
-        )
+    assert target_icon.exists(), "triangle-exclamation-solid-full.svg must exist (delivered in Wave 1 T-018.8)"
 
     # When present (in Wave 1+), verify full contract
     assert target_icon.is_file(), f"{target_icon.name} must be a regular file"

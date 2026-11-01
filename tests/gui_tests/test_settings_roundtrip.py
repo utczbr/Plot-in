@@ -270,3 +270,79 @@ def test_settings_dialog_instantiation_roundtrip():
     is_custom, changed = compute_custom_settings_diff(collected, SettingsDialog.get_default_settings())
     assert is_custom is False
     assert changed == []
+
+
+@pytest.mark.parametrize("method", ["siegel", "linear", "fast", "prosac", "adaptive"])
+def test_settings_roundtrip_canonical_calibration_methods(method):
+    """Verify canonical lowercase calibration methods survive populate -> collect roundtrip without mutation."""
+    initial = {"calibration_method": method}
+    dialog = SettingsDialog(current_settings=initial)
+    dialog._collect_all_settings()
+    result = dialog.get_settings()
+    assert result["calibration_method"] == method
+
+
+def test_settings_roundtrip_preserves_unexposed_nested_keys():
+    """Verify unexposed default and nested keys survive _collect_all_settings untouched."""
+    custom = {
+        "bar_label_settings": {
+            "max_vertical_distance_factor": 3.14,
+        },
+        "image_processing": {
+            "bilateral_filter_sigma_color": 77,
+            "bilateral_filter_sigma_space": 88,
+        },
+        "calibration": {
+            "method": "polyfit",
+            "use_robust_gd": False,
+        },
+        "custom_unexposed_section": {
+            "nested_param": 42,
+        },
+    }
+    dialog = SettingsDialog(current_settings=custom)
+    dialog._collect_all_settings()
+    result = dialog.get_settings()
+
+    # Unexposed keys are preserved
+    assert result["bar_label_settings"]["max_vertical_distance_factor"] == 3.14
+    assert result["image_processing"]["bilateral_filter_sigma_color"] == 77
+    assert result["image_processing"]["bilateral_filter_sigma_space"] == 88
+    assert result["calibration"]["method"] == "polyfit"
+    assert result["calibration"]["use_robust_gd"] is False
+    assert result["custom_unexposed_section"]["nested_param"] == 42
+
+
+def test_settings_roundtrip_basic_controls_persisted():
+    """Verify user modifications to Basic tab controls are properly persisted upon collection."""
+    dialog = SettingsDialog()
+
+    dialog.low_confidence_threshold_spin.setValue(0.72)
+    dialog.autosave_draft_check.setChecked(False)
+    dialog.autosave_interval_spin.setValue(4000)
+
+    dialog.significant_digits_spin.setValue(8)
+    dialog.theme_combo.setCurrentText("high_contrast")
+    dialog.ui_scale_combo.setCurrentText("130%")
+
+    dialog.auto_analyse_on_open_check.setChecked(False)
+    dialog.enable_manual_calibration_check.setChecked(True)
+
+    dialog.basic_languages_edit.setText("es, fr")
+
+    dialog._collect_all_settings()
+    res = dialog.get_settings()
+
+    assert res["review_settings"]["low_confidence_threshold"] == 0.72
+    assert res["review_settings"]["autosave_draft"] is False
+    assert res["review_settings"]["autosave_interval_ms"] == 4000
+
+    assert res["display_settings"]["significant_digits"] == 8
+    assert res["appearance"]["theme"] == "high_contrast"
+    assert res["appearance"]["ui_scale_percent"] == 130
+
+    assert res["workflow_settings"]["auto_analyse_on_open"] is False
+    assert res["workflow_settings"]["enable_manual_calibration"] is True
+
+    assert res["ocr_settings"]["languages"] == ["es", "fr"]
+

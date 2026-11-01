@@ -148,15 +148,59 @@ def _extract_group(element: Dict[str, Any]) -> str:
 
 
 def _extract_series_id(element: Dict[str, Any], chart_type: str) -> str:
-    """Extract series identifier from element."""
-    for key in ('series_id', 'legend_label'):
-        val = element.get(key, '')
-        if isinstance(val, str) and val.strip():
-            return val.strip()
+    """Extract series identifier from element.
+
+    Precedence per ADR-012 & DP-07:
+    1. Non-empty string legend_label.
+    2. series_id: int / digit-string formatted as "Series {n+1}", or string label.
+    3. For scatter charts: if series_id equals formatted X coordinate or float
+       leakage, normalize to empty string '' per DP-07. Unlabelled scatter points
+       do NOT fall back to coordinate text.
+    4. text_label fallback for non-scatter chart types.
+    """
+    legend = element.get('legend_label')
+    if isinstance(legend, str) and legend.strip():
+        return legend.strip()
+
+    raw_series = element.get('series_id')
+    val_str = ''
+    if isinstance(raw_series, int) and not isinstance(raw_series, bool):
+        val_str = f"Series {raw_series + 1}"
+    elif isinstance(raw_series, str) and raw_series.strip():
+        s = raw_series.strip()
+        if s.isdigit():
+            val_str = f"Series {int(s) + 1}"
+        else:
+            val_str = s
+
     if chart_type == 'scatter':
-        x = element.get('x')
-        if x is not None:
-            return str(x)
+        if val_str:
+            x_cands = [element.get('x'), element.get('x_value')]
+            is_leakage = False
+            for xc in x_cands:
+                if xc is not None:
+                    if val_str == str(xc):
+                        is_leakage = True
+                        break
+                    try:
+                        if float(val_str) == float(xc):
+                            is_leakage = True
+                            break
+                    except (ValueError, TypeError):
+                        pass
+            if is_leakage:
+                val_str = ''
+            else:
+                try:
+                    float(val_str)
+                    val_str = ''
+                except ValueError:
+                    pass
+        return val_str
+
+    if val_str:
+        return val_str
+
     text_label = element.get('text_label', '')
     if isinstance(text_label, str) and text_label.strip():
         return text_label.strip()

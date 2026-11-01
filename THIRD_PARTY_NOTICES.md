@@ -47,22 +47,39 @@ All icons in `src/ui/rendering/icons/` are sourced from Font Awesome Free 7.1.0,
 
 | Icon Filename | Upstream Glyph | Style | ViewBox | License | Role / Application Usage |
 |---|---|---|---|---|---|
+| `arrow-rotate-left-solid-full.svg` | `arrow-rotate-left` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for Undo and Reset |
+| `arrow-rotate-right-solid-full.svg` | `arrow-rotate-right` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for Redo |
 | `bullseye-solid-full.svg` | `bullseye` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Run Batch Analysis" |
-| `check-solid-full.svg` | `check` | Solid | `0 0 640 640` | CC BY 4.0 | Status indicator for reviewed / cached files |
+| `chart-pie-solid-full.svg` | `chart-pie` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Create Slice" mode |
+| `check-solid-full.svg` | `check` | Solid | `0 0 640 640` | CC BY 4.0 | Status indicator for reviewed / cached files & Apply button |
 | `circle-chevron-left-solid-full.svg` | `circle-chevron-left` | Solid | `0 0 640 640` | CC BY 4.0 | Navigation button ("Previous Image") & Sidebar toggle |
 | `circle-chevron-right-solid-full.svg` | `circle-chevron-right` | Solid | `0 0 640 640` | CC BY 4.0 | Navigation button ("Next Image") & Sidebar toggle |
+| `circle-question-regular-full.svg` | `circle-question` | Regular | `0 0 640 640` | CC BY 4.0 | Unknown file review state indicator |
+| `circle-regular-full.svg` | `circle` | Regular | `0 0 640 640` | CC BY 4.0 | Pending file review state indicator |
+| `circle-solid-full.svg` | `circle` | Solid | `0 0 640 640` | CC BY 4.0 | Auto file review state indicator |
+| `draw-polygon-solid-full.svg` | `draw-polygon` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Create Box" mode |
+| `ellipsis-solid-full.svg` | `ellipsis` | Solid | `0 0 640 640` | CC BY 4.0 | More options overflow menu icon |
+| `eye-solid-full.svg` | `eye` | Solid | `0 0 640 640` | CC BY 4.0 | Mode toggle button for "View" mode |
 | `floppy-disk-solid-full.svg` | `floppy-disk` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Save & Next" protocol results |
 | `folder-open-solid-full.svg` | `folder-open` | Solid | `0 0 640 640` | CC BY 4.0 | Directory input selector ("Browse Input / Models") |
 | `gear-solid-full.svg` | `gear` | Solid | `0 0 640 640` | CC BY 4.0 | Toolbar launcher icon for Advanced Settings dialog |
 | `image-solid-full.svg` | `image` | Solid | `0 0 640 640` | CC BY 4.0 | Default file list item icon (pending / unreviewed image) |
-| `repeat-solid-full.svg` | `repeat` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Recalibrate" axes flow |
+| `keyboard-regular-full.svg` | `keyboard` | Regular | `0 0 640 640` | CC BY 4.0 | Shortcut help dialog launcher icon |
+| `location-crosshairs-solid-full.svg` | `location-crosshairs` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Edit Key Point" / "Add Key Point" |
+| `pen-to-square-solid-full.svg` | `pen-to-square` | Solid | `0 0 640 640` | CC BY 4.0 | Mode toggle button for "Edit" mode |
+| `repeat-solid-full.svg` | `repeat` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for "Recalibrate" / "Reset" flow |
+| `ruler-combined-solid-full.svg` | `ruler-combined` | Solid | `0 0 640 640` | CC BY 4.0 | Action button icon for Axis Calibration tool |
+| `trash-can-solid-full.svg` | `trash-can` | Solid | `0 0 640 640` | CC BY 4.0 | Delete box / discard draft action button |
+| `triangle-exclamation-solid-full.svg` | `triangle-exclamation` | Solid | `0 0 640 640` | CC BY 4.0 | Warning indicator for low-confidence / needs-review items |
+| `xmark-solid-full.svg` | `xmark` | Solid | `0 0 640 640` | CC BY 4.0 | Failed file review state indicator |
 
-### Planned Wave 1 Icon Deliverables (T-018.8 / ADR-018)
+### Delivered Wave 1 Icon Deliverables (T-018.8 / ADR-018)
 
-In accordance with ADR-018, the following additional Font Awesome Free 7.1.0 glyphs (centered inside `<g transform="translate(64, 64)">` normalized to `640x640`) are scheduled for delivery in Wave 1:
+In accordance with ADR-018, all 16 additional Font Awesome Free 7.1.0 glyphs (centered inside `<g transform="translate(dx, dy)">` normalized to `640x640`) are delivered in Wave 1:
 - `triangle-exclamation-solid-full.svg` — Warning indicator for low-confidence images / needs-review items (replaces missing `warning-solid.svg`).
-- State set: `circle-regular`, `circle-solid`, `xmark-solid`, `circle-question-regular`.
-- Editor & sidebar set: `eye`, `pen-to-square`, `draw-polygon`, `location-crosshairs`, `chart-pie`, `ruler-combined`, `arrow-rotate-left`, `arrow-rotate-right`, `trash-can`, `ellipsis`, `keyboard`.
+- State set: `circle-regular-full.svg`, `circle-solid-full.svg`, `xmark-solid-full.svg`, `circle-question-regular-full.svg`.
+- Editor & sidebar set: `eye-solid-full.svg`, `pen-to-square-solid-full.svg`, `draw-polygon-solid-full.svg`, `location-crosshairs-solid-full.svg`, `chart-pie-solid-full.svg`, `ruler-combined-solid-full.svg`, `arrow-rotate-left-solid-full.svg`, `arrow-rotate-right-solid-full.svg`, `trash-can-solid-full.svg`, `ellipsis-solid-full.svg`, `keyboard-regular-full.svg`.
+
 
 ---
 

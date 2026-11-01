@@ -8,11 +8,19 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QTabWidget, QWidget, QLabel,
     QGridLayout, QGroupBox, QLineEdit, QSpinBox, QDoubleSpinBox,
     QComboBox, QCheckBox, QPushButton, QHBoxLayout, QScrollArea,
-    QMessageBox, QFrame, QMainWindow
+    QMessageBox, QFrame, QMainWindow, QFileDialog
 )
 from PyQt6.QtCore import pyqtSignal, QSize, Qt, QThread, QMutex
 from PyQt6.QtGui import QFont, QIcon, QCloseEvent
 from visual.qt_utils import safe_combo_populate
+
+CALIBRATION_METHOD_ITEMS: List[Tuple[str, str]] = [
+    ("Siegel (Robust)", "siegel"),
+    ("Linear", "linear"),
+    ("Fast", "fast"),
+    ("PROSAC", "prosac"),
+    ("Adaptive", "adaptive"),
+]
 
 LIVE_GUI_SECTIONS: FrozenSet[str] = frozenset({
     "appearance",
@@ -238,6 +246,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.tabs)
         
         # Create tabs
+        self._create_basic_tab()
         self._create_ocr_tab()
         self._create_detection_tab()
         self._create_calibration_tab()
@@ -245,6 +254,9 @@ class SettingsDialog(QDialog):
         self._create_heatmap_tab()
         self._create_output_tab()
         # self._create_nn_classifier_tab()  # Hidden — preserved for future re-enablement
+
+        # Wire bidirectional sync between Basic and Advanced controls
+        self._wire_basic_advanced_sync()
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -273,8 +285,307 @@ class SettingsDialog(QDialog):
             self._populate_ui_from_settings()
             QMessageBox.information(self, "Preset Loaded", f"'{preset_name}' preset has been loaded. Review and save.")
 
-    def _update_ocr_accuracy_state(self, text):
-        self.ocr_accuracy_combo.setEnabled(True)
+    def _update_ocr_accuracy_state(self, text: str):
+        """Update OCR accuracy combo availability based on selected engine."""
+        # Under DP-12, PaddleOCR and Paddle_docs support accuracy levels ('Fast', 'Optimized', 'Precise')
+        if hasattr(self, 'ocr_accuracy_combo'):
+            self.ocr_accuracy_combo.setEnabled(True)
+        if hasattr(self, 'basic_ocr_accuracy_combo'):
+            self.basic_ocr_accuracy_combo.setEnabled(True)
+
+    def _populate_calibration_combo(self, combo: QComboBox):
+        """Populate calibration combo box with display labels and lowercase canonical keys."""
+        combo.clear()
+        for label, canonical_key in CALIBRATION_METHOD_ITEMS:
+            combo.addItem(label, canonical_key)
+
+    def _select_calibration_combo(self, combo: QComboBox, method: str):
+        """Select item in calibration combo matching canonical key or display label."""
+        method_str = str(method or 'siegel').strip()
+        method_lower = method_str.lower()
+        if method_lower in ('siegel (robust)', 'robust'):
+            method_lower = 'siegel'
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            text = combo.itemText(i)
+            if (data and str(data).lower() == method_lower) or text.lower() == method_lower or text == method_str:
+                combo.setCurrentIndex(i)
+                return
+        combo.setCurrentIndex(0)
+
+    def _wire_basic_advanced_sync(self):
+        """Wire bidirectional synchronization between Basic tab and Advanced tabs."""
+        # 1. OCR Engine
+        self.basic_ocr_engine_combo.currentTextChanged.connect(
+            lambda text: self._sync_combo(self.ocr_engine_combo, text)
+        )
+        self.ocr_engine_combo.currentTextChanged.connect(
+            lambda text: self._sync_combo(self.basic_ocr_engine_combo, text)
+        )
+
+        # 2. OCR Accuracy
+        self.basic_ocr_accuracy_combo.currentTextChanged.connect(
+            lambda text: self._sync_combo(self.ocr_accuracy_combo, text)
+        )
+        self.ocr_accuracy_combo.currentTextChanged.connect(
+            lambda text: self._sync_combo(self.basic_ocr_accuracy_combo, text)
+        )
+
+        # 3. Calibration Method (sync by index)
+        self.basic_cal_method_combo.currentIndexChanged.connect(
+            lambda idx: self._sync_combo_index(self.calibration_method_combo, idx)
+        )
+        self.calibration_method_combo.currentIndexChanged.connect(
+            lambda idx: self._sync_combo_index(self.basic_cal_method_combo, idx)
+        )
+
+        # 4. PaddleOCR GPU Checkbox
+        self.basic_use_gpu_ocr_check.toggled.connect(
+            lambda checked: self._sync_check(self.use_gpu_check, checked)
+        )
+        self.use_gpu_check.toggled.connect(
+            lambda checked: self._sync_check(self.basic_use_gpu_ocr_check, checked)
+        )
+
+        # 5. Performance / ONNX GPU Checkbox
+        if hasattr(self, 'perf_use_gpu_check'):
+            self.basic_use_gpu_performance_check.toggled.connect(
+                lambda checked: self._sync_check(self.perf_use_gpu_check, checked)
+            )
+            self.perf_use_gpu_check.toggled.connect(
+                lambda checked: self._sync_check(self.basic_use_gpu_performance_check, checked)
+            )
+
+    @staticmethod
+    def _sync_combo(target: QComboBox, text: str):
+        if target.currentText() != text:
+            target.blockSignals(True)
+            idx = target.findText(text)
+            if idx >= 0:
+                target.setCurrentIndex(idx)
+            else:
+                target.setCurrentText(text)
+            target.blockSignals(False)
+
+    @staticmethod
+    def _sync_combo_index(target: QComboBox, idx: int):
+        if target.currentIndex() != idx and 0 <= idx < target.count():
+            target.blockSignals(True)
+            target.setCurrentIndex(idx)
+            target.blockSignals(False)
+
+    @staticmethod
+    def _sync_check(target: QCheckBox, checked: bool):
+        if target.isChecked() != checked:
+            target.blockSignals(True)
+            target.setChecked(checked)
+            target.blockSignals(False)
+
+    def _create_basic_tab(self) -> QWidget:
+        """Create Basic settings tab containing 5 primary configuration groups."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(10)
+
+        # 1. Review group
+        scroll_layout.addWidget(self._create_basic_review_group())
+        # 2. Display group
+        scroll_layout.addWidget(self._create_basic_display_group())
+        # 3. Workflow group
+        scroll_layout.addWidget(self._create_basic_workflow_group())
+        # 4. Paths group
+        scroll_layout.addWidget(self._create_basic_paths_group())
+        # 5. Extraction group
+        scroll_layout.addWidget(self._create_basic_extraction_group())
+        scroll_layout.addStretch()
+
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+        self.tabs.addTab(tab, "Basic")
+        return tab
+
+    def _create_basic_review_group(self) -> QGroupBox:
+        """Create Review configuration group."""
+        group = QGroupBox("Review")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        rev_settings = self.settings.get("review_settings", {})
+
+        grid.addWidget(QLabel("Low Confidence Threshold:"), 0, 0)
+        self.low_confidence_threshold_spin = QDoubleSpinBox()
+        self.low_confidence_threshold_spin.setRange(0.30, 0.95)
+        self.low_confidence_threshold_spin.setSingleStep(0.05)
+        self.low_confidence_threshold_spin.setDecimals(2)
+        self.low_confidence_threshold_spin.setValue(rev_settings.get("low_confidence_threshold", 0.60))
+        self.low_confidence_threshold_spin.setToolTip("Items with confidence below this threshold are marked as needing review (0.30–0.95).")
+        grid.addWidget(self.low_confidence_threshold_spin, 0, 1)
+
+        self.autosave_draft_check = QCheckBox("Autosave Drafts")
+        self.autosave_draft_check.setChecked(rev_settings.get("autosave_draft", True))
+        self.autosave_draft_check.setToolTip("Automatically save review session edits as drafts.")
+        grid.addWidget(self.autosave_draft_check, 1, 0, 1, 2)
+
+        grid.addWidget(QLabel("Autosave Interval:"), 2, 0)
+        self.autosave_interval_spin = QSpinBox()
+        self.autosave_interval_spin.setRange(500, 60000)
+        self.autosave_interval_spin.setSingleStep(500)
+        self.autosave_interval_spin.setSuffix(" ms")
+        self.autosave_interval_spin.setValue(rev_settings.get("autosave_interval_ms", 2000))
+        self.autosave_interval_spin.setToolTip("Interval between automatic draft saves in milliseconds (500–60000 ms).")
+        grid.addWidget(self.autosave_interval_spin, 2, 1)
+
+        return group
+
+    def _create_basic_display_group(self) -> QGroupBox:
+        """Create Display configuration group."""
+        group = QGroupBox("Display")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        disp_settings = self.settings.get("display_settings", {})
+        app_settings = self.settings.get("appearance", {})
+
+        grid.addWidget(QLabel("Significant Digits:"), 0, 0)
+        self.significant_digits_spin = QSpinBox()
+        self.significant_digits_spin.setRange(2, 10)
+        self.significant_digits_spin.setValue(disp_settings.get("significant_digits", 5))
+        self.significant_digits_spin.setToolTip("Number of significant digits to display for floating-point values (2–10).")
+        grid.addWidget(self.significant_digits_spin, 0, 1)
+
+        grid.addWidget(QLabel("Theme:"), 1, 0)
+        self.theme_combo = QComboBox()
+        safe_combo_populate(self.theme_combo, ["dark", "high_contrast"])
+        self.theme_combo.setCurrentText(app_settings.get("theme", "dark"))
+        grid.addWidget(self.theme_combo, 1, 1)
+
+        grid.addWidget(QLabel("UI Scale:"), 2, 0)
+        self.ui_scale_combo = QComboBox()
+        scale_pct = app_settings.get("ui_scale_percent", 100)
+        safe_combo_populate(self.ui_scale_combo, ["90%", "100%", "115%", "130%", "150%"])
+        scale_str = f"{scale_pct}%"
+        if self.ui_scale_combo.findText(scale_str) >= 0:
+            self.ui_scale_combo.setCurrentText(scale_str)
+        else:
+            self.ui_scale_combo.setCurrentText("100%")
+        grid.addWidget(self.ui_scale_combo, 2, 1)
+
+        return group
+
+    def _create_basic_workflow_group(self) -> QGroupBox:
+        """Create Workflow configuration group."""
+        group = QGroupBox("Workflow")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        wf_settings = self.settings.get("workflow_settings", {})
+
+        self.auto_analyse_on_open_check = QCheckBox("Analyse images when opened")
+        self.auto_analyse_on_open_check.setChecked(wf_settings.get("auto_analyse_on_open", True))
+        self.auto_analyse_on_open_check.setToolTip("Automatically run extraction when an unanalysed image is opened in single-image mode.")
+        layout.addWidget(self.auto_analyse_on_open_check)
+
+        self.enable_manual_calibration_check = QCheckBox("Enable manual axis calibration")
+        self.enable_manual_calibration_check.setChecked(wf_settings.get("enable_manual_calibration", False))
+        self.enable_manual_calibration_check.setToolTip("Enable interactive manual axis calibration mode for uncalibrated charts.")
+        layout.addWidget(self.enable_manual_calibration_check)
+
+        return group
+
+    def _create_basic_paths_group(self) -> QGroupBox:
+        """Create Paths configuration group (persisted to gui_config.json)."""
+        group = QGroupBox("Paths")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        grid.addWidget(QLabel("Models Directory:"), 0, 0)
+        self.models_dir_edit = QLineEdit(self._get_initial_models_dir())
+        self.models_dir_edit.setToolTip("Path to neural network models directory (stored locally in gui_config.json).")
+        grid.addWidget(self.models_dir_edit, 0, 1)
+
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_models_dir)
+        grid.addWidget(browse_btn, 0, 2)
+
+        return group
+
+    def _get_initial_models_dir(self) -> str:
+        """Load initial models_dir from gui_config.json if available, or default to 'models/'."""
+        config_path = Path(__file__).resolve().parents[2] / "config" / "gui_config.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and "models_dir" in data:
+                    return str(data["models_dir"])
+            except Exception:
+                pass
+        return "models/"
+
+    def _browse_models_dir(self):
+        """Browse directory for models_dir."""
+        cur_dir = self.models_dir_edit.text() or "models/"
+        path = QFileDialog.getExistingDirectory(self, "Select Models Directory", cur_dir)
+        if path:
+            self.models_dir_edit.setText(path)
+
+    def _create_basic_extraction_group(self) -> QGroupBox:
+        """Create Extraction group (DP-12: PaddleOCR exclusive, dual GPU)."""
+        group = QGroupBox("Extraction")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        # OCR Engine (PaddleOCR exclusive)
+        grid.addWidget(QLabel("OCR Engine:"), 0, 0)
+        self.basic_ocr_engine_combo = QComboBox()
+        safe_combo_populate(self.basic_ocr_engine_combo, ['Paddle', 'Paddle_docs'])
+        self.basic_ocr_engine_combo.setCurrentText(self.settings.get('ocr_engine', 'Paddle'))
+        grid.addWidget(self.basic_ocr_engine_combo, 0, 1)
+
+        # OCR Accuracy
+        grid.addWidget(QLabel("OCR Accuracy:"), 1, 0)
+        self.basic_ocr_accuracy_combo = QComboBox()
+        safe_combo_populate(self.basic_ocr_accuracy_combo, ['Fast', 'Optimized', 'Precise'])
+        self.basic_ocr_accuracy_combo.setCurrentText(self.settings.get('ocr_accuracy', 'Optimized'))
+        grid.addWidget(self.basic_ocr_accuracy_combo, 1, 1)
+
+        # Languages
+        grid.addWidget(QLabel("Languages:"), 2, 0)
+        langs = self.settings.get('ocr_settings', {}).get('languages', ['en', 'pt'])
+        langs_str = ", ".join(langs) if isinstance(langs, (list, tuple)) else str(langs)
+        self.basic_languages_edit = QLineEdit(langs_str)
+        self.basic_languages_edit.setToolTip("Comma-separated OCR language codes (e.g. 'en, pt').")
+        grid.addWidget(self.basic_languages_edit, 2, 1)
+
+        # Calibration Method with canonical lowercase userData
+        grid.addWidget(QLabel("Calibration Method:"), 3, 0)
+        self.basic_cal_method_combo = QComboBox()
+        self._populate_calibration_combo(self.basic_cal_method_combo)
+        self._select_calibration_combo(self.basic_cal_method_combo, self.settings.get('calibration_method', 'siegel'))
+        grid.addWidget(self.basic_cal_method_combo, 3, 1)
+
+        # Dual GPU keys per DP-12:
+        # 1. Detection / Inference (ONNX Runtime)
+        perf_gpu = self.settings.get('performance', {}).get('use_gpu', sys.platform != "darwin")
+        self.basic_use_gpu_performance_check = QCheckBox("Use GPU for Detection / Inference (ONNX Runtime)")
+        self.basic_use_gpu_performance_check.setChecked(perf_gpu)
+        self.basic_use_gpu_performance_check.setToolTip("Enable GPU acceleration for detection models via ONNX Runtime.")
+        grid.addWidget(self.basic_use_gpu_performance_check, 4, 0, 1, 2)
+
+        # 2. PaddleOCR GPU
+        ocr_gpu = self.settings.get('ocr_settings', {}).get('use_gpu', False)
+        self.basic_use_gpu_ocr_check = QCheckBox("Use GPU for PaddleOCR")
+        self.basic_use_gpu_ocr_check.setChecked(ocr_gpu)
+        self.basic_use_gpu_ocr_check.setToolTip("Enable GPU acceleration for PaddleOCR recognition.")
+        grid.addWidget(self.basic_use_gpu_ocr_check, 5, 0, 1, 2)
+
+        return group
 
     def _create_ocr_tab(self):
         """Create OCR settings tab."""
@@ -389,7 +700,7 @@ class SettingsDialog(QDialog):
         self.contrast_ths_spin.setRange(0.0, 1.0)
         self.contrast_ths_spin.setSingleStep(0.05)
         ocr_settings = self.settings.get('ocr_settings', {})
-        self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', ocr_settings.get('easyocr_contrast_ths', 0.1)))
+        self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', 0.1))
         advanced_layout.addWidget(self.contrast_ths_spin, 1, 1)
         
         scroll_layout.addWidget(advanced_group)
@@ -493,7 +804,8 @@ class SettingsDialog(QDialog):
 
         grid.addWidget(QLabel("Calibration Method:"), 0, 0)
         self.calibration_method_combo = QComboBox()
-        safe_combo_populate(self.calibration_method_combo, ['Siegel (Robust)', 'Linear', 'Fast', 'PROSAC', 'Adaptive'])
+        self._populate_calibration_combo(self.calibration_method_combo)
+        self._select_calibration_combo(self.calibration_method_combo, self.settings.get('calibration_method', 'siegel'))
         grid.addWidget(self.calibration_method_combo, 0, 1)
         
         cal_settings = self.settings.get('calibration_settings', {})
@@ -611,6 +923,11 @@ class SettingsDialog(QDialog):
         self.ocr_workers_spin.setRange(1, 16)
         self.ocr_workers_spin.setValue(perf_settings.get('ocr_workers', 2))
         perf_layout.addWidget(self.ocr_workers_spin, 1, 1)
+
+        self.perf_use_gpu_check = QCheckBox("Use GPU for Detection / Inference")
+        self.perf_use_gpu_check.setChecked(perf_settings.get('use_gpu', sys.platform != "darwin"))
+        self.perf_use_gpu_check.setToolTip("Enable GPU acceleration for detection models via ONNX Runtime.")
+        perf_layout.addWidget(self.perf_use_gpu_check, 2, 0, 1, 2)
         
         layout.addWidget(group)
         layout.addWidget(perf_group)
@@ -939,8 +1256,32 @@ class SettingsDialog(QDialog):
         self._collect_all_settings()
         if not self._validate_settings():
             return  # Stop if validation fails
+        self._save_gui_config_models_dir()
         self.settings_changed.emit(self.settings)
         self.accept()
+
+    def _save_gui_config_models_dir(self):
+        """Save models_dir from basic tab to gui_config.json (never to advanced_settings.json)."""
+        if not hasattr(self, "models_dir_edit"):
+            return
+        new_models_dir = self.models_dir_edit.text().strip()
+        config_path = Path(__file__).resolve().parents[2] / "config" / "gui_config.json"
+        try:
+            data = {}
+            if config_path.exists():
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        data = {}
+                except Exception:
+                    data = {}
+            data["models_dir"] = new_models_dir
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            pass
         
     def _validate_settings(self) -> bool:
         """Validate settings before saving to catch invalid values."""
@@ -1077,8 +1418,15 @@ class SettingsDialog(QDialog):
                     defaults = deep_merge_settings(file_defaults, defaults)
             except Exception:
                 pass
-        if defaults.get('calibration_method') in ('Siegel (Robust)', 'robust', 'siegel', 'PROSAC', 'Adaptive'):
-            defaults['calibration_method'] = 'siegel'
+        cal_val = defaults.get('calibration_method')
+        if isinstance(cal_val, str):
+            c_low = cal_val.strip().lower()
+            if c_low in ('siegel (robust)', 'robust'):
+                defaults['calibration_method'] = 'siegel'
+            elif c_low in ('siegel', 'linear', 'fast', 'prosac', 'adaptive'):
+                defaults['calibration_method'] = c_low
+            else:
+                defaults['calibration_method'] = 'siegel'
         return defaults
 
     _get_default_settings = get_default_settings
@@ -1089,7 +1437,7 @@ class SettingsDialog(QDialog):
         preset['ocr_engine'] = 'Paddle_docs'
         preset['ocr_accuracy'] = 'Precise'
         preset['spatial_method'] = 'LYLLA'
-        preset['calibration_method'] = 'Siegel (Robust)'
+        preset['calibration_method'] = 'siegel'
         preset['ocr_settings']['scale_factor'] = 4.0
         preset['ocr_settings']['retry_on_suspicious'] = True
         preset['ocr_settings']['aggressive_preprocessing'] = True
@@ -1106,7 +1454,7 @@ class SettingsDialog(QDialog):
         preset['ocr_engine'] = 'Paddle'
         preset['ocr_accuracy'] = 'Fast'
         preset['spatial_method'] = 'Diagonal'
-        preset['calibration_method'] = 'Linear'
+        preset['calibration_method'] = 'linear'
         preset['ocr_settings']['scale_factor'] = 2.0
         preset['ocr_settings']['retry_on_suspicious'] = False
         preset['ocr_settings']['aggressive_preprocessing'] = False
@@ -1123,7 +1471,7 @@ class SettingsDialog(QDialog):
         preset['ocr_engine'] = 'Paddle_docs'
         preset['ocr_accuracy'] = 'Precise'
         preset['spatial_method'] = 'LYLLA'
-        preset['calibration_method'] = 'Siegel (Robust)'
+        preset['calibration_method'] = 'siegel'
         preset['ocr_settings']['scale_factor'] = 5.0
         preset['ocr_settings']['retry_on_suspicious'] = True
         preset['ocr_settings']['aggressive_preprocessing'] = True
@@ -1138,7 +1486,7 @@ class SettingsDialog(QDialog):
         preset['ocr_engine'] = 'Paddle_docs'
         preset['ocr_accuracy'] = 'Precise'
         preset['spatial_method'] = 'LYLLA'
-        preset['calibration_method'] = 'Siegel (Robust)'
+        preset['calibration_method'] = 'siegel'
         preset['ocr_settings']['scale_factor'] = 5.0
         preset['ocr_settings']['retry_on_suspicious'] = True
         preset['ocr_settings']['aggressive_preprocessing'] = True
@@ -1167,13 +1515,13 @@ class SettingsDialog(QDialog):
         
         # OCR engine
         ocr_settings = self.settings.get('ocr_settings', {})
-        self.use_gpu_check.setChecked(ocr_settings.get('use_gpu', ocr_settings.get('easyocr_gpu', False)))
+        self.use_gpu_check.setChecked(ocr_settings.get('use_gpu', False))
         self.retry_suspicious_check.setChecked(ocr_settings.get('retry_on_suspicious', True))
         self.aggressive_preprocess_check.setChecked(ocr_settings.get('aggressive_preprocessing', False))
         self.use_doclayout_check.setChecked(self.settings.get('use_doclayout_text', True))
         self.use_doclayout_regions_check.setChecked(self.settings.get('use_doclayout_regions', True))
         self.scale_factor_spin.setValue(ocr_settings.get('scale_factor', 3.0))
-        self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', ocr_settings.get('easyocr_contrast_ths', 0.1)))
+        self.contrast_ths_spin.setValue(ocr_settings.get('contrast_ths', 0.1))
         
         # Detection thresholds
         detection_thresholds = self.settings.get('detection_thresholds', {})
@@ -1187,10 +1535,8 @@ class SettingsDialog(QDialog):
         self.sorted_assignment_check.setChecked(bar_label_settings.get('use_sorted_assignment', True))
         
         # Calibration
-        cal_method = self.settings.get('calibration_method', 'Siegel (Robust)')
-        if cal_method in ('PROSAC', 'Adaptive', 'siegel', 'robust'):
-            cal_method = 'Siegel (Robust)'
-        self.calibration_method_combo.setCurrentText(cal_method)
+        cal_method = self.settings.get('calibration_method', 'siegel')
+        self._select_calibration_combo(self.calibration_method_combo, cal_method)
         calibration_settings = self.settings.get('calibration_settings', {})
         self.min_r2_spin.setValue(calibration_settings.get('min_r_squared', 0.95))
         self.outlier_thresh_spin.setValue(calibration_settings.get('outlier_threshold_std', 2.0))
@@ -1213,6 +1559,8 @@ class SettingsDialog(QDialog):
         performance = self.settings.get('performance', {})
         self.batch_workers_spin.setValue(performance.get('batch_workers', 4))
         self.ocr_workers_spin.setValue(performance.get('ocr_workers', 4))
+        if hasattr(self, 'perf_use_gpu_check'):
+            self.perf_use_gpu_check.setChecked(performance.get('use_gpu', sys.platform != "darwin"))
         
         # Output
         output_settings = self.settings.get('output_settings', {})
@@ -1234,9 +1582,50 @@ class SettingsDialog(QDialog):
             self.nn_classifier_enabled.setChecked(nn_classifier_settings.get('enabled', False))
             self.nn_classifier_path.setText(nn_classifier_settings.get('model_path', 'models/chart_classifier_nn.npy'))
 
+        # Basic Tab Controls
+        if hasattr(self, 'low_confidence_threshold_spin'):
+            rev = self.settings.get('review_settings', {})
+            self.low_confidence_threshold_spin.setValue(rev.get('low_confidence_threshold', 0.60))
+            self.autosave_draft_check.setChecked(rev.get('autosave_draft', True))
+            self.autosave_interval_spin.setValue(rev.get('autosave_interval_ms', 5000))
+
+        if hasattr(self, 'significant_digits_spin'):
+            disp = self.settings.get('display_settings', {})
+            self.significant_digits_spin.setValue(disp.get('significant_digits', 5))
+            app = self.settings.get('appearance', {})
+            self.theme_combo.setCurrentText(app.get('theme', 'dark'))
+            scale_pct = app.get('ui_scale_percent', 100)
+            scale_str = f"{scale_pct}%"
+            if self.ui_scale_combo.findText(scale_str) >= 0:
+                self.ui_scale_combo.setCurrentText(scale_str)
+            else:
+                self.ui_scale_combo.setCurrentText("100%")
+
+        if hasattr(self, 'auto_analyse_on_open_check'):
+            wf = self.settings.get('workflow_settings', {})
+            self.auto_analyse_on_open_check.setChecked(wf.get('auto_analyse_on_open', True))
+            self.enable_manual_calibration_check.setChecked(wf.get('enable_manual_calibration', False))
+
+        if hasattr(self, 'models_dir_edit'):
+            self.models_dir_edit.setText(self._get_initial_models_dir())
+
+        if hasattr(self, 'basic_ocr_engine_combo'):
+            self.basic_ocr_engine_combo.setCurrentText(self.settings.get('ocr_engine', 'Paddle'))
+            self.basic_ocr_accuracy_combo.setCurrentText(self.settings.get('ocr_accuracy', 'Optimized'))
+            langs = ocr_settings.get('languages', ['en', 'pt'])
+            langs_str = ", ".join(langs) if isinstance(langs, (list, tuple)) else str(langs)
+            self.basic_languages_edit.setText(langs_str)
+            self._select_calibration_combo(self.basic_cal_method_combo, cal_method)
+            self.basic_use_gpu_performance_check.setChecked(performance.get('use_gpu', sys.platform != "darwin"))
+            self.basic_use_gpu_ocr_check.setChecked(ocr_settings.get('use_gpu', False))
+
     def _collect_all_settings(self):
-        """Collect all settings from UI widgets."""
-        # OCR
+        """Collect all settings from UI widgets, preserving unexposed default/nested keys."""
+        # Baseline deep merge with default settings to preserve all unexposed default and nested keys
+        defaults = self._get_default_settings()
+        self.settings = deep_merge_settings(self.settings, defaults)
+
+        # OCR Engine & Accuracy
         self.settings['ocr_engine'] = self.ocr_engine_combo.currentText()
         self.settings['ocr_accuracy'] = self.ocr_accuracy_combo.currentText()
 
@@ -1246,14 +1635,28 @@ class SettingsDialog(QDialog):
             for key, input_widget in self.whitelist_inputs.items()
         }
         
-        # OCR engine settings
-        self.settings['ocr_settings']['use_gpu'] = self.use_gpu_check.isChecked()
-        self.settings['ocr_settings']['retry_on_suspicious'] = self.retry_suspicious_check.isChecked()
-        self.settings['ocr_settings']['aggressive_preprocessing'] = self.aggressive_preprocess_check.isChecked()
+        # OCR engine settings (DP-12: PaddleOCR exclusive, remove legacy easyocr keys)
+        ocr_settings = self.settings.setdefault('ocr_settings', {})
+        ocr_gpu = (
+            self.basic_use_gpu_ocr_check.isChecked()
+            if hasattr(self, 'basic_use_gpu_ocr_check')
+            else self.use_gpu_check.isChecked()
+        )
+        ocr_settings['use_gpu'] = ocr_gpu
+        ocr_settings.pop('easyocr_gpu', None)
+        ocr_settings.pop('easyocr_contrast_ths', None)
+        ocr_settings['retry_on_suspicious'] = self.retry_suspicious_check.isChecked()
+        ocr_settings['aggressive_preprocessing'] = self.aggressive_preprocess_check.isChecked()
         self.settings['use_doclayout_text'] = self.use_doclayout_check.isChecked()
         self.settings['use_doclayout_regions'] = self.use_doclayout_regions_check.isChecked()
-        self.settings['ocr_settings']['scale_factor'] = self.scale_factor_spin.value()
-        self.settings['ocr_settings']['contrast_ths'] = self.contrast_ths_spin.value()
+        ocr_settings['scale_factor'] = self.scale_factor_spin.value()
+        ocr_settings['contrast_ths'] = self.contrast_ths_spin.value()
+
+        if hasattr(self, 'basic_languages_edit'):
+            langs_str = self.basic_languages_edit.text()
+            langs = [l.strip() for l in langs_str.split(',') if l.strip()]
+            if langs:
+                ocr_settings['languages'] = langs
         
         # Detection thresholds
         self.settings['detection_thresholds'] = {
@@ -1261,21 +1664,38 @@ class SettingsDialog(QDialog):
             for key, spin in self.threshold_inputs.items()
         }
         
-        # Bar label settings
-        self.settings['bar_label_settings']['max_horizontal_distance_factor'] = self.h_dist_factor_spin.value()
-        self.settings['bar_label_settings']['score_threshold'] = self.score_thresh_spin.value()
-        self.settings['bar_label_settings']['use_sorted_assignment'] = self.sorted_assignment_check.isChecked()
+        # Bar label settings (preserves unexposed keys like max_vertical_distance_factor)
+        bar_settings = self.settings.setdefault('bar_label_settings', {})
+        bar_settings['max_horizontal_distance_factor'] = self.h_dist_factor_spin.value()
+        bar_settings['score_threshold'] = self.score_thresh_spin.value()
+        bar_settings['use_sorted_assignment'] = self.sorted_assignment_check.isChecked()
         
-        # Calibration
-        cal_val = self.calibration_method_combo.currentText()
-        if cal_val in ('Siegel (Robust)', 'robust'):
-            self.settings['calibration_method'] = 'siegel'
-        else:
-            self.settings['calibration_method'] = cal_val
-        self.settings['calibration_settings']['min_r_squared'] = self.min_r2_spin.value()
-        self.settings['calibration_settings']['outlier_threshold_std'] = self.outlier_thresh_spin.value()
-        self.settings['calibration_settings']['min_scale_labels'] = self.min_scale_labels_spin.value()
-        self.settings['calibration_settings']['baseline_validation_tolerance'] = self.baseline_tol_spin.value()
+        # Calibration (Canonical lowercase userData)
+        cal_data = self.calibration_method_combo.currentData()
+        if not cal_data and hasattr(self, 'basic_cal_method_combo'):
+            cal_data = self.basic_cal_method_combo.currentData()
+        if not cal_data:
+            cal_val = self.calibration_method_combo.currentText().strip()
+            cal_lower = cal_val.lower()
+            if 'siegel' in cal_lower or 'robust' in cal_lower:
+                cal_data = 'siegel'
+            elif 'linear' in cal_lower:
+                cal_data = 'linear'
+            elif 'fast' in cal_lower:
+                cal_data = 'fast'
+            elif 'prosac' in cal_lower:
+                cal_data = 'prosac'
+            elif 'adaptive' in cal_lower:
+                cal_data = 'adaptive'
+            else:
+                cal_data = cal_lower
+        self.settings['calibration_method'] = cal_data
+
+        cal_settings = self.settings.setdefault('calibration_settings', {})
+        cal_settings['min_r_squared'] = self.min_r2_spin.value()
+        cal_settings['outlier_threshold_std'] = self.outlier_thresh_spin.value()
+        cal_settings['min_scale_labels'] = self.min_scale_labels_spin.value()
+        cal_settings['baseline_validation_tolerance'] = self.baseline_tol_spin.value()
 
         # Method and SOTA Flags
         self.settings['pipeline_mode'] = self.pipeline_mode_combo.currentText()
@@ -1283,21 +1703,34 @@ class SettingsDialog(QDialog):
         self.settings['scatter_subpixel_mode'] = self.scatter_subpixel_combo.currentText()
         self.settings['bar_association_mode'] = self.bar_association_combo.currentText()
         
-        # Image processing
-        self.settings['image_processing']['clahe_clip_limit'] = self.clahe_clip_spin.value()
-        self.settings['image_processing']['clahe_grid_size'] = self.clahe_grid_spin.value()
-        self.settings['image_processing']['bilateral_filter_d'] = self.bilateral_d_spin.value()
+        # Image processing (preserves bilateral_filter_sigma_* via deep_merge_settings)
+        img_proc = self.settings.setdefault('image_processing', {})
+        img_proc['clahe_clip_limit'] = self.clahe_clip_spin.value()
+        img_proc['clahe_grid_size'] = self.clahe_grid_spin.value()
+        img_proc['bilateral_filter_d'] = self.bilateral_d_spin.value()
         
-        # Performance
-        self.settings['performance']['batch_workers'] = self.batch_workers_spin.value()
-        self.settings['performance']['ocr_workers'] = self.ocr_workers_spin.value()
+        # Performance (DP-12: Dual GPU key performance.use_gpu)
+        perf_settings = self.settings.setdefault('performance', {})
+        perf_settings['batch_workers'] = self.batch_workers_spin.value()
+        perf_settings['ocr_workers'] = self.ocr_workers_spin.value()
+        perf_gpu = (
+            self.basic_use_gpu_performance_check.isChecked()
+            if hasattr(self, 'basic_use_gpu_performance_check')
+            else (
+                self.perf_use_gpu_check.isChecked()
+                if hasattr(self, 'perf_use_gpu_check')
+                else sys.platform != "darwin"
+            )
+        )
+        perf_settings['use_gpu'] = perf_gpu
         
         # Output
-        self.settings['output_settings']['save_annotated_image'] = self.save_annotated_check.isChecked()
-        self.settings['output_settings']['save_json'] = self.save_json_check.isChecked()
-        self.settings['output_settings']['include_debug_info'] = self.include_debug_check.isChecked()
-        self.settings['output_settings']['json_indent'] = self.json_indent_spin.value()
-        self.settings['output_settings']['image_quality'] = self.image_quality_spin.value()
+        out_settings = self.settings.setdefault('output_settings', {})
+        out_settings['save_annotated_image'] = self.save_annotated_check.isChecked()
+        out_settings['save_json'] = self.save_json_check.isChecked()
+        out_settings['include_debug_info'] = self.include_debug_check.isChecked()
+        out_settings['json_indent'] = self.json_indent_spin.value()
+        out_settings['image_quality'] = self.image_quality_spin.value()
 
         # NN Classifier
         if hasattr(self, 'nn_classifier_enabled'):
@@ -1311,6 +1744,34 @@ class SettingsDialog(QDialog):
         self.settings['heatmap_mode'] = _heatmap_mode_map.get(
             self.heatmap_mode_combo.currentIndex(), 'legacy'
         )
+
+        # Basic Tab Groups
+        if hasattr(self, 'low_confidence_threshold_spin'):
+            rev = self.settings.setdefault('review_settings', {})
+            rev['low_confidence_threshold'] = round(self.low_confidence_threshold_spin.value(), 2)
+            rev['autosave_draft'] = self.autosave_draft_check.isChecked()
+            rev['autosave_interval_ms'] = self.autosave_interval_spin.value()
+
+        if hasattr(self, 'significant_digits_spin'):
+            disp = self.settings.setdefault('display_settings', {})
+            disp['significant_digits'] = self.significant_digits_spin.value()
+
+        if hasattr(self, 'theme_combo'):
+            app = self.settings.setdefault('appearance', {})
+            app['theme'] = self.theme_combo.currentText()
+            scale_str = self.ui_scale_combo.currentText().replace('%', '')
+            try:
+                app['ui_scale_percent'] = int(scale_str)
+            except ValueError:
+                app['ui_scale_percent'] = 100
+
+        if hasattr(self, 'auto_analyse_on_open_check'):
+            wf = self.settings.setdefault('workflow_settings', {})
+            wf['auto_analyse_on_open'] = self.auto_analyse_on_open_check.isChecked()
+            wf['enable_manual_calibration'] = self.enable_manual_calibration_check.isChecked()
+
+        # Ensure models_dir is NEVER in self.settings (stored in gui_config.json)
+        self.settings.pop('models_dir', None)
 
     def _export_settings(self):
         """Export current settings to file."""

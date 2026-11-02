@@ -51,9 +51,12 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
         QPushButton, QFileDialog, QMessageBox, QScrollArea, QFrame, QSlider, QTabWidget,
         QCheckBox, QSplitter, QProgressBar, QProgressDialog, QGridLayout, QGroupBox,
-        QDialog, QSizePolicy, QComboBox, QTableWidget, QTableWidgetItem
+        QDialog, QSizePolicy, QComboBox, QTableWidget, QTableWidgetItem, QListView
     )
-    from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QTimer, PYQT_VERSION_STR, QSize
+    from PyQt6.QtCore import (
+        Qt, QEvent, QThread, pyqtSignal, QTimer, PYQT_VERSION_STR, QSize,
+        QModelIndex, QItemSelectionModel
+    )
     from PyQt6.QtGui import (
         QPixmap,
         QImage,
@@ -120,6 +123,13 @@ from visual.workers import (
 )
 from visual.canvas_editor_controller import CanvasEditorMixin
 from visual.file_list_controller import FileListCacheMixin
+from visual.file_list_model import (
+    FileListDelegate,
+    FileListFilterProxyModel,
+    FileListModel,
+    FileListRoles,
+    FileStateLoader,
+)
 from visual.navigation_bar import NavigationBar
 from visual.review_session import ReviewSession, ProcessingState
 
@@ -246,7 +256,13 @@ class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow)
         self.highlight_cache = {}
         self.current_pixmap = None
         self._benchmark_result_cache: Dict[str, str] = {}
-        self._file_list_buttons: List[QPushButton] = []
+        self._file_list_buttons: Dict[int, QPushButton] = {}
+        self.file_list_model: Optional[FileListModel] = None
+        self.file_list_proxy: Optional[FileListFilterProxyModel] = None
+        self.file_list_view: Optional[QListView] = None
+        self.file_list_delegate: Optional[FileListDelegate] = None
+        self.queue_filter_combo: Optional[QComboBox] = None
+        self._file_state_loader: Optional[FileStateLoader] = None
         
         self.colors = {
             "bar":         {"normal": (0, 120, 255),   "highlight": (30, 144, 255)},
@@ -605,6 +621,17 @@ class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow)
         try:
             detection_thresh = self.advanced_settings.get('detection_thresholds', {}).get('bar_detection', 0.4)
             self.conf_slider.setValue(int(detection_thresh * 10))
+
+            thresh_pct = self._get_low_confidence_threshold_percent() if hasattr(self, "_get_low_confidence_threshold_percent") else 60
+            if hasattr(self, "low_conf_header_btn") and self.low_conf_header_btn is not None:
+                arrow = "▾" if (hasattr(self, "low_conf_scroll") and self.low_conf_scroll.isVisible()) else "▸"
+                count = getattr(self, '_low_conf_count', 0)
+                self.low_conf_header_btn.setText(f"LOW CONFIDENCE (<{thresh_pct}%) [{count}] {arrow}")
+
+            output_str = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") and self.output_path_edit else ""
+            if hasattr(self, "_start_file_state_loader") and output_str:
+                self._start_file_state_loader(output_str)
+
             self.update_status("Advanced settings applied.")
         except Exception as e:
             self.update_status(f"Error applying settings: {e}")
@@ -741,22 +768,75 @@ Click to configure advanced options."""
         files_header_layout.addWidget(self.files_sidebar_toggle_btn)
         left_layout.addLayout(files_header_layout)
         
-        # File list scroll
+        # Review queue selector (ADR-014 T-014.3, ADR-017 T-017.5)
+        self.queue_filter_combo = QComboBox()
+        self.queue_filter_combo.addItems(["All", "Needs Review", "Reviewed"])
+        self.queue_filter_combo.setToolTip("Filter review queue: All, Needs Review, or Reviewed")
+        self.queue_filter_combo.setStyleSheet(
+            "QComboBox {"
+            "    background-color: #252526;"
+            "    color: #cccccc;"
+            "    border: 1px solid #3c3c3c;"
+            "    border-radius: 3px;"
+            "    padding: 3px 6px;"
+            "    font-size: 11px;"
+            "}"
+            "QComboBox::drop-down {"
+            "    border: none;"
+            "}"
+            "QComboBox QAbstractItemView {"
+            "    background-color: #1e1e1e;"
+            "    color: #cccccc;"
+            "    selection-background-color: #264f78;"
+            "    selection-color: #ffffff;"
+            "}"
+        )
+        left_layout.addWidget(self.queue_filter_combo)
+
+        # Model/View File List (ADR-017 T-017.5b)
+        self.file_list_model = FileListModel(self)
+        self.file_list_proxy = FileListFilterProxyModel(self)
+        self.file_list_proxy.setSourceModel(self.file_list_model)
+        self.file_list_view = QListView()
+        self.file_list_view.setModel(self.file_list_proxy)
+        self.file_list_delegate = FileListDelegate(self.file_list_view, icon_getter=self.get_icon)
+        self.file_list_view.setItemDelegate(self.file_list_delegate)
+        self.file_list_view.setUniformItemSizes(True)
+        self.file_list_view.setLayoutMode(QListView.LayoutMode.Batched)
+        self.file_list_view.setBatchSize(100)
+        self.file_list_view.setStyleSheet(
+            "QListView {"
+            "    background-color: #1e1e1e;"
+            "    border: 1px solid #333333;"
+            "    border-radius: 3px;"
+            "    outline: none;"
+            "}"
+            "QListView::item {"
+            "    padding: 2px;"
+            "}"
+        )
+
+        self.queue_filter_combo.currentTextChanged.connect(self.file_list_proxy.set_filter_mode)
+        self.file_list_view.selectionModel().currentChanged.connect(self._on_file_list_current_changed)
+        left_layout.addWidget(self.file_list_view, stretch=1)
+
+        # Legacy file list and low confidence widgets (kept instantiated for backwards compatibility)
         self.file_list_scroll = QScrollArea()
         self.file_list_scroll.setWidgetResizable(True)
+        self.file_list_scroll.setVisible(False)
         self.file_list_frame = QWidget()
         self.file_list_layout = QVBoxLayout(self.file_list_frame)
         self.file_list_layout.setSpacing(1)
         self.file_list_scroll.setWidget(self.file_list_frame)
-        left_layout.addWidget(self.file_list_scroll, stretch=1)
-        
-        # === LOW CONFIDENCE (< 60%) COLLAPSIBLE SECTION ===
+
         self.low_conf_container = QWidget()
+        self.low_conf_container.setVisible(False)
         low_conf_container_layout = QVBoxLayout(self.low_conf_container)
         low_conf_container_layout.setContentsMargins(0, 4, 0, 0)
         low_conf_container_layout.setSpacing(4)
 
-        self.low_conf_header_btn = QPushButton("LOW CONFIDENCE (<60%) [0] ▸")
+        thresh_pct = self._get_low_confidence_threshold_percent() if hasattr(self, "_get_low_confidence_threshold_percent") else 60
+        self.low_conf_header_btn = QPushButton(f"LOW CONFIDENCE (<{thresh_pct}%) [0] ▸")
         self.low_conf_header_btn.setProperty("sectionHeader", True)
         self.low_conf_header_btn.setFlat(True)
         self.low_conf_header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -782,15 +862,13 @@ Click to configure advanced options."""
         self.low_conf_scroll = QScrollArea()
         self.low_conf_scroll.setWidgetResizable(True)
         self.low_conf_scroll.setMaximumHeight(180)
-        self.low_conf_scroll.setVisible(False)  # Collapsed by default
+        self.low_conf_scroll.setVisible(False)
         self.low_conf_frame = QWidget()
         self.low_conf_layout = QVBoxLayout(self.low_conf_frame)
         self.low_conf_layout.setSpacing(1)
         self.low_conf_layout.setContentsMargins(2, 2, 2, 2)
         self.low_conf_scroll.setWidget(self.low_conf_frame)
         low_conf_container_layout.addWidget(self.low_conf_scroll)
-
-        left_layout.addWidget(self.low_conf_container)
 
         self.main_splitter_widget.addWidget(self.left_panel)
         
@@ -2006,26 +2084,76 @@ Click to configure advanced options."""
         
         gc.collect()
 
-    def highlight_selected_file(self, selected_index):
-        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
+    def has_icon(self, filename: str) -> bool:
+        """Check whether an SVG icon exists in src/ui/rendering/icons (ADR-014 T-014.7)."""
+        icon_path = Path(__file__).parent / "ui" / "rendering" / "icons" / filename
+        return icon_path.is_file()
+
+    def _on_file_list_current_changed(self, current: QModelIndex, previous: QModelIndex) -> None:
+        """Handle selection change in the model/view file list (ADR-017 T-017.5)."""
+        if not current.isValid():
             return
-        prev = getattr(self, "_previous_selected_index", None)
-        to_update = {selected_index} if prev is None or prev not in self._file_list_buttons else {prev, selected_index}
-        self._previous_selected_index = selected_index
-        for i in to_update:
-            btn = self._file_list_buttons.get(i)
-            if not isinstance(btn, QPushButton):
-                continue
-            is_sel = (i == selected_index)
-            is_low = getattr(btn, "_is_low_conf", False)
-            bg = ("#5a4520" if is_low else "#264f78") if is_sel else ("#1e1910" if is_low else "transparent")
-            color = "white" if is_sel else ("#e5c07b" if is_low else "#d4d4d4")
-            border = f"2px solid {color}" if is_sel else f"1px solid {'#5a4520' if is_low else '#454545'}"
-            btn.setStyleSheet(
-                f"QPushButton {{ text-align: left; padding: 4px 8px; border: {border}; "
-                f"border-radius: 3px; margin: 1px; font-size: 9px; color: {color}; "
-                f"background-color: {bg}; font-weight: {'bold' if is_sel else 'normal'}; }}"
-            )
+        if not hasattr(self, "file_list_proxy") or self.file_list_proxy is None:
+            return
+        source_index = self.file_list_proxy.mapToSource(current)
+        if not source_index.isValid():
+            return
+        target_row = source_index.row()
+        if target_row == getattr(self, "current_image_index", None):
+            return
+        self.load_image_by_index(target_row)
+
+    def highlight_selected_file(self, selected_index: int) -> None:
+        # Legacy button styling (for backwards compatibility with tests)
+        if hasattr(self, "_file_list_buttons") and isinstance(self._file_list_buttons, dict) and self._file_list_buttons:
+            prev = getattr(self, "_previous_selected_index", None)
+            to_update = {selected_index} if prev is None or prev not in self._file_list_buttons else {prev, selected_index}
+            self._previous_selected_index = selected_index
+            for i in to_update:
+                btn = self._file_list_buttons.get(i)
+                if not isinstance(btn, QPushButton):
+                    continue
+                is_sel = (i == selected_index)
+                is_low = getattr(btn, "_is_low_conf", False)
+                bg = ("#5a4520" if is_low else "#264f78") if is_sel else ("#1e1910" if is_low else "transparent")
+                color = "white" if is_sel else ("#e5c07b" if is_low else "#d4d4d4")
+                border = f"2px solid {color}" if is_sel else f"1px solid {'#5a4520' if is_low else '#454545'}"
+                btn.setStyleSheet(
+                    f"QPushButton {{ text-align: left; padding: 4px 8px; border: {border}; "
+                    f"border-radius: 3px; margin: 1px; font-size: 9px; color: {color}; "
+                    f"background-color: {bg}; font-weight: {'bold' if is_sel else 'normal'}; }}"
+                )
+        else:
+            self._previous_selected_index = selected_index
+
+        # Sync QListView selection
+        if (
+            hasattr(self, "file_list_view")
+            and self.file_list_view is not None
+            and hasattr(self, "file_list_model")
+            and self.file_list_model is not None
+            and hasattr(self, "file_list_proxy")
+            and self.file_list_proxy is not None
+        ):
+            src_index = self.file_list_model.index(selected_index, 0)
+            if src_index.isValid():
+                proxy_index = self.file_list_proxy.mapFromSource(src_index)
+                sel_model = self.file_list_view.selectionModel()
+                if sel_model is not None:
+                    if proxy_index.isValid():
+                        if sel_model.currentIndex() != proxy_index:
+                            from PyQt6.QtCore import QItemSelectionModel
+                            sel_model.blockSignals(True)
+                            sel_model.setCurrentIndex(
+                                proxy_index,
+                                QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                            )
+                            sel_model.blockSignals(False)
+                            self.file_list_view.scrollTo(proxy_index)
+                    else:
+                        sel_model.blockSignals(True)
+                        sel_model.clearSelection()
+                        sel_model.blockSignals(False)
 
     def _clear_display(self):
         self.cleanup_image_resources()
@@ -3723,6 +3851,23 @@ Click to configure advanced options."""
         _copy_fields(previous.get("elements"), refreshed.get("elements"))
         _copy_fields(previous.get("bars"), refreshed.get("bars"))
 
+    def mark_image_reviewed(self) -> bool:
+        """Mark the current image as reviewed (ADR-014 T-014.3 / T-014.6)."""
+        if not self.current_analysis_result:
+            return False
+        self.current_analysis_result["review_status"] = "reviewed"
+        rows = self.current_analysis_result.get("protocol_rows") or []
+        uids = []
+        for r in rows:
+            if isinstance(r, dict):
+                r["review_status"] = "reviewed"
+                uid = r.get("_uid") or r.get("row_uid")
+                if uid:
+                    uids.append(uid)
+        if hasattr(self, "_refresh_visible_protocol_rows_by_uid") and uids:
+            self._refresh_visible_protocol_rows_by_uid(uids)
+        return self._save_analysis_results()
+
     def _save_analysis_results(self):
         if not self.current_analysis_result:
             QMessageBox.warning(self, "No Data", "No analysis results to save.")
@@ -3793,6 +3938,23 @@ Click to configure advanced options."""
             # Update in-memory cache and refresh the file-list button icon.
             self._benchmark_result_cache[str(self.current_image_path)] = str(json_path)
             self._update_file_list_button_cached_state(self.current_image_index, cached=True)
+
+            # Update FileListModel state (ADR-014 T-014.3 / T-017.5b)
+            if hasattr(self, "file_list_model") and self.file_list_model is not None:
+                from core.review_state import derive_image_state
+                from core.review_summary import build_summary
+                summary_data = build_summary(self.current_analysis_result)
+                threshold = 0.60
+                if hasattr(self, "advanced_settings") and isinstance(self.advanced_settings, dict):
+                    threshold = self.advanced_settings.get("review_settings", {}).get("low_confidence_threshold", 0.60)
+                st = derive_image_state(summary_data, threshold=threshold)
+                self.file_list_model.update_file_state(
+                    str(self.current_image_path),
+                    state=st,
+                    confidence=summary_data.get("min_confidence"),
+                    is_cached=True,
+                )
+
             self.refresh_low_confidence_tab()
             self._discard_current_draft()
             session = getattr(self, 'session', None)

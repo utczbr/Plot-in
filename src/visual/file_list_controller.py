@@ -15,10 +15,11 @@ import tempfile
 from typing import Dict, List, Optional
 
 from PIL import Image
-from PyQt6.QtCore import QSize, Qt, QThread
+from PyQt6.QtCore import QSize, Qt, QThread, QThreadPool
 from PyQt6.QtWidgets import (
     QFileDialog,
     QLabel,
+    QListView,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -26,6 +27,7 @@ from PyQt6.QtWidgets import (
 
 from core.model_manager import ModelManager
 from models.config import MODELS_CONFIG
+from visual.file_list_model import FileListModel, FileStateLoader
 from visual.result_normalizer import (
     _normalize_result_payload_for_gui,
     partition_assets_by_confidence,
@@ -391,34 +393,61 @@ class FileListCacheMixin:
         self.image_files = [str(a.image_path) for a in assets]
         self._unique_stems = self._generate_unique_stems(self.image_files)
 
-        for i in reversed(range(self.file_list_layout.count())):
-            child = self.file_list_layout.takeAt(i)
-            if child.widget():
-                child.widget().deleteLater()
-        for i in reversed(range(self.low_conf_layout.count())):
-            child = self.low_conf_layout.takeAt(i)
-            if child.widget():
-                child.widget().deleteLater()
+        is_model_view = (
+            hasattr(self, "file_list_model")
+            and isinstance(self.file_list_model, FileListModel)
+            and hasattr(self, "file_list_view")
+            and isinstance(self.file_list_view, QListView)
+        )
+
+        if is_model_view:
+            self.file_list_model.set_files(self.image_files, self._unique_stems)
+
+        if hasattr(self, "file_list_layout") and self.file_list_layout is not None:
+            for i in reversed(range(self.file_list_layout.count())):
+                child = self.file_list_layout.takeAt(i)
+                if child.widget():
+                    child.widget().deleteLater()
+        if hasattr(self, "low_conf_layout") and self.low_conf_layout is not None:
+            for i in reversed(range(self.low_conf_layout.count())):
+                child = self.low_conf_layout.takeAt(i)
+                if child.widget():
+                    child.widget().deleteLater()
 
         if not self.image_files:
             if hasattr(self, "_sync_navigation_bar"):
                 self._sync_navigation_bar()
             failures = getattr(self, '_pdf_failures', [])
             detail = "\n".join(f"• {p.name}: {reason}" for p, reason in failures) if failures else "No charts found"
-            label = QLabel(detail)
-            label.setStyleSheet("QLabel { color: #ff6b6b; }")
-            self.file_list_layout.addWidget(label)
+            if hasattr(self, "file_list_layout") and self.file_list_layout is not None:
+                label = QLabel(detail)
+                label.setStyleSheet("QLabel { color: #ff6b6b; }")
+                self.file_list_layout.addWidget(label)
             return
 
         self._benchmark_result_cache.clear()
         self._refresh_cache_from_output_dir()
 
+        self._file_list_buttons = {}
+
+        if is_model_view:
+            batch_thread = getattr(self, "batch_thread", None)
+            is_batch_running = (
+                bool(batch_thread.isRunning())
+                if isinstance(batch_thread, QThread)
+                else False
+            )
+            is_batch_active = (getattr(self, "is_processing", False) is True) or is_batch_running
+            if hasattr(self, "_sync_navigation_bar"):
+                self._sync_navigation_bar()
+            if not is_batch_active and self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
+                self.load_image_by_index(0)
+            return
+
         conf_cache: Dict[str, Optional[dict]] = {}
         normal_indices, low_conf_indices = partition_assets_by_confidence(
             self._resolved_assets, self._benchmark_result_cache, conf_cache=conf_cache
         )
-
-        self._file_list_buttons = {}
         image_icon_px = self._scaled_icon_px(13)
 
         def _get_cached_conf_info(json_path: str) -> Optional[dict]:
@@ -694,6 +723,15 @@ class FileListCacheMixin:
 
     def _update_file_list_button_cached_state(self, index: int, cached: bool) -> None:
         """Update icon and tooltip on a single file-list button to reflect cached/uncached state."""
+        image_files = getattr(self, "image_files", [])
+        if (
+            hasattr(self, "file_list_model")
+            and self.file_list_model is not None
+            and 0 <= index < len(image_files)
+        ):
+            file_path = image_files[index]
+            self.file_list_model.update_file_cached(file_path, cached)
+
         if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
             return
         if index not in self._file_list_buttons:
@@ -708,43 +746,114 @@ class FileListCacheMixin:
         base_tip = current_tip.split(" ✓")[0]
         btn.setToolTip(base_tip + (" ✓ Results cached" if cached else ""))
 
+    def _start_file_state_loader(self, output_dir: str) -> None:
+        """Dispatch FileStateLoader on QThreadPool to derive review states asynchronously."""
+        old_loader = getattr(self, "_file_state_loader", None)
+        if old_loader is not None:
+            try:
+                old_loader.cancel()
+            except Exception:
+                pass
+            self._file_state_loader = None
+
+        if not hasattr(self, "file_list_model") or self.file_list_model is None:
+            return
+
+        image_files = list(getattr(self, "image_files", []))
+        if not image_files or not output_dir or not Path(output_dir).is_dir():
+            return
+
+        unique_stems = dict(getattr(self, "_unique_stems", {}))
+        threshold = 0.60
+        if hasattr(self, "advanced_settings") and isinstance(self.advanced_settings, dict):
+            threshold = self.advanced_settings.get("review_settings", {}).get("low_confidence_threshold", 0.60)
+
+        gen = getattr(self, "_file_state_loader_gen", 0) + 1
+        self._file_state_loader_gen = gen
+
+        loader = FileStateLoader(
+            output_dir=output_dir,
+            file_paths=image_files,
+            unique_stems=unique_stems,
+            threshold=threshold,
+            generation=gen,
+        )
+        self._file_state_loader = loader
+
+        if not hasattr(self, "_active_loaders"):
+            self._active_loaders = set()
+        self._active_loaders.add(loader)
+
+        loader.signals.state_ready.connect(self._on_file_state_ready)
+        loader.signals.finished.connect(lambda l=loader: self._active_loaders.discard(l))
+        QThreadPool.globalInstance().start(loader)
+
+    def _on_file_state_ready(
+        self,
+        file_path: str,
+        state: str,
+        confidence: Optional[float] = None,
+        failure_reason: Optional[str] = None,
+        is_cached: Optional[bool] = None,
+        generation: int = 0,
+    ) -> None:
+        """Slot for FileStateLoader state_ready signal."""
+        if generation != 0 and generation != getattr(self, "_file_state_loader_gen", 0):
+            return
+        if not hasattr(self, "file_list_model") or self.file_list_model is None:
+            return
+        if file_path not in getattr(self, "image_files", []):
+            return
+
+        self.file_list_model.update_file_state(
+            file_path=file_path,
+            state=state,
+            confidence=confidence,
+            failure_reason=failure_reason,
+            is_cached=is_cached,
+        )
+        if is_cached and file_path not in getattr(self, "_benchmark_result_cache", {}):
+            stem = getattr(self, "_unique_stems", {}).get(file_path, Path(file_path).stem)
+            output_str = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") and self.output_path_edit else ""
+            if output_str:
+                cand = Path(output_str) / f"{stem}_analysis.json"
+                if cand.is_file():
+                    self._benchmark_result_cache[file_path] = str(cand)
+
     def _refresh_cache_from_output_dir(self) -> None:
         """Scan the output directory for *_analysis.json files and update _benchmark_result_cache.
-        Uses the embedded 'original_image_path' field for an unambiguous match.
-        Called after a batch run completes. Does not clear existing entries."""
-        output_str = self.output_path_edit.text().strip()
+        Uses fast stem-based file existence checking without opening full JSONs on the UI thread."""
+        output_str = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") and self.output_path_edit else ""
         if not output_str:
             return
         output_path = Path(output_str)
         if not output_path.is_dir():
             return
 
-        abs_path_to_json: dict = {}
-        for json_file in sorted(output_path.glob("*_analysis.json")):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                orig = data.get('original_image_path')
-                if orig:
-                    abs_path_to_json[str(Path(orig).resolve())] = str(json_file)
-            except Exception:
-                pass
+        unique_stems = getattr(self, "_unique_stems", None)
+        if not isinstance(unique_stems, dict):
+            unique_stems = {}
+        image_files = getattr(self, "image_files", None)
+        if not isinstance(image_files, (list, tuple)):
+            image_files = []
 
-        for file_path in self.image_files:
+        for file_path in image_files:
             if file_path in self._benchmark_result_cache:
                 continue
-            abs_path = str(Path(file_path).resolve())
-            if abs_path in abs_path_to_json:
-                self._benchmark_result_cache[file_path] = abs_path_to_json[abs_path]
+            stem = unique_stems.get(file_path, Path(file_path).stem)
+            candidate = output_path / f"{stem}_analysis.json"
+            if candidate.is_file():
+                self._benchmark_result_cache[file_path] = str(candidate)
+
+        if hasattr(self, "_start_file_state_loader"):
+            self._start_file_state_loader(output_str)
 
     def _refresh_file_list_button_states(self) -> None:
         """Update all file-list button icons to reflect the current cache state."""
-        if not hasattr(self, "_file_list_buttons") or not isinstance(self._file_list_buttons, dict):
-            return
-        for i, file_path in enumerate(self.image_files):
-            if i in self._file_list_buttons:
-                is_cached = file_path in self._benchmark_result_cache
-                self._update_file_list_button_cached_state(i, is_cached)
+        image_files = getattr(self, "image_files", [])
+        for i, file_path in enumerate(image_files):
+            is_cached = file_path in self._benchmark_result_cache
+            self._update_file_list_button_cached_state(i, is_cached)
 
     def toggle_low_confidence_tab(self):
         """Toggle the collapsed/expanded state of the low-confidence sidebar tab."""
@@ -757,5 +866,13 @@ class FileListCacheMixin:
 
     def refresh_low_confidence_tab(self):
         """Refresh the low-confidence sidebar tab using cached analysis JSON data."""
+        is_model_view = (
+            hasattr(self, "file_list_model")
+            and isinstance(self.file_list_model, FileListModel)
+            and hasattr(self, "file_list_view")
+            and isinstance(self.file_list_view, QListView)
+        )
+        if is_model_view:
+            return
         if hasattr(self, '_resolved_assets') and self._resolved_assets:
             self._finish_populate_file_list(self._resolved_assets)

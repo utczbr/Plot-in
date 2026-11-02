@@ -1,6 +1,6 @@
 """Table widget and undo/redo command extracted from main_modern.py."""
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QUndoCommand, QUndoStack
 from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
 
@@ -55,15 +55,27 @@ class MultiSelectTableWidget(QTableWidget):
     """QTableWidget subclass with Ctrl+C, Ctrl+V, Delete multi-cell support and Undo/Redo."""
 
     paste_completed = pyqtSignal(int, int, list)  # (success_count, rejected_count, details)
+    batch_changes_requested = pyqtSignal(list, str)  # ([(row, col, old_text, new_text), ...], description)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._undo_stack = QUndoStack(self)
-        self._undo_stack.setUndoLimit(50)
+        self._undo_stack.setUndoLimit(200)
+        self._external_undo_stack = None
+        self._use_external_batch_handler = False
         self._current_data = {}
         self._command_history = []  # List of (changes, description) tuples
         self._is_editing_undo = False
         self.cellChanged.connect(self._on_cell_changed)
+
+    def set_undo_stack(self, stack, *, external_batch_handler: bool = True) -> None:
+        """Bind this table to a session-scoped undo stack (ADR-015 T-015.5)."""
+        self._external_undo_stack = stack
+        self._use_external_batch_handler = bool(external_batch_handler and stack is not None)
+
+    @property
+    def active_undo_stack(self):
+        return self._external_undo_stack if self._external_undo_stack is not None else self._undo_stack
 
     def setItem(self, row, col, item):
         super().setItem(row, col, item)
@@ -125,6 +137,9 @@ class MultiSelectTableWidget(QTableWidget):
         item = self.item(row, col)
         if not item:
             return
+        if self._external_undo_stack is not None:
+            self._current_data[(row, col)] = item.text()
+            return
         new_text, old_text = item.text(), self._current_data.get((row, col), "")
         if new_text != old_text:
             self._is_editing_undo = True
@@ -133,22 +148,32 @@ class MultiSelectTableWidget(QTableWidget):
             self._current_data[(row, col)] = new_text
 
     def keyPressEvent(self, event):
+        stack = self.active_undo_stack
         if event.matches(QKeySequence.StandardKey.Copy):
             self._copy_selection()
         elif event.matches(QKeySequence.StandardKey.Paste):
             self._paste_selection()
+        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_D:
+            self.fill_down_selection()
         elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._delete_selection()
-        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
-            if self._undo_stack.canUndo():
-                self._undo_stack.undo()
-        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y:
-            if self._undo_stack.canRedo():
-                self._undo_stack.redo()
+        elif event.matches(QKeySequence.StandardKey.Undo) or (
+            event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z
+        ):
+            if stack.canUndo():
+                stack.undo()
+        elif event.matches(QKeySequence.StandardKey.Redo) or (
+            event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y
+        ):
+            if stack.canRedo():
+                stack.redo()
         else:
             super().keyPressEvent(event)
 
     def _apply_and_push(self, changes, desc):
+        if self._use_external_batch_handler:
+            self.batch_changes_requested.emit(changes, desc)
+            return
         self.blockSignals(True)
         for r, c, _, new in changes:
             TableEditCommand._set_cell_value(self, self.item(r, c), c, new)
@@ -159,6 +184,30 @@ class MultiSelectTableWidget(QTableWidget):
         self._is_editing_undo = False
         for r, c, *_ in changes:
             self.cellChanged.emit(r, c)
+
+    def fill_down_selection(self):
+        """Fill down values from the top row of each selected range (Ctrl+D, T-015.3)."""
+        selected = self.selectedRanges()
+        if not selected:
+            return
+        changes = []
+        for rng in selected:
+            top_r = rng.topRow()
+            if rng.bottomRow() <= top_r:
+                continue
+            for c in range(rng.leftColumn(), rng.rightColumn() + 1):
+                src_item = self.item(top_r, c)
+                if src_item is None:
+                    continue
+                src_text = src_item.text()
+                for r in range(top_r + 1, rng.bottomRow() + 1):
+                    dst_item = self.item(r, c)
+                    if dst_item is None or not (dst_item.flags() & Qt.ItemFlag.ItemIsEditable):
+                        continue
+                    if dst_item.text() != src_text:
+                        changes.append((r, c, dst_item.text(), src_text))
+        if changes:
+            self._apply_and_push(changes, "Fill Down")
 
     def _copy_selection(self):
         selected = self.selectedRanges()

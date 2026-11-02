@@ -35,10 +35,6 @@ def auto_patch_dialogs(monkeypatch_message_box):
 # 1. Atomic Save Characterization (0-Byte Truncation Hazard)
 # ==============================================================================
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Legacy save uses direct open('w') without atomic temp+replace, causing 0-byte truncation on failure (ADR-015 T-015.1)",
-)
 def test_legacy_non_atomic_save_truncates_file_on_write_error_xfail(
     offscreen_window: ModernChartAnalysisApp,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,10 +100,6 @@ def test_legacy_non_atomic_save_truncates_file_on_write_error_xfail(
 # 2. Results Edits Divergence from Elements & Bars
 # ==============================================================================
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Results table edits do not write through to elements and bars without RowEditService (ADR-015 T-015.1)",
-)
 def test_results_edits_divergence_from_elements_and_bars_xfail(
     offscreen_window: ModernChartAnalysisApp,
 ):
@@ -156,10 +148,6 @@ def test_results_edits_divergence_from_elements_and_bars_xfail(
 # 3. Data Table Sweep Stale Overwrite Divergence
 # ==============================================================================
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Legacy save sweeps stale Data tab text, clobbering Results table edits (ADR-015 T-015.1)",
-)
 def test_data_table_sweep_clobbers_results_edits_xfail(
     offscreen_window: ModernChartAnalysisApp,
     monkeypatch: pytest.MonkeyPatch,
@@ -179,8 +167,8 @@ def test_data_table_sweep_clobbers_results_edits_xfail(
         offscreen_window.current_image_path = str(output_dir / "sample.png")
         offscreen_window.output_path_edit.setText(str(output_dir))
 
-        elements = [{"label": "Control", "value": 10.0}]
-        bars = [{"bar_label": "Control", "estimated_value": 10.0}]
+        elements = [{"label": "Control", "value": 10.0, "bbox": [0, 0, 10, 10]}]
+        bars = [{"bar_label": "Control", "estimated_value": 10.0, "bbox": [0, 0, 10, 10]}]
         rows = [{"group": "Control", "outcome": "M1", "value": 10.0, "review_status": "auto"}]
         offscreen_window.current_analysis_result = {
             "chart_type": "bar",

@@ -100,7 +100,7 @@ from visual.settings_dialog import SettingsDialog, save_settings_to_file, load_s
 from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 from visual.qt_utils import safe_combo_populate
 
-from core.export_manager import ExportManager
+from core.export_manager import ExportManager, atomic_write_json
 
 PROTOCOL_COLUMNS = ExportManager.PROTOCOL_COLUMNS
 READONLY_COLUMNS = frozenset({'source_file', 'page_index', 'chart_type', 'confidence'})
@@ -1241,6 +1241,9 @@ Click to configure advanced options."""
         self.protocol_table.viewport().installEventFilter(self)
         self.protocol_table.horizontalHeader().setStretchLastSection(True)
         self.protocol_table.cellChanged.connect(self._on_protocol_cell_changed)
+        if getattr(self, "session", None) is not None:
+            self.protocol_table.set_undo_stack(self.session.undo_stack, external_batch_handler=True)
+        self.protocol_table.batch_changes_requested.connect(self._on_protocol_batch_changes_requested)
         if hasattr(self.protocol_table, "paste_completed"):
             self.protocol_table.paste_completed.connect(self._on_protocol_paste_completed)
         proto_layout.addWidget(self.protocol_table)
@@ -2884,12 +2887,19 @@ Click to configure advanced options."""
                 if col_id == 'review_status' and text in status_colors:
                     item.setForeground(status_colors[text])
 
+                if row_dict.get('_monotonicity_warning') and col_id in ('whisker_low', 'q1', 'median', 'q3', 'whisker_high'):
+                    item.setBackground(QColor('#5a3015'))
+
                 table.setItem(r_idx, c_idx, item)
 
         table.blockSignals(False)
 
     def _on_protocol_cell_changed(self, row_idx, col_idx):
-        from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY
+        from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY, ensure_row_uids
+        from visual.row_edit_service import RowEditService, parse_outliers_value
+        from visual.edit_commands import EditCellCommand
+        import math
+
         chart_type = ''
         if self.current_analysis_result:
             chart_type = str(self.current_analysis_result.get('chart_type', '')).lower()
@@ -2909,13 +2919,8 @@ Click to configure advanced options."""
             return
 
         rows = (self.current_analysis_result or {}).get('protocol_rows', [])
-        from core.protocol_row_builder import ensure_row_uids
         ensure_row_uids(rows)
-        row_dict = None
-        for r in rows:
-            if isinstance(r, dict) and r.get('_uid') == row_uid:
-                row_dict = r
-                break
+        row_dict = RowEditService.find_row(self.current_analysis_result, row_uid)
         if row_dict is None:
             return
 
@@ -2924,9 +2929,8 @@ Click to configure advanced options."""
             return
         new_text = cell_item.text()
 
-        # Coerce and validate numeric columns before mutating row_dict
+        # Step 2: Parse and validate typed value
         if is_numeric:
-            import math
             from core.numeric_format import parse_user_float
             res = parse_user_float(new_text, allow_empty=True)
             if res.error or (res.value is not None and not math.isfinite(res.value)):
@@ -2953,37 +2957,201 @@ Click to configure advanced options."""
             if hasattr(table, "_current_data"):
                 table._current_data[(row_idx, col_idx)] = cell_item.text()
             table.blockSignals(False)
+        elif col_id in ("outliers", "outliers_str"):
+            parsed_outliers, err = parse_outliers_value(new_text)
+            if err is not None or parsed_outliers is None:
+                prev_val = row_dict.get(col_id)
+                if hasattr(table, "reject_cell_change"):
+                    table.reject_cell_change(row_idx, col_idx, prev_val, is_numeric=False)
+                else:
+                    table.blockSignals(True)
+                    cell_item.setText("" if prev_val is None else str(prev_val))
+                    table.blockSignals(False)
+                if hasattr(self, 'statusBar') and self.statusBar():
+                    self.statusBar().showMessage(f"Invalid outliers: {err}", 4000)
+                return
+            new_val = parsed_outliers
         else:
             new_val = new_text
 
-        # No-op if value is unchanged
-        if new_val == row_dict.get(col_id):
+        old_val = row_dict.get(col_id)
+        if new_val == old_val:
             return
 
-        # Snapshot _original on first valid edit
-        if row_dict.get('_original') is None:
-            row_dict['_original'] = {k: row_dict.get(k) for k, _, _ in active_cols}
+        # Steps 3 & 4: Write-through via RowEditService + recompute_row_status
+        record = RowEditService.apply(self.current_analysis_result, row_uid, col_id, new_val)
 
-        row_dict[col_id] = new_val
-
-        # Auto-set corrected status on value edits
-        if col_id != 'review_status':
-            row_dict['review_status'] = 'corrected'
-            status_col_idx = next(
-                (i for i, (cid, _, _) in enumerate(active_cols) if cid == 'review_status'), None
+        # Step 5: Push logical EditCellCommand onto session undo stack
+        session = getattr(self, "session", None)
+        refresh_fn = getattr(self, "_refresh_visible_protocol_rows_by_uid", None)
+        if session is not None:
+            cmd = EditCellCommand(
+                self.current_analysis_result,
+                row_uid,
+                col_id,
+                old_val,
+                new_val,
+                record=record,
+                on_after_apply=refresh_fn,
+                description=f"Edit {col_id}",
             )
-            if status_col_idx is not None:
-                table.blockSignals(True)
-                status_item = table.item(row_idx, status_col_idx)
-                if status_item:
-                    status_item.setText('corrected')
-                    status_item.setForeground(QColor('#FF9800'))
-                table.blockSignals(False)
+            session.undo_stack.push(cmd)
+            session.set_source_dirty("results_table", session.undo_stack.canUndo() or any(
+                isinstance(r, dict) and r.get("_original") is not None for r in rows
+            ))
+            session.protocol_rows_changed.emit(rows)
 
+        if row_dict.get("_monotonicity_warning") and hasattr(self, "statusBar") and self.statusBar():
+            self.statusBar().showMessage(
+                "Warning: Box plot quartiles/whiskers are non-monotonic (Min <= Q1 <= Median <= Q3 <= Max)",
+                5000,
+            )
+
+        # Step 7: Refresh visible cells
+        if callable(refresh_fn):
+            refresh_fn([row_uid])
+
+    def _on_protocol_batch_changes_requested(self, changes: list, description: str) -> None:
+        """Batch-apply Paste, Delete, or Ctrl+D Fill-Down through RowEditService as a single QUndoCommand."""
+        if not self.current_analysis_result or not changes:
+            return
+        from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY, ensure_row_uids
+        from visual.row_edit_service import RowEditService, parse_outliers_value
+        from visual.edit_commands import BatchEditCommand
+        from core.numeric_format import parse_user_float
+        import math
+
+        chart_type = str(self.current_analysis_result.get("chart_type", "")).lower()
+        active_cols = get_protocol_columns(chart_type)
+        rows = self.current_analysis_result.get("protocol_rows", [])
+        ensure_row_uids(rows)
+        table = self.protocol_table
+
+        edits = []
+        records = []
+        affected_uids = []
+
+        for r_idx, c_idx, _old_txt, new_txt in changes:
+            if c_idx >= len(active_cols):
+                continue
+            col_id, _, is_numeric = active_cols[c_idx]
+            if col_id in PROTOCOL_READONLY:
+                continue
+            uid_item = table.item(r_idx, 0)
+            if uid_item is None:
+                continue
+            row_uid = uid_item.data(Qt.ItemDataRole.UserRole)
+            if not row_uid:
+                continue
+            row_dict = RowEditService.find_row(self.current_analysis_result, row_uid)
+            if row_dict is None:
+                continue
+            if is_numeric:
+                res = parse_user_float(str(new_txt), allow_empty=True)
+                if res.error or (res.value is not None and not math.isfinite(res.value)):
+                    continue
+                coerced = res.value
+            elif col_id in ("outliers", "outliers_str"):
+                parsed_outliers, err = parse_outliers_value(new_txt)
+                if err is not None or parsed_outliers is None:
+                    continue
+                coerced = parsed_outliers
+            else:
+                coerced = str(new_txt)
+
+            old_val = row_dict.get(col_id)
+            if coerced == old_val:
+                continue
+            rec = RowEditService.apply(self.current_analysis_result, row_uid, col_id, coerced)
+            edits.append((row_uid, col_id, old_val, coerced))
+            records.append(rec)
+            if row_uid not in affected_uids:
+                affected_uids.append(row_uid)
+
+        if not records:
+            return
+
+        refresh_fn = getattr(self, "_refresh_visible_protocol_rows_by_uid", None)
         session = getattr(self, "session", None)
         if session is not None:
+            cmd = BatchEditCommand(
+                self.current_analysis_result,
+                edits=edits,
+                records=records,
+                on_after_apply=refresh_fn,
+                description=description,
+            )
+            session.undo_stack.push(cmd)
             session.set_source_dirty("results_table", True)
             session.protocol_rows_changed.emit(rows)
+
+        if callable(refresh_fn):
+            refresh_fn(affected_uids)
+
+    def _refresh_visible_protocol_rows_by_uid(self, row_uids: List[str]) -> None:
+        """Refresh visible cells in protocol_table matching row_uids without resetting scroll/selection."""
+        if not self.current_analysis_result or not hasattr(self, "protocol_table"):
+            return
+        from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY
+        from visual.row_edit_service import RowEditService
+        from visual.data_tab_schema import build_data_tab_model
+
+        chart_type = str(self.current_analysis_result.get("chart_type", "")).lower()
+        active_cols = get_protocol_columns(chart_type)
+        uid_set = set(row_uids)
+        table = self.protocol_table
+
+        status_colors = {
+            "corrected": QColor("#FF9800"),
+            "reviewed": QColor("#4CAF50"),
+            "auto": QColor("#d4d4d4"),
+        }
+
+        table.blockSignals(True)
+        try:
+            for r_idx in range(table.rowCount()):
+                first_item = table.item(r_idx, 0)
+                if first_item is None:
+                    continue
+                uid = first_item.data(Qt.ItemDataRole.UserRole)
+                if uid not in uid_set:
+                    continue
+                row_dict = RowEditService.find_row(self.current_analysis_result, uid)
+                if row_dict is None:
+                    continue
+                has_mono_warn = bool(row_dict.get("_monotonicity_warning"))
+                for c_idx, (col_id, _, is_numeric) in enumerate(active_cols):
+                    cell = table.item(r_idx, c_idx)
+                    if cell is None:
+                        continue
+                    raw = row_dict.get(col_id)
+                    if is_numeric:
+                        if raw is None or raw == "":
+                            cell.setData(Qt.ItemDataRole.DisplayRole, "")
+                        else:
+                            try:
+                                cell.setData(Qt.ItemDataRole.DisplayRole, float(raw))
+                            except (TypeError, ValueError):
+                                cell.setData(Qt.ItemDataRole.DisplayRole, str(raw))
+                        text = cell.text()
+                    else:
+                        text = "" if raw is None else str(raw)
+                        cell.setText(text)
+                    table._current_data[(r_idx, c_idx)] = text
+                    if col_id == "review_status":
+                        cell.setForeground(status_colors.get(text, QColor("#d4d4d4")))
+                    if col_id in ("whisker_low", "q1", "median", "q3", "whisker_high"):
+                        if has_mono_warn:
+                            cell.setBackground(QColor("#5a3015"))
+                        elif col_id not in PROTOCOL_READONLY:
+                            cell.setBackground(QColor("#1e1e1e"))
+        finally:
+            table.blockSignals(False)
+
+        # Keep Data tab inspector model synchronized
+        self.current_analysis_result["data_tab_model"] = build_data_tab_model(self.current_analysis_result)
+        if hasattr(self, "data_table"):
+            self._populate_data_tab()
 
     def _load_context_file(self):
         # Start the dialog in the input folder if available, else home dir
@@ -3208,9 +3376,11 @@ Click to configure advanced options."""
 
     def _update_results_from_gui(self):
         logging.debug("Updating results from GUI...")
-
-        for widget_id, widget_info in self.analysis_results_widgets.items():
-            new_text = widget_info['entry'].text()
+        for widget_id, widget_info in getattr(self, "analysis_results_widgets", {}).items():
+            if not isinstance(widget_info, dict) or 'entry' not in widget_info or 'original_item' not in widget_info:
+                continue
+            entry = widget_info['entry']
+            new_text = entry.text() if hasattr(entry, 'text') else ''
             original_item = widget_info['original_item']
 
             if widget_info.get('type') == 'bar_label':
@@ -3220,27 +3390,56 @@ Click to configure advanced options."""
                 logging.debug("Updating text from '%s' to '%s'", original_item.get('text'), new_text)
                 original_item['text'] = new_text
 
-        data_edits: List[Dict[str, Any]] = []
-        if hasattr(self, "data_table"):
-            self._rebuild_data_bindings_from_table()
-            for (row_idx, col_idx), binding in self.data_tab_bindings.items():
-                if not isinstance(binding, dict):
-                    continue
-                item = self.data_table.item(row_idx, col_idx)
-                if item is None:
-                    continue
-                edit = dict(binding)
-                edit["value"] = item.text()
-                data_edits.append(edit)
+        # Results table edits write through live via RowEditService (ADR-015 T-015.3).
+        if self.current_analysis_result is not None:
+            chart_type = str(self.current_analysis_result.get("chart_type", "")).lower()
+            rows = self.current_analysis_result.get("protocol_rows")
+            if isinstance(rows, list) and rows:
+                elements = self.current_analysis_result.get("elements", [])
+                bars = self.current_analysis_result.get("bars", [])
+                from visual.row_edit_service import RowEditService
+                for idx, r in enumerate(rows):
+                    if not isinstance(r, dict):
+                        continue
+                    el_idx = r.get("element_index")
+                    if el_idx is None:
+                        el_idx = idx
+                        r["element_index"] = el_idx
+                    targets = []
+                    if isinstance(elements, list) and 0 <= el_idx < len(elements) and isinstance(elements[el_idx], dict):
+                        targets.append(elements[el_idx])
+                    if isinstance(bars, list) and 0 <= el_idx < len(bars) and isinstance(bars[el_idx], dict) and (not targets or bars[el_idx] is not targets[0]):
+                        targets.append(bars[el_idx])
+                    for tgt in targets:
+                        for field_name in (
+                            "value", "group", "outcome", "error_bar_value", "error_bar_type",
+                            "percent", "value_x", "value_y", "median", "q1", "q3",
+                            "whisker_low", "whisker_high", "outliers"
+                        ):
+                            if field_name in r:
+                                RowEditService._write_field_to_element(tgt, r, chart_type, field_name, r[field_name])
+            elif hasattr(self, "data_table") and getattr(self, "data_tab_bindings", None):
+                # Fallback for legacy fixtures lacking protocol_rows
+                if hasattr(self, "_rebuild_data_bindings_from_table"):
+                    self._rebuild_data_bindings_from_table()
+                data_edits: List[Dict[str, Any]] = []
+                for (row_idx, col_idx), binding in self.data_tab_bindings.items():
+                    if not isinstance(binding, dict):
+                        continue
+                    item = self.data_table.item(row_idx, col_idx)
+                    if item is None:
+                        continue
+                    edit = dict(binding)
+                    edit["value"] = item.text()
+                    data_edits.append(edit)
+                if data_edits:
+                    from visual.data_tab_schema import apply_data_tab_edits
+                    apply_data_tab_edits(self.current_analysis_result, data_edits)
 
-        if data_edits:
-            apply_data_tab_edits(self.current_analysis_result, data_edits)
-        elif self.current_analysis_result is not None and not isinstance(
-            self.current_analysis_result.get("data_tab_model"), dict
-        ):
+            from visual.data_tab_schema import build_data_tab_model
             self.current_analysis_result["data_tab_model"] = build_data_tab_model(self.current_analysis_result)
-
-        self._refresh_protocol_rows_from_result()
+            if "protocol_rows" not in self.current_analysis_result and hasattr(self, "_refresh_protocol_rows_from_result"):
+                self._refresh_protocol_rows_from_result()
 
     def _refresh_protocol_rows_from_result(self):
         if not self.current_analysis_result:
@@ -3323,8 +3522,19 @@ Click to configure advanced options."""
             )
             
             json_path = output_path / f"{base_name}_analysis.json"
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(sanitize_for_json(self.current_analysis_result), f, ensure_ascii=False, indent=2)
+            atomic_write_json(json_path, self.current_analysis_result, compact=True)
+
+            # Persist protocol corrections and edited detections sidecars (ADR-014 T-014.2)
+            ExportManager.write_protocol_corrections_sidecar(
+                self.current_analysis_result, output_path, stem=base_name
+            )
+
+            # Rewrite summary sidecar (ADR-014 T-014.1b / T-015.3)
+            try:
+                from core.review_summary import build_summary, write_summary
+                write_summary(output_path / f"{base_name}_summary.json", build_summary(self.current_analysis_result))
+            except Exception as sum_err:
+                logging.getLogger(__name__).warning("Failed to update summary sidecar: %s", sum_err)
 
             output_settings = (self.advanced_settings or {}).get('output_settings', {})
             if output_settings.get('save_annotated_image', False):

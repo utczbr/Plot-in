@@ -672,6 +672,10 @@ class FileListCacheMixin:
             if isinstance(normalized_raw, dict) and isinstance(normalized_raw.get("protocol_rows"), list):
                 from core.protocol_row_builder import ensure_row_uids
                 ensure_row_uids(normalized_raw["protocol_rows"])
+            if hasattr(self, "_maybe_restore_draft") and self._maybe_restore_draft(
+                image_path, json_path, base_result=normalized_raw
+            ):
+                return
             self.current_analysis_result = self._normalize_result_for_gui(normalized_raw)
         except Exception as norm_exc:
             logging.getLogger(__name__).warning(

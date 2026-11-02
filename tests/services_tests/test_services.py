@@ -5,8 +5,13 @@ from unittest.mock import MagicMock
 
 sys.path.append('src')
 
-# Mock PyQt6 before importing modules that rely on it
-if 'PyQt6' not in sys.modules:
+# Import PyQt6 if available, otherwise mock for headless environments without PyQt6
+try:
+    import PyQt6
+    import PyQt6.QtCore
+    import PyQt6.QtGui
+    import PyQt6.QtWidgets
+except ImportError:
     mock_qt = MagicMock()
     sys.modules['PyQt6'] = mock_qt
     sys.modules['PyQt6.QtCore'] = mock_qt

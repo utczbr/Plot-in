@@ -3,12 +3,108 @@ Export Manager - Service for handling data export operations.
 """
 import json
 import csv
-from typing import Dict, Any, List, Optional
+import os
+from typing import Dict, Any, List, Optional, Union
 from pathlib import Path
 import numpy as np
+from utils import sanitize_for_json
+
+
+def atomic_write_json(
+    target_path: Union[str, Path],
+    payload: Any,
+    *,
+    compact: bool = False,
+    indent: Optional[int] = 2,
+) -> Path:
+    """Atomically write JSON to ``<target>.tmp``, flush+fsync, and ``os.replace``.
+
+    Guarantees that an interrupted write or serialization error never truncates
+    or corrupts an existing destination file (ADR-015 T-015.3 / DP-01).
+    """
+    dest = Path(target_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest.with_name(f"{dest.name}.tmp")
+    sanitized = sanitize_for_json(payload)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            if compact:
+                json.dump(sanitized, f, ensure_ascii=False, separators=(",", ":"))
+            else:
+                json.dump(sanitized, f, ensure_ascii=False, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, dest)
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
+    return dest
+
 
 class ExportManager:
     """Service for handling all data export operations."""
+
+    atomic_write_json = staticmethod(atomic_write_json)
+
+    @staticmethod
+    def write_protocol_corrections_sidecar(
+        result: Dict[str, Any],
+        output_dir: Union[str, Path],
+        stem: Optional[str] = None,
+    ) -> Optional[Path]:
+        """Write ``<stem>_protocol_corrections.json`` and ``<stem>_edited_detections.json``
+        when protocol rows have corrections or the image is reviewed/corrected (ADR-014 T-014.2).
+        """
+        if not isinstance(result, dict):
+            return None
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        resolved_stem = stem or Path(str(result.get("image_file", "result"))).stem
+
+        if result.get("review_status") in ("reviewed", "corrected"):
+            edited_path = out_dir / f"{resolved_stem}_edited_detections.json"
+            atomic_write_json(edited_path, result.get("detections", {}), compact=False, indent=2)
+
+        protocol_rows = result.get("protocol_rows", [])
+        if not isinstance(protocol_rows, list):
+            protocol_rows = []
+
+        corrected_entries = [
+            {
+                "row_index": idx,
+                "field_corrections": {
+                    k: r.get(k) for k in r.keys() if not k.startswith("_")
+                },
+                "original": r.get("_original"),
+                "review_status": r.get("review_status", "uncorrected"),
+            }
+            for idx, r in enumerate(protocol_rows)
+            if isinstance(r, dict)
+            and (r.get("review_status") == "corrected" or r.get("_original") is not None)
+        ]
+
+        corrections_path = out_dir / f"{resolved_stem}_protocol_corrections.json"
+        if corrected_entries or result.get("review_status") == "corrected":
+            corrections_payload = {
+                "schema_version": "1.0",
+                "image_file": str(result.get("image_file", "")),
+                "chart_type": str(result.get("chart_type", "")),
+                "review_status": result.get("review_status") or "corrected",
+                "rows": corrected_entries,
+            }
+            return atomic_write_json(corrections_path, corrections_payload, compact=False, indent=2)
+
+        # If all edits were reverted back to auto, remove stale corrections sidecar if present
+        if corrections_path.exists():
+            try:
+                corrections_path.unlink()
+            except OSError:
+                pass
+        return None
     
     @staticmethod
     def export_to_csv(data: Dict[str, Any], filename: str) -> bool:

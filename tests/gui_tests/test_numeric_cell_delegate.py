@@ -48,6 +48,7 @@ def _make_protocol_dummy_window(qapp):
     win._render_protocol_table = ModernChartAnalysisApp._render_protocol_table.__get__(win)
     win._on_protocol_cell_changed = ModernChartAnalysisApp._on_protocol_cell_changed.__get__(win)
     win._apply_protocol_filters = ModernChartAnalysisApp._apply_protocol_filters.__get__(win)
+    win._refresh_visible_protocol_rows_by_uid = ModernChartAnalysisApp._refresh_visible_protocol_rows_by_uid.__get__(win)
 
     win.protocol_table.cellChanged.connect(win._on_protocol_cell_changed)
     win.protocol_table.paste_completed.connect(win._on_protocol_paste_completed)

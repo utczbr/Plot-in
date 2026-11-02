@@ -51,6 +51,11 @@ def _values_equal(a: Any, b: Any) -> bool:
     if a_empty or b_empty:
         return False
 
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return False
+        return all(_values_equal(x, y) for x, y in zip(a, b))
+
     a_float = None
     b_float = None
     if isinstance(a, (int, float)):

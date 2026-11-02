@@ -26,6 +26,116 @@ logger = logging.getLogger(__name__)
 VALID_DIRTY_SOURCES = frozenset({"boxes", "ocr_text", "data_table", "results_table"})
 
 
+class SessionUndoStack(QObject):
+    """QtCore-only undo stack with QUndoStack-compatible API (limit 200, T-015.5).
+
+    Supports both duck-typed commands and ``PyQt6.QtGui.QUndoCommand`` objects
+    while keeping ``review_session.py`` strictly free of ``QtGui``/``QtWidgets`` imports.
+    """
+
+    indexChanged = pyqtSignal(int)
+    cleanChanged = pyqtSignal(bool)
+    canUndoChanged = pyqtSignal(bool)
+    canRedoChanged = pyqtSignal(bool)
+
+    def __init__(self, parent: Optional[QObject] = None, undo_limit: int = 200):
+        super().__init__(parent)
+        self._commands: List[Any] = []
+        self._index: int = 0
+        self._clean_index: int = 0
+        self._limit: int = undo_limit
+
+    def setUndoLimit(self, limit: int) -> None:
+        self._limit = max(1, int(limit))
+
+    def undoLimit(self) -> int:
+        return self._limit
+
+    def clear(self) -> None:
+        was_can_undo = self.canUndo()
+        was_can_redo = self.canRedo()
+        was_clean = self.isClean()
+        self._commands.clear()
+        self._index = 0
+        self._clean_index = 0
+        if was_can_undo:
+            self.canUndoChanged.emit(False)
+        if was_can_redo:
+            self.canRedoChanged.emit(False)
+        if not was_clean:
+            self.cleanChanged.emit(True)
+        self.indexChanged.emit(0)
+
+    def push(self, cmd: Any) -> None:
+        was_clean = self.isClean()
+        cmd.redo()
+        if self._index < len(self._commands):
+            if self._clean_index > self._index:
+                self._clean_index = -1
+            del self._commands[self._index :]
+        self._commands.append(cmd)
+        if len(self._commands) > self._limit:
+            overflow = len(self._commands) - self._limit
+            del self._commands[:overflow]
+            if self._clean_index >= 0:
+                self._clean_index -= overflow
+                if self._clean_index < 0:
+                    self._clean_index = -1
+        self._index = len(self._commands)
+        self.canUndoChanged.emit(self.canUndo())
+        self.canRedoChanged.emit(self.canRedo())
+        if was_clean != self.isClean():
+            self.cleanChanged.emit(self.isClean())
+        self.indexChanged.emit(self._index)
+
+    def canUndo(self) -> bool:
+        return self._index > 0
+
+    def canRedo(self) -> bool:
+        return self._index < len(self._commands)
+
+    def undo(self) -> None:
+        if not self.canUndo():
+            return
+        was_clean = self.isClean()
+        self._index -= 1
+        cmd = self._commands[self._index]
+        cmd.undo()
+        self.canUndoChanged.emit(self.canUndo())
+        self.canRedoChanged.emit(self.canRedo())
+        if was_clean != self.isClean():
+            self.cleanChanged.emit(self.isClean())
+        self.indexChanged.emit(self._index)
+
+    def redo(self) -> None:
+        if not self.canRedo():
+            return
+        was_clean = self.isClean()
+        cmd = self._commands[self._index]
+        self._index += 1
+        cmd.redo()
+        self.canUndoChanged.emit(self.canUndo())
+        self.canRedoChanged.emit(self.canRedo())
+        if was_clean != self.isClean():
+            self.cleanChanged.emit(self.isClean())
+        self.indexChanged.emit(self._index)
+
+    def count(self) -> int:
+        return len(self._commands)
+
+    def index(self) -> int:
+        return self._index
+
+    def isClean(self) -> bool:
+        return self._index == self._clean_index
+
+    def setClean(self) -> None:
+        was_clean = self.isClean()
+        self._clean_index = self._index
+        if not was_clean:
+            self.cleanChanged.emit(True)
+
+
 class ProcessingState(str, Enum):
     IDLE = "idle"
     ANALYSING = "analysing"
@@ -61,6 +171,14 @@ class ReviewSession(QObject):
         }
         self._dirty_sources: Set[str] = set()
         self._navigation_guard: Optional[Callable[[int], bool]] = None
+        self._undo_stack: SessionUndoStack = SessionUndoStack(self, undo_limit=200)
+        self._undo_stack.cleanChanged.connect(
+            lambda is_clean: self.set_source_dirty("results_table", not is_clean)
+        )
+
+    @property
+    def undo_stack(self) -> SessionUndoStack:
+        return self._undo_stack
 
     # --- Processing State ---
 
@@ -129,6 +247,7 @@ class ReviewSession(QObject):
     ) -> None:
         self._result = result
         self._context = context
+        self._undo_stack.clear()
         if self._result is not None:
             from core.protocol_row_builder import build_protocol_rows, ensure_row_uids
             if "protocol_rows" not in self._result:
@@ -257,6 +376,7 @@ class ReviewSession(QObject):
     def mark_clean(self) -> None:
         was_dirty = self.is_dirty
         self._dirty_sources.clear()
+        self._undo_stack.setClean()
         if was_dirty:
             self.dirty_changed.emit(False)
 

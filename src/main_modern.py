@@ -173,6 +173,7 @@ class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow)
         self.session = ReviewSession(self)
         self.session.filters_changed.connect(self._apply_protocol_filters)
         self.session.dirty_changed.connect(self._on_session_dirty_changed)
+        self.session.protocol_rows_changed.connect(lambda _rows: self._schedule_draft_autosave())
         self.session.processing_changed.connect(lambda _state: self._sync_navigation_bar())
         self.session.register_navigation_guard(self._check_unsaved_changes_guard)
         self._is_macos = sys.platform == "darwin"
@@ -288,6 +289,10 @@ class ModernChartAnalysisApp(CanvasEditorMixin, FileListCacheMixin, QMainWindow)
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_displayed_image)
         self.update_timer.setSingleShot(True)
+
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.timeout.connect(self._perform_draft_autosave)
 
         self.file_list_frame = None
         self.nav_frame = None
@@ -1164,7 +1169,10 @@ Click to configure advanced options."""
         self._editor_state = EditorStateManager(self)
         if hasattr(self._editor_state, "_undo_stack"):
             self._editor_state._undo_stack.cleanChanged.connect(
-                lambda is_clean: self.session.set_source_dirty("boxes", not is_clean)
+                lambda is_clean: (
+                    self.session.set_source_dirty("boxes", not is_clean),
+                    self._schedule_draft_autosave() if not is_clean else None,
+                )
                 if getattr(self, "session", None) else None
             )
         self._editor_toolbar = EditorToolbar(self, scale_fn=self._scaled_ui_px)
@@ -1280,7 +1288,206 @@ Click to configure advanced options."""
             self._apply_protocol_filters()
 
     def _on_session_dirty_changed(self, is_dirty: bool) -> None:
-        pass
+        if is_dirty:
+            self._schedule_draft_autosave()
+        else:
+            if hasattr(self, "_draft_timer") and self._draft_timer is not None:
+                self._draft_timer.stop()
+
+    def _get_autosave_config(self) -> Tuple[bool, int]:
+        """Return (enabled, interval_ms) from advanced_settings."""
+        settings = getattr(self, "advanced_settings", None)
+        if isinstance(settings, dict):
+            rev = settings.get("review_settings", {})
+            if isinstance(rev, dict):
+                enabled = bool(rev.get("autosave_draft", True))
+                interval = int(rev.get("autosave_interval_ms", 2000))
+                return enabled, max(50, interval)
+        return True, 2000
+
+    def _schedule_draft_autosave(self) -> None:
+        """Start or restart the debounced draft autosave timer if dirty."""
+        session = getattr(self, "session", None)
+        if session is None or not getattr(session, "is_dirty", False):
+            return
+        enabled, interval_ms = self._get_autosave_config()
+        if not enabled:
+            return
+        timer = getattr(self, "_draft_timer", None)
+        if timer is not None:
+            timer.start(interval_ms)
+
+    def _perform_draft_autosave(self) -> bool:
+        """Timer callback: flush widgets without UI refresh and write compact draft."""
+        session = getattr(self, "session", None)
+        if session is None or not getattr(session, "is_dirty", False):
+            return False
+        if not self.current_analysis_result or not getattr(self, "current_image_path", None):
+            return False
+
+        output_dir = (
+            self.output_path_edit.text().strip()
+            if hasattr(self, "output_path_edit") and self.output_path_edit is not None
+            else ""
+        )
+        if not output_dir:
+            return False
+
+        try:
+            from datetime import datetime, timezone
+            from visual.draft_store import get_draft_path, write_draft
+
+            self._flush_widgets_to_result(refresh_ui=False)
+
+            stem = getattr(self, "_unique_stems", {}).get(
+                self.current_image_path, Path(self.current_image_path).stem
+            )
+            draft_path = get_draft_path(output_dir, stem)
+
+            lightweight_result = {
+                k: v for k, v in self.current_analysis_result.items() if k != "detections"
+            }
+
+            editor_detections: List[Dict[str, Any]] = []
+            if getattr(self, "_det_scene", None) is not None and hasattr(
+                self._det_scene, "export_detections"
+            ):
+                try:
+                    exported = self._det_scene.export_detections()
+                    if isinstance(exported, dict):
+                        for cls_name, items in exported.items():
+                            if isinstance(items, list):
+                                for item in items:
+                                    if isinstance(item, dict):
+                                        entry = dict(item)
+                                        entry.setdefault("class_name", cls_name)
+                                        entry.pop("mask", None)
+                                        editor_detections.append(entry)
+                    elif isinstance(exported, list):
+                        for item in exported:
+                            if isinstance(item, dict):
+                                entry = dict(item)
+                                entry.pop("mask", None)
+                                editor_detections.append(entry)
+                except Exception as ex:
+                    logging.debug("Failed to export scene detections for draft: %s", ex)
+
+            payload = {
+                "schema_version": "1.0",
+                "image_file": os.path.basename(str(self.current_image_path)),
+                "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "result": sanitize_for_json(lightweight_result),
+                "editor_detections": sanitize_for_json(editor_detections),
+            }
+            return write_draft(draft_path, payload)
+        except Exception as exc:
+            logging.warning("Draft autosave failed: %s", exc)
+            return False
+
+    def _load_result_dict(
+        self,
+        result_dict: Dict[str, Any],
+        editor_detections: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Load a normalized or restored result dictionary into the session and UI."""
+        if isinstance(result_dict, dict) and isinstance(result_dict.get("protocol_rows"), list):
+            from core.protocol_row_builder import ensure_row_uids
+            ensure_row_uids(result_dict["protocol_rows"])
+
+        self.current_analysis_result = self._normalize_result_for_gui(result_dict)
+        if isinstance(result_dict.get("protocol_rows"), list):
+            session = getattr(self, "session", None)
+            if session is not None:
+                session.set_protocol_rows(result_dict["protocol_rows"])
+            else:
+                self.current_analysis_result["protocol_rows"] = result_dict["protocol_rows"]
+
+        self._update_ui_with_results()
+        self.update_displayed_image()
+
+        if editor_detections and getattr(self, "_det_scene", None) is not None:
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for det in editor_detections:
+                if isinstance(det, dict):
+                    cls_name = str(det.get("class_name") or det.get("label") or "bar")
+                    grouped.setdefault(cls_name, []).append(det)
+            if grouped and hasattr(self._det_scene, "set_detections"):
+                colors = getattr(self, "colors", None)
+                self._det_scene.set_detections(grouped, colors)
+
+    def _maybe_restore_draft(
+        self,
+        image_path: str,
+        json_path: Optional[str] = None,
+        base_result: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Check for a newer draft on image load and prompt Restore / Discard.
+
+        Returns:
+            bool: True if draft was restored into UI, False otherwise.
+        """
+        output_dir = (
+            self.output_path_edit.text().strip()
+            if hasattr(self, "output_path_edit") and self.output_path_edit is not None
+            else ""
+        )
+        if not output_dir or not image_path:
+            return False
+
+        from visual.draft_store import delete_draft, get_draft_path, is_draft_newer, read_draft
+
+        stem = getattr(self, "_unique_stems", {}).get(image_path, Path(image_path).stem)
+        draft_path = get_draft_path(output_dir, stem)
+        candidate_json = Path(json_path) if json_path else (Path(output_dir) / f"{stem}_analysis.json")
+
+        if not is_draft_newer(draft_path, candidate_json):
+            return False
+
+        draft_payload = read_draft(draft_path)
+        if not draft_payload:
+            delete_draft(draft_path)
+            return False
+
+        saved_at = draft_payload.get("saved_at", "an earlier session")
+        reply = QMessageBox.question(
+            self,
+            "Restore Unsaved Changes",
+            f"Restore unsaved changes from {saved_at}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            delete_draft(draft_path)
+            return False
+
+        draft_result = dict(draft_payload.get("result") or {})
+        detections = None
+        if isinstance(base_result, dict) and "detections" in base_result:
+            detections = base_result["detections"]
+        elif candidate_json.is_file():
+            try:
+                with open(candidate_json, "r", encoding="utf-8") as f:
+                    disk_data = json.load(f)
+                if isinstance(disk_data, dict):
+                    detections = disk_data.get("detections")
+            except Exception as exc:
+                logging.warning("Could not read detections from %s: %s", candidate_json, exc)
+
+        draft_result["detections"] = detections if isinstance(detections, dict) else {}
+        editor_detections = draft_payload.get("editor_detections", [])
+
+        self._load_result_dict(draft_result, editor_detections=editor_detections)
+        self._setup_navigation_controls()
+        if self._editor_toolbar:
+            self._editor_toolbar.setEnabled(True)
+
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.set_source_dirty("results_table", True)
+            if editor_detections:
+                session.set_source_dirty("boxes", True)
+        self.update_status(f"♻️ Restored draft from {saved_at}")
+        return True
 
     def _on_protocol_value_rejected(self, row: int, col: int, text_or_msg: str, reason: str = "") -> None:
         msg = reason or text_or_msg
@@ -1482,6 +1689,8 @@ Click to configure advanced options."""
             self.hover_clear_timer.stop()
         if hasattr(self, "update_timer"):
             self.update_timer.stop()
+        if hasattr(self, "_draft_timer") and self._draft_timer is not None:
+            self._draft_timer.stop()
 
         if self.analysis_thread:
             safely_stop_thread(self.analysis_thread, timeout_ms=3000, force_terminate=True)
@@ -1534,6 +1743,8 @@ Click to configure advanced options."""
     def _discard_current_draft(self) -> None:
         """Safely delete any autosaved draft for the current image."""
         try:
+            if hasattr(self, "_draft_timer") and self._draft_timer is not None:
+                self._draft_timer.stop()
             from visual.draft_store import delete_draft, get_draft_path
             output_dir = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") else ""
             if output_dir and getattr(self, "current_image_path", None):
@@ -1719,6 +1930,8 @@ Click to configure advanced options."""
             self.hover_clear_timer.stop()
         if hasattr(self, 'update_timer'):
             self.update_timer.stop()
+        if hasattr(self, '_draft_timer') and self._draft_timer is not None:
+            self._draft_timer.stop()
         
         # Clear image label FIRST to release pixmap reference
         if hasattr(self, 'image_label'):
@@ -1937,7 +2150,22 @@ Click to configure advanced options."""
                 list(result.keys()) if isinstance(result, dict) else "N/A",
             )
             try:
-                self.current_analysis_result = self._normalize_result_for_gui(result)
+                normalized_res = self._normalize_result_for_gui(result)
+                stem = getattr(self, "_unique_stems", {}).get(
+                    self.current_image_path,
+                    Path(self.current_image_path).stem if self.current_image_path else "",
+                )
+                output_dir = Path(self.output_path_edit.text()) if hasattr(self, "output_path_edit") else Path()
+                json_candidate = output_dir / f"{stem}_analysis.json" if stem else None
+                if hasattr(self, "_maybe_restore_draft") and self._maybe_restore_draft(
+                    self.current_image_path,
+                    str(json_candidate) if json_candidate and json_candidate.exists() else None,
+                    base_result=normalized_res,
+                ):
+                    if self._editor_toolbar:
+                        self._editor_toolbar.setEnabled(True)
+                    return
+                self.current_analysis_result = normalized_res
             except Exception as norm_exc:
                 logging.exception("_normalize_result_for_gui raised an exception: %s", norm_exc)
                 self._clear_display()
@@ -2190,6 +2418,8 @@ Click to configure advanced options."""
                         is_dirty = True
                         break
             session.set_source_dirty("ocr_text", is_dirty)
+            if is_dirty:
+                self._schedule_draft_autosave()
 
     def _go_to_prev_data_page(self):
         if not self.current_analysis_result:
@@ -2292,6 +2522,7 @@ Click to configure advanced options."""
         session = getattr(self, "session", None)
         if session is not None:
             session.set_source_dirty("data_table", True)
+            self._schedule_draft_autosave()
 
     def eventFilter(self, watched, event):
         if (
@@ -3374,8 +3605,8 @@ Click to configure advanced options."""
             self.hover_clear_timer.stop()
             self.hover_clear_timer.start(110)
 
-    def _update_results_from_gui(self):
-        logging.debug("Updating results from GUI...")
+    def _flush_widgets_to_result(self, refresh_ui: bool = False) -> None:
+        logging.debug("Flushing widgets to result (refresh_ui=%s)...", refresh_ui)
         for widget_id, widget_info in getattr(self, "analysis_results_widgets", {}).items():
             if not isinstance(widget_info, dict) or 'entry' not in widget_info or 'original_item' not in widget_info:
                 continue
@@ -3438,8 +3669,11 @@ Click to configure advanced options."""
 
             from visual.data_tab_schema import build_data_tab_model
             self.current_analysis_result["data_tab_model"] = build_data_tab_model(self.current_analysis_result)
-            if "protocol_rows" not in self.current_analysis_result and hasattr(self, "_refresh_protocol_rows_from_result"):
+            if refresh_ui and "protocol_rows" not in self.current_analysis_result and hasattr(self, "_refresh_protocol_rows_from_result"):
                 self._refresh_protocol_rows_from_result()
+
+    def _update_results_from_gui(self):
+        ModernChartAnalysisApp._flush_widgets_to_result(self, refresh_ui=True)
 
     def _refresh_protocol_rows_from_result(self):
         if not self.current_analysis_result:
@@ -3560,6 +3794,7 @@ Click to configure advanced options."""
             self._benchmark_result_cache[str(self.current_image_path)] = str(json_path)
             self._update_file_list_button_cached_state(self.current_image_index, cached=True)
             self.refresh_low_confidence_tab()
+            self._discard_current_draft()
             session = getattr(self, 'session', None)
             if session is not None:
                 session.mark_clean()

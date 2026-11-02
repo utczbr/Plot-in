@@ -2,7 +2,7 @@
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QUndoCommand, QUndoStack
-from PyQt6.QtWidgets import QApplication, QTableWidget
+from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
 
 
 class TableEditCommand(QUndoCommand):
@@ -13,14 +13,27 @@ class TableEditCommand(QUndoCommand):
         self.changes = changes
         self._first_run = True
 
+    @staticmethod
+    def _set_cell_value(table, item, col, val, force_float: bool = False):
+        if force_float and val != "" and val is not None:
+            try:
+                item.setData(Qt.ItemDataRole.DisplayRole, float(val))
+                return
+            except (TypeError, ValueError):
+                pass
+        if isinstance(val, float):
+            item.setData(Qt.ItemDataRole.DisplayRole, val)
+            return
+        item.setText("" if val is None else str(val))
+
     def _apply(self, idx):
         self.table.blockSignals(True)
         try:
             for row, col, *vals in self.changes:
                 item = self.table.item(row, col)
                 if item:
-                    item.setText(vals[idx])
-                    self.table._current_data[(row, col)] = vals[idx]
+                    self._set_cell_value(self.table, item, col, vals[idx])
+                    self.table._current_data[(row, col)] = item.text()
         finally:
             self.table.blockSignals(False)
         self.table._is_editing_undo = True
@@ -48,6 +61,7 @@ class MultiSelectTableWidget(QTableWidget):
         self._undo_stack = QUndoStack(self)
         self._undo_stack.setUndoLimit(50)
         self._current_data = {}
+        self._command_history = []  # List of (changes, description) tuples
         self._is_editing_undo = False
         self.cellChanged.connect(self._on_cell_changed)
 
@@ -59,7 +73,51 @@ class MultiSelectTableWidget(QTableWidget):
         if rows == 0:
             self._undo_stack.clear()
             self._current_data.clear()
+            self._command_history.clear()
         super().setRowCount(rows)
+
+    def _push_command(self, changes, description: str):
+        idx = self._undo_stack.index()
+        del self._command_history[idx:]
+        self._command_history.append((list(changes), description))
+        limit = self._undo_stack.undoLimit()
+        if limit > 0 and len(self._command_history) > limit:
+            self._command_history = self._command_history[-limit:]
+        self._undo_stack.push(TableEditCommand(self, changes, description))
+
+    def reject_cell_change(self, row: int, col: int, previous_value=None, is_numeric: bool = False) -> None:
+        """Revert a rejected edit on (row, col) and remove it from the undo stack."""
+        idx = self._undo_stack.index()
+        if idx > 0 and idx <= len(self._command_history):
+            last_changes, _last_desc = self._command_history[idx - 1]
+            if len(last_changes) == 1 and last_changes[0][0] == row and last_changes[0][1] == col:
+                if previous_value is None:
+                    previous_value = last_changes[0][2]
+                kept_specs = self._command_history[: idx - 1]
+                self._undo_stack.clear()
+                self._command_history.clear()
+                self._is_editing_undo = True
+                try:
+                    for chg, desc in kept_specs:
+                        self._command_history.append((chg, desc))
+                        self._undo_stack.push(TableEditCommand(self, chg, desc))
+                finally:
+                    self._is_editing_undo = False
+
+        item = self.item(row, col)
+        if item is not None:
+            self.blockSignals(True)
+            try:
+                if previous_value is None or previous_value == "":
+                    item.setData(Qt.ItemDataRole.DisplayRole, "" if is_numeric else "")
+                    item.setText("")
+                else:
+                    TableEditCommand._set_cell_value(self, item, col, previous_value, force_float=is_numeric)
+                self._current_data[(row, col)] = item.text()
+            finally:
+                self.blockSignals(False)
+
+    revert_last_edit = reject_cell_change
 
     def _on_cell_changed(self, row, col):
         if self._is_editing_undo:
@@ -70,7 +128,7 @@ class MultiSelectTableWidget(QTableWidget):
         new_text, old_text = item.text(), self._current_data.get((row, col), "")
         if new_text != old_text:
             self._is_editing_undo = True
-            self._undo_stack.push(TableEditCommand(self, [(row, col, old_text, new_text)], "Edit Cell"))
+            self._push_command([(row, col, old_text, new_text)], "Edit Cell")
             self._is_editing_undo = False
             self._current_data[(row, col)] = new_text
 
@@ -93,11 +151,11 @@ class MultiSelectTableWidget(QTableWidget):
     def _apply_and_push(self, changes, desc):
         self.blockSignals(True)
         for r, c, _, new in changes:
-            self.item(r, c).setText(new)
-            self._current_data[(r, c)] = new
+            TableEditCommand._set_cell_value(self, self.item(r, c), c, new)
+            self._current_data[(r, c)] = self.item(r, c).text()
         self.blockSignals(False)
         self._is_editing_undo = True
-        self._undo_stack.push(TableEditCommand(self, changes, desc))
+        self._push_command(changes, desc)
         self._is_editing_undo = False
         for r, c, *_ in changes:
             self.cellChanged.emit(r, c)

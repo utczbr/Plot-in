@@ -1232,6 +1232,7 @@ Click to configure advanced options."""
 
         # --- table ---
         self.protocol_table = MultiSelectTableWidget()
+        self.protocol_table.setWordWrap(False)
         self.protocol_table.setColumnCount(len(PROTOCOL_COLUMNS))
         self.protocol_table.setHorizontalHeaderLabels(PROTOCOL_COLUMNS)
         self.protocol_table.setAlternatingRowColors(False)
@@ -1240,6 +1241,8 @@ Click to configure advanced options."""
         self.protocol_table.viewport().installEventFilter(self)
         self.protocol_table.horizontalHeader().setStretchLastSection(True)
         self.protocol_table.cellChanged.connect(self._on_protocol_cell_changed)
+        if hasattr(self.protocol_table, "paste_completed"):
+            self.protocol_table.paste_completed.connect(self._on_protocol_paste_completed)
         proto_layout.addWidget(self.protocol_table)
 
         # --- export button ---
@@ -1275,6 +1278,30 @@ Click to configure advanced options."""
 
     def _on_session_dirty_changed(self, is_dirty: bool) -> None:
         pass
+
+    def _on_protocol_value_rejected(self, row: int, col: int, text_or_msg: str, reason: str = "") -> None:
+        msg = reason or text_or_msg
+        if hasattr(self, "protocol_table") and self.protocol_table is not None:
+            item = self.protocol_table.item(row, col)
+            if item is not None:
+                item.setToolTip(msg)
+        if hasattr(self, "statusBar") and self.statusBar():
+            self.statusBar().showMessage(f"Invalid input: {msg}", 4000)
+
+    def _on_protocol_paste_completed(self, success_count: int, rejected_count: int, details: list) -> None:
+        if not (hasattr(self, "statusBar") and self.statusBar()):
+            return
+        total = success_count + rejected_count
+        if rejected_count > 0 and details:
+            r, c, _bad_text, _err = details[0]
+            header_item = self.protocol_table.horizontalHeaderItem(c) if hasattr(self, "protocol_table") else None
+            col_label = header_item.text() if header_item else str(c)
+            self.statusBar().showMessage(
+                f"Pasted {success_count} of {total} cells; {rejected_count} rejected (row {r + 1}, '{col_label}')",
+                4000,
+            )
+        elif success_count > 0:
+            self.statusBar().showMessage(f"Pasted {success_count} cells", 3000)
 
     def update_status(self, msg):
         self.status_bar.showMessage(msg)
@@ -2741,13 +2768,19 @@ Click to configure advanced options."""
 
     def _render_protocol_table(self, filtered_rows):
         from core.protocol_row_builder import get_protocol_columns, PROTOCOL_READONLY
+        from visual.numeric_delegate import NumericCellDelegate
         table = self.protocol_table
         table.blockSignals(True)
+        if hasattr(table, "setWordWrap"):
+            table.setWordWrap(False)
 
         # Determine chart type from current result for dynamic columns
         chart_type = ''
-        if self.current_analysis_result:
-            chart_type = str(self.current_analysis_result.get('chart_type', '')).lower()
+        res_dict = getattr(self, 'current_analysis_result', None)
+        if not res_dict and hasattr(self, 'session') and self.session is not None:
+            res_dict = getattr(self.session, 'result', None)
+        if res_dict:
+            chart_type = str(res_dict.get('chart_type', '')).lower()
         active_cols = get_protocol_columns(chart_type)
         col_ids     = [c[0] for c in active_cols]
         col_labels  = [c[1] for c in active_cols]
@@ -2759,6 +2792,38 @@ Click to configure advanced options."""
         ] != col_labels:
             table.setColumnCount(len(active_cols))
             table.setHorizontalHeaderLabels(col_labels)
+
+        if hasattr(table, "setItemDelegateForColumn"):
+            try:
+                adv = getattr(self, "advanced_settings", None)
+            except RuntimeError:
+                adv = self.__dict__.get("advanced_settings")
+            sig_digits = (
+                (adv or {})
+                .get("display_settings", {})
+                .get("significant_digits", 5)
+            )
+            try:
+                num_del = getattr(self, "_protocol_numeric_delegate", None)
+            except RuntimeError:
+                num_del = self.__dict__.get("_protocol_numeric_delegate")
+            if num_del is None:
+                num_del = NumericCellDelegate(
+                    table, sig=int(sig_digits), allow_empty=True
+                )
+                try:
+                    num_del.value_rejected.connect(self._on_protocol_value_rejected)
+                except Exception:
+                    pass
+                try:
+                    self._protocol_numeric_delegate = num_del
+                except RuntimeError:
+                    self.__dict__["_protocol_numeric_delegate"] = num_del
+            for c_idx, (_col_id, _col_label, is_numeric) in enumerate(active_cols):
+                if is_numeric:
+                    table.setItemDelegateForColumn(c_idx, num_del)
+                else:
+                    table.setItemDelegateForColumn(c_idx, None)
 
         table.setRowCount(len(filtered_rows))
 
@@ -2793,10 +2858,21 @@ Click to configure advanced options."""
                 overlay_data = {'bbox': bbox, 'class_name': default_overlay_class}
                 self.protocol_row_overlay_map[r_idx] = overlay_data
 
-            for c_idx, (col_id, col_label, _) in enumerate(active_cols):
-                raw  = row_dict.get(col_id, '')
-                text = '' if raw is None else str(raw)
-                item = QTableWidgetItem(text)
+            for c_idx, (col_id, col_label, is_numeric) in enumerate(active_cols):
+                raw = row_dict.get(col_id)
+                item = QTableWidgetItem()
+                if is_numeric:
+                    if raw is None or raw == '':
+                        item.setData(Qt.ItemDataRole.DisplayRole, '')
+                    else:
+                        try:
+                            item.setData(Qt.ItemDataRole.DisplayRole, float(raw))
+                        except (TypeError, ValueError):
+                            item.setData(Qt.ItemDataRole.DisplayRole, str(raw))
+                    text = item.text()
+                else:
+                    text = '' if raw is None else str(raw)
+                    item.setText(text)
                 item.setData(Qt.ItemDataRole.UserRole, row_uid)
                 if overlay_data:
                     item.setData(Qt.ItemDataRole.UserRole + 1, overlay_data)
@@ -2855,14 +2931,28 @@ Click to configure advanced options."""
             res = parse_user_float(new_text, allow_empty=True)
             if res.error or (res.value is not None and not math.isfinite(res.value)):
                 prev_val = row_dict.get(col_id)
-                table.blockSignals(True)
-                cell_item.setText("" if prev_val is None else str(prev_val))
-                table.blockSignals(False)
+                if hasattr(table, "reject_cell_change"):
+                    table.reject_cell_change(row_idx, col_idx, prev_val, is_numeric=True)
+                else:
+                    table.blockSignals(True)
+                    if prev_val is None or prev_val == "":
+                        cell_item.setData(Qt.ItemDataRole.DisplayRole, "")
+                    else:
+                        cell_item.setData(Qt.ItemDataRole.DisplayRole, float(prev_val))
+                    table.blockSignals(False)
                 if hasattr(self, 'statusBar') and self.statusBar():
                     err_msg = res.error or "Non-finite numeric values (NaN, Inf) not allowed"
                     self.statusBar().showMessage(f"Invalid input: {err_msg}", 4000)
                 return
             new_val = res.value
+            table.blockSignals(True)
+            if new_val is None:
+                cell_item.setData(Qt.ItemDataRole.DisplayRole, "")
+            else:
+                cell_item.setData(Qt.ItemDataRole.DisplayRole, float(new_val))
+            if hasattr(table, "_current_data"):
+                table._current_data[(row_idx, col_idx)] = cell_item.text()
+            table.blockSignals(False)
         else:
             new_val = new_text
 

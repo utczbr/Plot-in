@@ -43,8 +43,33 @@ def _import_paddle_full_engine():
     return PaddleOCRFullPipeline
 
 
-def _resolve_default_paddle_models(models_dir: Optional[Path] = None) -> Dict[str, str]:
-    """Resolve default PaddleOCR model paths from standard project locations."""
+# Options forwarded to the recognition engines only when the caller provides them
+# (defaults live in the engines, so there is a single source of truth).
+_REC_TUNING_KEYS = (
+    'rec_pad_mode', 'confidence_mode', 'try_both_orientations', 'try_vertical_hypotheses',
+    'vertical_aspect_ratio', 'orientation_margin', 'numeric_contexts', 'numeric_min_alt_mass',
+    'intra_op_threads', 'inter_op_threads',
+)
+
+
+def _rec_tuning_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: kwargs[k] for k in _REC_TUNING_KEYS if k in kwargs}
+
+
+def _resolve_default_paddle_models(
+    models_dir: Optional[Path] = None,
+    model_family: str = 'PP-OCRv5_server',
+) -> Dict[str, str]:
+    """
+    Resolve default PaddleOCR model paths from standard project locations.
+
+    ``model_family`` selects the file-name prefix, e.g. 'PP-OCRv5_server' (default) or
+    'PP-OCRv6_medium' / 'PP-OCRv6_small' -> ``{family}_det.onnx``, ``{family}_rec.onnx``,
+    ``{family}_rec.yml``. Official ONNX exports ship as ``inference.onnx`` inside a
+    per-model folder, so rename/copy them into ``models/OCR`` using these names.
+    """
+    if models_dir is not None:
+        models_dir = Path(models_dir)
     if models_dir is None:
         candidates = [
             Path(__file__).resolve().parents[2] / "src" / "models",
@@ -60,7 +85,7 @@ def _resolve_default_paddle_models(models_dir: Optional[Path] = None) -> Dict[st
             models_dir = candidates[0]
 
     ocr_dir = models_dir / "OCR"
-    dict_candidates = [ocr_dir / "PP-OCRv5_server_rec.yml", ocr_dir / "PP-OCRv5_server_rec.yaml"]
+    dict_candidates = [ocr_dir / f"{model_family}_rec.yml", ocr_dir / f"{model_family}_rec.yaml"]
     dict_path = dict_candidates[0]
     for dc in dict_candidates:
         if dc.exists():
@@ -75,8 +100,8 @@ def _resolve_default_paddle_models(models_dir: Optional[Path] = None) -> Dict[st
             break
 
     return {
-        'det_model_path': str(ocr_dir / "PP-OCRv5_server_det.onnx"),
-        'rec_model_path': str(ocr_dir / "PP-OCRv5_server_rec.onnx"),
+        'det_model_path': str(ocr_dir / f"{model_family}_det.onnx"),
+        'rec_model_path': str(ocr_dir / f"{model_family}_rec.onnx"),
         'dict_path': str(dict_path),
         'cls_model_path': str(ocr_dir / "PP-LCNet_x1_0_textline_ori.onnx"),
         'doc_ori_model_path': str(ocr_dir / "PP-LCNet_x1_0_doc_ori.onnx"),
@@ -106,7 +131,10 @@ class OCREngineFactory:
         Args:
             mode: OCR mode selector (defaults to 'paddle_onnx')
             use_gpu: Enable GPU acceleration
-            **kwargs: Model paths and tuning parameters
+            **kwargs: Model paths and tuning parameters. Also accepted: ``models_dir``,
+                ``model_family`` (e.g. 'PP-OCRv6_medium'), and the recognition options
+                listed in ``_REC_TUNING_KEYS`` (rec_pad_mode, confidence_mode,
+                try_both_orientations, numeric_contexts, ...).
 
         Returns:
             Initialized OCR engine instance
@@ -116,7 +144,9 @@ class OCREngineFactory:
         # Handle full document orientation / unwarping pipeline
         if normalized_mode in ('paddle_full', 'paddle_docs'):
             PaddleOCRFullPipeline = _import_paddle_full_engine()
-            defaults = _resolve_default_paddle_models()
+            defaults = _resolve_default_paddle_models(
+                kwargs.get('models_dir'), kwargs.get('model_family', 'PP-OCRv5_server')
+            )
 
             return PaddleOCRFullPipeline(
                 doc_ori_model_path=kwargs.get('doc_ori_model_path', defaults['doc_ori_model_path']),
@@ -133,7 +163,10 @@ class OCREngineFactory:
                 det_db_box_thresh=kwargs.get('det_db_box_thresh', 0.6),
                 det_db_unclip_ratio=kwargs.get('det_db_unclip_ratio', 1.5),
                 rec_batch_size=kwargs.get('rec_batch_size', 6),
-                max_workers=kwargs.get('max_workers', 4)
+                max_workers=kwargs.get('max_workers', 4),
+                cls_thresh=kwargs.get('cls_thresh', 0.9),
+                load_det_model=kwargs.get('load_det_model', False),
+                **_rec_tuning_kwargs(kwargs),
             )
 
         # Map legacy modes or unknown names to paddle_onnx with a log warning
@@ -144,7 +177,9 @@ class OCREngineFactory:
             )
 
         PaddleOCREngine = _import_paddle_onnx_engine()
-        defaults = _resolve_default_paddle_models()
+        defaults = _resolve_default_paddle_models(
+            kwargs.get('models_dir'), kwargs.get('model_family', 'PP-OCRv5_server')
+        )
 
         return PaddleOCREngine(
             det_model_path=kwargs.get('det_model_path', defaults['det_model_path']),
@@ -156,5 +191,8 @@ class OCREngineFactory:
             det_db_thresh=kwargs.get('det_db_thresh', 0.3),
             det_db_box_thresh=kwargs.get('det_db_box_thresh', 0.6),
             det_db_unclip_ratio=kwargs.get('det_db_unclip_ratio', 1.5),
-            rec_batch_size=kwargs.get('rec_batch_size', 6)
+            rec_batch_size=kwargs.get('rec_batch_size', 6),
+            cls_thresh=kwargs.get('cls_thresh', 0.9),
+            load_det_model=kwargs.get('load_det_model', False),
+            **_rec_tuning_kwargs(kwargs),
         )

@@ -1531,7 +1531,7 @@ class DetectionCanvasView(QGraphicsView):
     def __init__(self, scene: DetectionScene, parent=None):
         self._rubber_band = None
         self._rubber_band_origin = QPoint()
-        self._create_class_name = "box"  # Default
+        self._create_class_name = "bar"  # Default to primary element class
         self._create_slice_group: Optional[PieSliceGroup] = None
         super().__init__(scene, parent)
         self._det_scene = scene
@@ -1839,7 +1839,12 @@ class DetectionCanvasView(QGraphicsView):
                     
                     # Emit to scene
                     if hasattr(self._det_scene, "item_created"):
-                        self._det_scene.item_created.emit(self._create_class_name, xyxy)
+                        create_cls = self._create_class_name
+                        if not create_cls and hasattr(self._det_scene, "get_available_classes"):
+                            avail = self._det_scene.get_available_classes()
+                            if avail:
+                                create_cls = avail[0]
+                        self._det_scene.item_created.emit(create_cls or "bar", xyxy)
                 
                 event.accept()
                 return

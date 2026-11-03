@@ -51,6 +51,38 @@ class ExportManager:
     atomic_write_json = staticmethod(atomic_write_json)
 
     @staticmethod
+    def _resolve_result_unique_stem(result: Dict[str, Any], stem: Optional[str] = None) -> str:
+        """Resolve the unique stem from explicit argument, result metadata, or image path."""
+        if stem:
+            return str(stem)
+        if isinstance(result, dict):
+            identity = result.get("_image_identity") or (result.get("metadata") or {}).get("image_identity")
+            if isinstance(identity, dict) and identity.get("unique_stem"):
+                return str(identity["unique_stem"])
+            orig_path = result.get("original_image_path") or result.get("image_file", "result")
+            try:
+                from visual.file_list_controller import compute_unique_image_stem
+                return compute_unique_image_stem(orig_path)
+            except Exception:
+                return Path(str(orig_path)).stem
+        return "result"
+
+    @staticmethod
+    def write_edited_detections_sidecar(
+        result: Dict[str, Any],
+        output_dir: Union[str, Path],
+        stem: Optional[str] = None,
+    ) -> Optional[Path]:
+        """Write ``<stem>_edited_detections.json`` using the unified unique stem."""
+        if not isinstance(result, dict):
+            return None
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        resolved_stem = ExportManager._resolve_result_unique_stem(result, stem=stem)
+        edited_path = out_dir / f"{resolved_stem}_edited_detections.json"
+        return atomic_write_json(edited_path, result.get("detections", {}), compact=False, indent=2)
+
+    @staticmethod
     def write_protocol_corrections_sidecar(
         result: Dict[str, Any],
         output_dir: Union[str, Path],
@@ -63,11 +95,10 @@ class ExportManager:
             return None
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        resolved_stem = stem or Path(str(result.get("image_file", "result"))).stem
+        resolved_stem = ExportManager._resolve_result_unique_stem(result, stem=stem)
 
         if result.get("review_status") in ("reviewed", "corrected"):
-            edited_path = out_dir / f"{resolved_stem}_edited_detections.json"
-            atomic_write_json(edited_path, result.get("detections", {}), compact=False, indent=2)
+            ExportManager.write_edited_detections_sidecar(result, out_dir, stem=resolved_stem)
 
         protocol_rows = result.get("protocol_rows", [])
         if not isinstance(protocol_rows, list):
@@ -92,13 +123,13 @@ class ExportManager:
             corrections_payload = {
                 "schema_version": "1.0",
                 "image_file": str(result.get("image_file", "")),
+                "unique_stem": resolved_stem,
                 "chart_type": str(result.get("chart_type", "")),
                 "review_status": result.get("review_status") or "corrected",
                 "rows": corrected_entries,
             }
             return atomic_write_json(corrections_path, corrections_payload, compact=False, indent=2)
 
-        # If all edits were reverted back to auto, remove stale corrections sidecar if present
         if corrections_path.exists():
             try:
                 corrections_path.unlink()

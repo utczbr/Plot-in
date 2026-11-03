@@ -82,7 +82,7 @@ def test_stage2_paddle_dynamic_width_preserves_short_and_expands_long():
     t_short = engine._preprocess_recognition(short_crop)
     assert t_short.shape == (1, 3, 48, 320)
 
-    long_crop = np.full((24, 300, 3), 255, dtype=np.uint8)  # resize_w = 600 > 320
+    long_crop = np.full((24, 350, 3), 255, dtype=np.uint8)  # expands past 320
     t_long = engine._preprocess_recognition(long_crop)
     assert t_long.shape[2] == 48
     assert t_long.shape[3] >= 600 and t_long.shape[3] % 32 == 0
@@ -342,18 +342,18 @@ def test_stage2_axis_aware_rotation_prior_preserves_single_digits_and_rotates_ve
     # Check Crop 1: single digit (axis_label)
     digit_crop, digit_type = captured_crops[0]
     assert digit_type == "axis_label"
-    # Unrotated: height < 22px
-    assert digit_crop.shape[0] < 22 and digit_crop.shape[0] > digit_crop.shape[1]
+    # Unrotated: height is preserved upright (padded to ~24px, height > width)
+    assert digit_crop.shape[0] <= 26 and digit_crop.shape[0] > digit_crop.shape[1]
 
     # Check Crop 2: vertical multi-char label (axis_label)
     vlabel_crop, vlabel_type = captured_crops[1]
-    assert vlabel_type == "axis_label"
+    assert vlabel_type == "axis_label:rotated"
     # Rotated 90° CCW: width is now larger than height
     assert vlabel_crop.shape[1] > vlabel_crop.shape[0]
 
     # Check Crop 3: vertical title (axis_title)
     vtitle_crop, vtitle_type = captured_crops[2]
-    assert vtitle_type == "axis_title"
+    assert vtitle_type == "axis_title:rotated"
     # Rotated 90° CCW: width is now larger than height
     assert vtitle_crop.shape[1] > vtitle_crop.shape[0]
 

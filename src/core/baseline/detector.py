@@ -302,29 +302,25 @@ class ModularBaselineDetector:
 
             baseline_value = single_est
             if zero_baseline is not None and not np.isnan(zero_baseline):
-                if orientation == Orientation.HORIZONTAL:
+                snap_tol = 15.0 if orientation == Orientation.HORIZONTAL else 10.0
+                if abs(baseline_value - float(zero_baseline)) <= snap_tol:
                     self.logger.info(
-                        "Using calibrated X-axis baseline for horizontal chart: %.1fpx (overriding statistical estimate %.1fpx)",
+                        "Snapping %s baseline %.1f -> %.1f (calibration zero)",
+                        orientation.value,
+                        baseline_value,
                         zero_baseline,
-                        single_est,
                     )
                     baseline_value = float(zero_baseline)
                 else:
-                    snap_tol = 10.0
-                    if abs(baseline_value - float(zero_baseline)) <= snap_tol:
-                        self.logger.info("Snapping baseline %.1f -> %.1f (calibration zero)", baseline_value, zero_baseline)
-                        baseline_value = float(zero_baseline)
-                    else:
-                        self.logger.warning(
-                            "Baseline %.1f differs from calibration zero %.1f by %.1fpx (> %.1fpx tolerance)",
-                            baseline_value,
-                            zero_baseline,
-                            abs(baseline_value - zero_baseline),
-                            snap_tol,
-                        )
-                        self.logger.warning(
-                            "Vertical chart has significant baseline discrepancy. Consider checking axis labels or calibration quality."
-                        )
+                    self.logger.warning(
+                        "%s baseline %.1f differs from fallback calibration zero %.1f by %.1fpx (> %.1fpx tolerance); keeping geometric estimate %.1fpx",
+                        orientation.value.capitalize(),
+                        baseline_value,
+                        zero_baseline,
+                        abs(baseline_value - zero_baseline),
+                        snap_tol,
+                        baseline_value,
+                    )
 
             return BaselineResult(
                 baselines=[

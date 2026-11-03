@@ -283,7 +283,7 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
                 chart_elements=chart_elements,
                 img_width=w,
                 img_height=h,
-                orientation=orientation.value,
+                orientation=orientation,
             )
             diagnostics["label_classification"] = classified
         except Exception as exc:
@@ -529,19 +529,70 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         primary_labels = list(dual_decision.primary_labels) if dual_decision.primary_labels else []
         axis_type = "y" if orientation == Orientation.VERTICAL else "x"
 
-        # If primary scale labels are absent or insufficient (< 2), fall back to numeric tick labels
+        # Fallback 1: If scale_labels are insufficient (< 2), check numeric tick_labels
         if len(primary_labels) < 2:
             candidate_ticks = getattr(classified_labels, "tick_labels", []) or []
-            fallback_ticks = []
-            for lbl in candidate_ticks:
-                raw = str(lbl.get("text", "")).replace("$", "").replace("%", "").strip()
-                if lbl.get("cleanedvalue") is not None or is_numeric(raw):
-                    fallback_ticks.append(lbl)
+            fallback_ticks = [
+                lbl for lbl in candidate_ticks
+                if isinstance(lbl, dict) and (
+                    lbl.get("cleanedvalue") is not None
+                    or is_numeric(str(lbl.get("text", "")).replace("$", "").replace("%", "").strip())
+                )
+            ]
             if len(fallback_ticks) >= 2:
                 primary_labels = fallback_ticks
-                self.logger.info("Using %d numeric tick labels for primary axis fallback calibration", len(fallback_ticks))
+                self.logger.info(
+                    "Using %d numeric tick labels for primary axis fallback calibration",
+                    len(fallback_ticks),
+                )
 
         cal_primary = self.calibration_service.calibrate(primary_labels, axis_type=axis_type)
+        cal_r2 = getattr(cal_primary, "r_squared", getattr(cal_primary, "r2", None)) if cal_primary else None
+
+        # Fallback 2: If calibration failed or is degenerate (R² < FAILURE_R2),
+        # filter all numeric axis_labels that align along the scale axis margin
+        if (cal_primary is None or (cal_r2 is not None and cal_r2 < self.FAILURE_R2)) and self._axis_labels:
+            w, h = self.last_image_size or (1000, 1000)
+            numeric_pool = []
+            for lbl in self._axis_labels:
+                if not isinstance(lbl, dict) or not lbl.get("xyxy"):
+                    continue
+                raw_txt = str(lbl.get("text", "")).replace("$", "").replace("%", "").strip()
+                if lbl.get("cleanedvalue") is None and not is_numeric(raw_txt):
+                    continue
+                x1, y1, x2, y2 = lbl["xyxy"][:4]
+                cx, cy = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
+                # For vertical charts, scale labels share a vertical line (left/right margin);
+                # for horizontal charts, scale labels share a horizontal line (bottom/top margin).
+                perp_coord = cx if axis_type == "y" else cy
+                span = max(w if axis_type == "y" else h, 1)
+                numeric_pool.append((perp_coord / span, lbl))
+
+            if len(numeric_pool) >= 2:
+                # Group by perpendicular coordinate within 8% of image span to isolate the scale axis line
+                best_cluster: List[Dict[str, Any]] = []
+                for ref_pos, _ in numeric_pool:
+                    cluster = [lbl for pos, lbl in numeric_pool if abs(pos - ref_pos) <= 0.08]
+                    if len(cluster) > len(best_cluster):
+                        best_cluster = cluster
+
+                if len(best_cluster) >= 2:
+                    rescue_cal = self.calibration_service.calibrate(best_cluster, axis_type=axis_type)
+                    rescue_r2 = (
+                        getattr(rescue_cal, "r_squared", getattr(rescue_cal, "r2", 0.0))
+                        if rescue_cal is not None
+                        else 0.0
+                    )
+                    if rescue_cal is not None and (cal_r2 is None or rescue_r2 > cal_r2):
+                        self.logger.info(
+                            "Rescued %s-axis calibration using %d collinear numeric labels (R²=%.4f -> %.4f)",
+                            axis_type,
+                            len(best_cluster),
+                            cal_r2 if cal_r2 is not None else 0.0,
+                            rescue_r2,
+                        )
+                        cal_primary = rescue_cal
+
         calibrations["primary"] = cal_primary
         calibrations[axis_type] = cal_primary
 
@@ -619,10 +670,17 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         detector = ModularBaselineDetector(config=config)
         from core.enums import ChartType
 
+        classified_scale_labels = (
+            list(getattr(self._classified_labels, "scale_labels", []) or [])
+            if getattr(self, "_classified_labels", None) is not None
+            else []
+        )
+        baseline_axis_labels = classified_scale_labels if classified_scale_labels else self._axis_labels
+
         return detector.detect(
             img=image,
             chart_elements=chart_elements,
-            axis_labels=self._axis_labels,
+            axis_labels=baseline_axis_labels,
             orientation=orientation,
             chart_type=ChartType(self.get_chart_type()),
             primary_calibration_zero=primary_calibration_zero,

@@ -11,7 +11,7 @@ from .histogram_chart_classifier import HistogramChartClassifier
 from .heatmap_chart_classifier import HeatmapChartClassifier
 from .pie_chart_classifier import PieChartClassifier
 from .base_classifier import ClassificationResult, BaseChartClassifier
-from services.orientation_service import Orientation
+from services.orientation_service import Orientation, OrientationService
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ class ProductionSpatialClassifier:
         Returns:
             ClassificationResult with labeled elements and metadata
         """
+        orientation = OrientationService.from_any(orientation)
         # Select parameters based on confidence
         params = self._select_parameters(chart_type, classification_confidence)
         

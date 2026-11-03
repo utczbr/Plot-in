@@ -123,39 +123,55 @@ class AnalysisManager:
         doc_ori_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_doc_ori.onnx")
         unwarp_model_path = self._pick_existing(ocr_dir, "UVDoc.onnx", "UVDoc .onnx")
         textline_ori_model_path = self._pick_existing(ocr_dir, "PP-LCNet_x1_0_textline_ori.onnx")
+        ocr_cfg = settings.get('ocr_settings', {})
         perf_cfg = settings.get('performance', {})
-        use_gpu = bool(perf_cfg.get('use_gpu', False)) if isinstance(perf_cfg, dict) else False
-        
-        # Create OCR engine. Paddle is the only actively supported/selectable
-        # engine now (EasyOCR has been removed from the UI). Any legacy or
-        # unrecognized engine name (including a stale 'EasyOCR' value from an
-        # old saved config) falls back to Paddle rather than requiring an
-        # EasyOCR reader that is no longer wired up anywhere in the app.
-        if ocr_engine_name == 'Paddle_docs':
-            ocr_engine = OCREngineFactory.create_engine(
-                mode='paddle_full',
-                use_gpu=use_gpu,
-                doc_ori_model_path=str(doc_ori_model_path),
-                unwarp_model_path=str(unwarp_model_path),
-                det_model_path=str(det_model_path),
-                textline_ori_model_path=str(textline_ori_model_path),
-                rec_model_path=str(rec_model_path),
-                dict_path=str(dict_path),
-            )
+        if isinstance(ocr_cfg, dict) and 'use_gpu' in ocr_cfg:
+            use_gpu = bool(ocr_cfg.get('use_gpu', False))
+        elif isinstance(perf_cfg, dict):
+            use_gpu = bool(perf_cfg.get('use_gpu', False))
         else:
-            if ocr_engine_name not in ('Paddle',):
-                self.logger.warning(
-                    "OCR engine '%s' is no longer supported; using Paddle instead.",
-                    ocr_engine_name,
+            use_gpu = False
+
+        ocr_cache_key = (
+            ocr_engine_name,
+            str(models_dir.resolve()),
+            use_gpu,
+        )
+        if (
+            getattr(self, '_cached_ocr_engine', None) is not None
+            and getattr(self, '_cached_ocr_engine_key', None) == ocr_cache_key
+        ):
+            ocr_engine = self._cached_ocr_engine
+        else:
+            if ocr_engine_name == 'Paddle_docs':
+                ocr_engine = OCREngineFactory.create_engine(
+                    mode='paddle_full',
+                    use_gpu=use_gpu,
+                    doc_ori_model_path=str(doc_ori_model_path),
+                    unwarp_model_path=str(unwarp_model_path),
+                    det_model_path=str(det_model_path),
+                    textline_ori_model_path=str(textline_ori_model_path),
+                    rec_model_path=str(rec_model_path),
+                    dict_path=str(dict_path),
+                    enable_doc_orientation=False,
+                    enable_unwarping=False,
                 )
-            ocr_engine = OCREngineFactory.create_engine(
-                mode='paddle_onnx',
-                use_gpu=use_gpu,
-                det_model_path=str(det_model_path),
-                rec_model_path=str(rec_model_path),
-                dict_path=str(dict_path),
-                cls_model_path=str(cls_model_path),
-            )
+            else:
+                if ocr_engine_name not in ('Paddle',):
+                    self.logger.warning(
+                        "OCR engine '%s' is no longer supported; using Paddle instead.",
+                        ocr_engine_name,
+                    )
+                ocr_engine = OCREngineFactory.create_engine(
+                    mode='paddle_onnx',
+                    use_gpu=use_gpu,
+                    det_model_path=str(det_model_path),
+                    rec_model_path=str(rec_model_path),
+                    dict_path=str(dict_path),
+                    cls_model_path=str(cls_model_path),
+                )
+            self._cached_ocr_engine = ocr_engine
+            self._cached_ocr_engine_key = ocr_cache_key
         
         # Create calibration engine
         calibration_engine = CalibrationFactory.create(calibration_method)

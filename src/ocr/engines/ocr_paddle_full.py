@@ -1,71 +1,43 @@
 """
-Complete PaddleOCR ONNX Pipeline with 5-stage processing.
+PaddleOCR "full" engine: loads the page-level models plus the recognition stack.
 
-Pipeline stages (in order):
-1. Document Orientation Classification (PP-LCNet_x1_0_doc_ori): 0°/90°/180°/270°
-2. Document Unwarping (UVDoc): Correct geometric distortions
-3. Text Detection (PP-OCRv5_server_det): Locate text regions
-4. Text Line Orientation (PP-LCNet_x1_0_textline_ori): 0°/180° correction
-5. Text Recognition (PP-OCRv5_server_rec): Recognize characters
+IMPORTANT — what ``process_batch`` really runs
+----------------------------------------------
+``process_batch`` receives pre-cropped text lines, so only these stages execute:
 
-This provides state-of-the-art accuracy for document OCR by addressing:
-- Rotated document images (4-way orientation)
-- Warped/curved documents (geometric correction)
-- Inverted text lines (180° flips)
-- High-quality text detection and recognition
+    4. text-line orientation  (PP-LCNet_x1_0_textline_ori, 0/180)
+    5. text recognition       (PP-OCRv5/v6 rec + CTC)
 
-Performance: ~2-3 seconds per image on GPU (PP-OCRv5_server models)
+Stages 1-3 (document orientation, UVDoc unwarping, DB text detection) are loaded
+when enabled but are NOT executed by this class; they exist for a page-level
+caller. The old docstring implied all five ran on every call.
+
+All recognition logic is shared with ``PaddleOCREngine`` via
+``paddle_rec_common.PaddleRecognitionMixin``.
 """
 
-import cv2
-import numpy as np
-try:
-    import onnxruntime as ort
-except (ImportError, OSError):
-    ort = None  # type: ignore[assignment]
-from typing import List, Tuple, Optional, Dict, Union, Any
 import logging
 from pathlib import Path
+from typing import Iterable, Optional
+
 from ..ocr_base import BaseOCREngine
-from ..runtime.cache_runtime import ZeroCopyHashCache
-from concurrent.futures import ThreadPoolExecutor
-import time
-
-try:
-    import yaml
-except ModuleNotFoundError:
-    yaml = None
+from . import paddle_rec_common as common
+from .paddle_rec_common import PaddleRecognitionMixin, ort  # noqa: F401
 
 
-class PaddleOCRFullPipeline(BaseOCREngine):
+class PaddleOCRFullPipeline(PaddleRecognitionMixin, BaseOCREngine):
     """
-    Complete PaddleOCR pipeline with 5 ONNX models for maximum accuracy.
-    
-    Architecture:
-    - Stage 1: Document orientation (4-way: 0°/90°/180°/270°) → rotate full image
-    - Stage 2: Document unwarping → correct geometric distortions
-    - Stage 3: Text detection → locate text bounding boxes
-    - Stage 4: Text line orientation (2-way: 0°/180°) → rotate individual text lines
-    - Stage 5: Text recognition → CTC decoding to text
-    
     Args:
-        doc_ori_model_path: PP-LCNet_x1_0_doc_ori.onnx
-        unwarp_model_path: UVDoc.onnx
-        det_model_path: PP-OCRv5_server_det.onnx
-        textline_ori_model_path: PP-LCNet_x1_0_textline_ori.onnx
-        rec_model_path: PP-OCRv5_server_rec.onnx
-        dict_path: Character dictionary (YAML or TXT)
-        use_gpu: Enable GPU acceleration
-        enable_doc_orientation: Enable document rotation correction (Stage 1)
-        enable_unwarping: Enable document unwarping (Stage 2)
-        enable_textline_orientation: Enable text line rotation correction (Stage 4)
-        det_db_thresh: Detection probability threshold (0.3)
-        det_db_box_thresh: Detection box confidence threshold (0.6)
-        det_db_unclip_ratio: Detection box expansion ratio (1.5)
-        rec_batch_size: Recognition batch size (6-10)
-        max_workers: Parallel workers for batch processing
+        doc_ori_model_path / unwarp_model_path / det_model_path: page-level models
+            (loaded if enabled; unused by process_batch).
+        textline_ori_model_path: 0/180 orientation classifier.
+        rec_model_path, dict_path: recognition model and dictionary.
+        enable_*: toggles for loading the corresponding stage.
+        rec_batch_size: Max crops per ONNX call (now actually used).
+        intra_op_threads / inter_op_threads: ONNX Runtime threads (default 4/4 as before).
+        Remaining recognition options: see ``PaddleRecognitionMixin._configure_recognition``.
     """
-    
+
     def __init__(
         self,
         doc_ori_model_path: str,
@@ -82,399 +54,118 @@ class PaddleOCRFullPipeline(BaseOCREngine):
         det_db_box_thresh: float = 0.6,
         det_db_unclip_ratio: float = 1.5,
         rec_batch_size: int = 6,
-        max_workers: int = 4
+        max_workers: int = 4,
+        cls_thresh: float = 0.9,
+        load_det_model: bool = False,
+        intra_op_threads: int = 4,
+        inter_op_threads: int = 4,
+        rec_pad_mode: str = 'background',
+        confidence_mode: str = 'geometric',
+        try_both_orientations: bool = True,
+        try_vertical_hypotheses: bool = True,
+        vertical_aspect_ratio: float = 1.5,
+        orientation_margin: float = 0.1,
+        numeric_contexts: Optional[Iterable[str]] = None,
+        numeric_min_alt_mass: float = 0.2,
     ):
-        """
-        Initialize all 5 ONNX models for complete pipeline.
-        
-        Model loading strategy:
-        - Use CUDA provider for GPU acceleration
-        - Enable graph optimization for all models
-        - Extract input/output tensor names automatically
-        - Validate model paths before loading
-        """
-        # Configure ONNX Runtime
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 4
-        sess_options.inter_op_num_threads = 4
-        
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if use_gpu else ['CPUExecutionProvider']
-        
-        logging.info(f"Initializing PaddleOCR Full Pipeline with {len(providers)} providers")
-        
+        rt = common.require_ort()
+        sess_options = common.make_session_options(intra_op_threads, inter_op_threads)
+        providers = common.select_providers(use_gpu)
+        logging.info(f"Initializing PaddleOCR Full Pipeline with providers {providers}")
+
         try:
-            # Stage 1: Document Orientation Classification
-            # Input: [1, 3, 224, 224] RGB image (normalized)
-            # Output: [1, 4] probabilities for [0°, 90°, 180°, 270°]
+            # Stage 1: document orientation (loaded, not run by process_batch)
             if enable_doc_orientation and Path(doc_ori_model_path).exists():
-                self.doc_ori_session = ort.InferenceSession(
-                    doc_ori_model_path, sess_options=sess_options, providers=providers
-                )
+                self.doc_ori_session = rt.InferenceSession(doc_ori_model_path, sess_options=sess_options, providers=providers)
                 self._doc_ori_input = self.doc_ori_session.get_inputs()[0].name
                 self._doc_ori_output = self.doc_ori_session.get_outputs()[0].name
-                logging.info(f"Stage 1: Document orientation model loaded")
+                logging.info("Stage 1: Document orientation model loaded (not run on crops)")
             else:
                 self.doc_ori_session = None
-                logging.info(f"Stage 1: Document orientation DISABLED")
-            
-            # Stage 2: Document Unwarping (UVDoc)
-            # Input: [1, 3, H, W] RGB image
-            # Output: 3D mesh grid + 2D unwarping grid
+                logging.info("Stage 1: Document orientation DISABLED")
+
+            # Stage 2: UVDoc unwarping (loaded, not run by process_batch)
             if enable_unwarping and Path(unwarp_model_path).exists():
-                self.unwarp_session = ort.InferenceSession(
-                    unwarp_model_path, sess_options=sess_options, providers=providers
-                )
+                self.unwarp_session = rt.InferenceSession(unwarp_model_path, sess_options=sess_options, providers=providers)
                 self._unwarp_input = self.unwarp_session.get_inputs()[0].name
-                # UVDoc has multiple outputs: we need the unwarping grid
                 self._unwarp_output = self.unwarp_session.get_outputs()[0].name
-                logging.info(f"Stage 2: Document unwarping model loaded")
+                logging.info("Stage 2: Document unwarping model loaded (not run on crops)")
             else:
                 self.unwarp_session = None
-                logging.info(f"Stage 2: Document unwarping DISABLED")
-            
-            # Stage 3: Text Detection (PP-OCRv5_server_det)
-            # Input: [1, 3, H, W] BGR image (normalized, padded to 32x)
-            # Output: [1, 1, H, W] probability map
-            self.det_session = ort.InferenceSession(
-                det_model_path, sess_options=sess_options, providers=providers
-            )
-            self._det_input = self.det_session.get_inputs()[0].name
-            self._det_output = self.det_session.get_outputs()[0].name
-            logging.info(f"Stage 3: Text detection model loaded")
-            
-            # Stage 4: Text Line Orientation Classification
-            # Input: [1, 3, 48, 192] RGB image (normalized)
-            # Output: [1, 2] probabilities for [0°, 180°]
+                logging.info("Stage 2: Document unwarping DISABLED")
+
+            # Stage 3: detection (loaded only on request, not run by process_batch)
+            self.det_session = None
+            self._det_input = None
+            self._det_output = None
+            if load_det_model and det_model_path and Path(det_model_path).exists():
+                self.det_session = rt.InferenceSession(det_model_path, sess_options=sess_options, providers=providers)
+                self._det_input = self.det_session.get_inputs()[0].name
+                self._det_output = self.det_session.get_outputs()[0].name
+                logging.info("Stage 3: Text detection model loaded (not run on crops)")
+            else:
+                logging.info("Stage 3: Text detection DISABLED")
+
+            # Stage 4: text-line orientation (0/180)
             if enable_textline_orientation and Path(textline_ori_model_path).exists():
-                self.textline_ori_session = ort.InferenceSession(
-                    textline_ori_model_path, sess_options=sess_options, providers=providers
-                )
+                self.textline_ori_session = rt.InferenceSession(textline_ori_model_path, sess_options=sess_options, providers=providers)
                 self._textline_ori_input = self.textline_ori_session.get_inputs()[0].name
                 self._textline_ori_output = self.textline_ori_session.get_outputs()[0].name
-                logging.info(f"Stage 4: Text line orientation model loaded")
+                logging.info("Stage 4: Text line orientation model loaded")
             else:
                 self.textline_ori_session = None
-                logging.info(f"Stage 4: Text line orientation DISABLED")
-            
-            # Stage 5: Text Recognition (PP-OCRv5_server_rec)
-            # Input: [batch, 3, 48, W] RGB image (normalized, width varies)
-            # Output: [batch, seq_len, num_classes] character probabilities
-            self.rec_session = ort.InferenceSession(
-                rec_model_path, sess_options=sess_options, providers=providers
-            )
-            self._rec_input = self.rec_session.get_inputs()[0].name
-            self._rec_output = self.rec_session.get_outputs()[0].name
-            logging.info(f"Stage 5: Text recognition model loaded")
-            
+                logging.info("Stage 4: Text line orientation DISABLED")
+
+            # Stage 5: recognition
+            self.rec_session = rt.InferenceSession(rec_model_path, sess_options=sess_options, providers=providers)
+            self._rec_input_name = self.rec_session.get_inputs()[0].name
+            self._rec_output_name = self.rec_session.get_outputs()[0].name
+            logging.info("Stage 5: Text recognition model loaded")
         except Exception as e:
             logging.error(f"Failed to load ONNX models: {e}")
             raise RuntimeError(f"Model loading failed: {e}")
-        
-        # Load character dictionary
-        self.character_dict = self._load_character_dict(dict_path)
 
-        # Align trailing space token (' ') when model was exported with use_space_char=True
-        rec_in_shape = self.rec_session.get_inputs()[0].shape
-        rec_out_shape = self.rec_session.get_outputs()[0].shape
-        self._rec_dynamic_width = not isinstance(rec_in_shape[-1], int) if rec_in_shape else True
-        if (
-            rec_out_shape
-            and isinstance(rec_out_shape[-1], int)
-            and rec_out_shape[-1] == len(self.character_dict) + 1
-        ):
-            self.character_dict.append(' ')
+        # Names the shared mixin expects (old attribute names kept as aliases).
+        self._rec_input = self._rec_input_name
+        self._rec_output = self._rec_output_name
+        self.cls_session = self.textline_ori_session
+        self._cls_input_name = getattr(self, '_textline_ori_input', None)
+        self._cls_output_name = getattr(self, '_textline_ori_output', None)
 
+        self.character_dict = common.load_character_dict(dict_path)
+        self._rec_dynamic_width = common.align_dictionary_with_model(self.character_dict, self.rec_session)
         logging.info(f"Character dictionary loaded: {len(self.character_dict)} characters")
-        
-        # Store configuration
+
         self.use_gpu = use_gpu
         self.max_workers = max_workers
         self.enable_doc_orientation = enable_doc_orientation and self.doc_ori_session is not None
         self.enable_unwarping = enable_unwarping and self.unwarp_session is not None
         self.enable_textline_orientation = enable_textline_orientation and self.textline_ori_session is not None
-        
-        # Detection parameters
+        # Reserved for page-level detection (not used in process_batch).
         self.det_db_thresh = det_db_thresh
         self.det_db_box_thresh = det_db_box_thresh
         self.det_db_unclip_ratio = det_db_unclip_ratio
-        
-        # Recognition parameters
-        self.rec_batch_size = rec_batch_size
-        
-        # Cache and executor
-        self._hash_cache = ZeroCopyHashCache(max_size=512)
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        
-        logging.info(
-            f"PaddleOCR Full Pipeline initialized successfully. "
-            f"GPU: {use_gpu}, Stages active: "
-            f"[Doc Ori: {self.enable_doc_orientation}, "
-            f"Unwarp: {self.enable_unwarping}, "
-            f"Textline Ori: {self.enable_textline_orientation}]"
+
+        self._configure_recognition(
+            rec_batch_size=rec_batch_size,
+            cls_thresh=cls_thresh,
+            rec_pad_mode=rec_pad_mode,
+            confidence_mode=confidence_mode,
+            try_both_orientations=try_both_orientations,
+            try_vertical_hypotheses=try_vertical_hypotheses,
+            vertical_aspect_ratio=vertical_aspect_ratio,
+            orientation_margin=orientation_margin,
+            numeric_contexts=numeric_contexts,
+            numeric_min_alt_mass=numeric_min_alt_mass,
         )
-    
-    def _load_character_dict(self, dict_path: str) -> List[str]:
-        """
-        Load character dictionary from YAML or text file.
-        
-        Format: ['blank', 'a', 'b', 'c', ...] or YAML with 'character' key
-        """
-        path = Path(dict_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Dictionary not found: {dict_path}")
+        self._hash_cache = self._cache  # old attribute name
 
-        try:
-            if path.suffix in ['.yaml', '.yml']:
-                if yaml is None:
-                    raise RuntimeError(
-                        "PyYAML is required to load YAML dictionaries for PaddleOCR. "
-                        "Install with `pip install PyYAML` or use a plain text dictionary file."
-                    )
-                with open(dict_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    if isinstance(config, dict):
-                        # Look for character list in common keys
-                        if 'character' in config:
-                            characters = config['character']
-                        elif 'PostProcess' in config and isinstance(config['PostProcess'], dict) and 'character_dict' in config['PostProcess']:
-                            characters = config['PostProcess']['character_dict']
-                        else:
-                            # If no known key is found, we can't proceed
-                            raise ValueError("Could not find character list in YAML file.")
-                    elif isinstance(config, list):
-                        characters = config
-                    else:
-                        raise TypeError("Unsupported YAML format for dictionary.")
-            else:
-                with open(dict_path, 'r', encoding='utf-8') as f:
-                    characters = [line.rstrip('\r\n') for line in f if line.rstrip('\r\n') != '']
-            
-            if not isinstance(characters, list):
-                 raise TypeError(f"Character dictionary loaded from {dict_path} is not a list.")
+        logging.info(
+            "PaddleOCR Full Pipeline ready (crop mode: stages 4-5 execute in process_batch). "
+            f"GPU: {use_gpu}, Doc Ori loaded: {self.enable_doc_orientation}, "
+            f"Unwarp loaded: {self.enable_unwarping}, Textline Ori: {self.enable_textline_orientation}"
+        )
 
-            # Normalize ideographic spaces (\u3000) to standard ASCII spaces (' ')
-            characters = [(' ' if c in ('\u3000', ' ') else c) for c in characters]
-
-            # Ensure blank token exists
-            if 'blank' not in characters:
-                characters = ['blank'] + characters
-            
-            return characters
-        except Exception as e:
-            logging.error(f"Failed to load dictionary from {dict_path}: {e}")
-            raise
-    
-    def process_batch(
-        self,
-        crops_with_context: List[Tuple[np.ndarray, str]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Process pre-cropped text regions through pipeline.
-
-        For pre-cropped regions, we skip document-level stages (orientation, unwarping)
-        and apply text line orientation + recognition only.
-
-        Processing flow:
-        1. Optional: Classify text line orientation (0°/180°)
-        2. Optional: Rotate text line if needed
-        3. Recognize text using CTC decoding
-
-        Args:
-            crops_with_context: List of (crop, context) tuples
-                - crop: BGR image (H, W, 3)
-                - context: 'scale', 'tick', 'title', etc.
-
-        Returns:
-            List of results as {'text': str, 'confidence': float}
-        """
-        if not crops_with_context:
-            return []
-
-        results = []
-
-        for crop, context in crops_with_context:
-            try:
-                # Check cache
-                cached = self._hash_cache.get_by_hash(crop, context)
-                if cached is not None:
-                    results.append(cached)
-                    continue
-
-                # Stage 4: Text line orientation (optional)
-                if self.enable_textline_orientation:
-                    crop = self._classify_and_rotate_textline(crop)
-
-                # Stage 5: Recognition with confidence
-                text, confidence = self._recognize_text_region(crop)
-
-                result = {'text': text, 'confidence': confidence}
-                # Cache and store
-                self._hash_cache.put(crop, result, context)
-                results.append(result)
-
-            except Exception as e:
-                logging.warning(f"OCR failed for crop '{context}': {e}")
-                results.append({'text': '', 'confidence': 0.0})
-
-        return results
-    
-    def _classify_and_rotate_textline(self, image: np.ndarray) -> np.ndarray:
-        """
-        Stage 4: Classify text line orientation (0°/180°) and rotate if needed.
-        
-        PP-LCNet_x1_0_textline_ori preprocessing:
-        1. Resize to 80x160 (fixed size)
-        2. Convert BGR → RGB
-        3. Normalize: (pixel / 255.0 - 0.5) / 0.5 → [-1, 1]
-        4. Transpose to CHW, add batch dimension
-        
-        Output: [0, 1] → [0°, 180°]
-        
-        Args:
-            image: Text line crop in BGR
-        
-        Returns:
-            Potentially rotated text line
-        """
-        # Preprocess
-        img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (160, 80), interpolation=cv2.INTER_LINEAR)
-        img = img.astype(np.float32) / 255.0
-        img = (img - 0.5) / 0.5
-        
-        # CHW + batch
-        img = img.transpose(2, 0, 1)
-        img = np.expand_dims(img, axis=0)
-        
-        # Inference
-        output = self.textline_ori_session.run(
-            [self._textline_ori_output],
-            {self._textline_ori_input: img.astype(np.float32)}
-        )[0]
-        
-        # Get class: 0=0°, 1=180°
-        orientation_class = np.argmax(output[0])
-        
-        # Rotate if upside-down
-        if orientation_class == 1:
-            image = cv2.rotate(image, cv2.ROTATE_180)
-        
-        return image
-    
-    def _recognize_text_region(self, crop: np.ndarray) -> Tuple[str, float]:
-        """
-        Stage 5: Recognize text using PP-OCRv5_server_rec.
-
-        Preprocessing:
-        1. Resize to height=48, maintain aspect ratio
-        2. Pad/crop width to 320 (or dynamic)
-        3. Convert BGR → RGB
-        4. Normalize: (pixel / 255.0 - 0.5) / 0.5 → [-1, 1]
-        5. Transpose to CHW, add batch dimension
-
-        Args:
-            crop: Text region in BGR
-
-        Returns:
-            Tuple[str, float]: (recognized_text, confidence_score)
-        """
-        # Preprocess
-        preprocessed = self._preprocess_recognition(crop)
-
-        # Inference
-        rec_output = self.rec_session.run(
-            [self._rec_output],
-            {self._rec_input: preprocessed}
-        )[0]
-
-        # CTC decode with confidence
-        text, confidence = self._decode_recognition(rec_output[0])
-
-        return text, confidence
-    
-    def _preprocess_recognition(
-        self,
-        image: np.ndarray,
-        img_h: int = 48,
-        img_w: int = 320
-    ) -> np.ndarray:
-        """Preprocess for text recognition."""
-        img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h, w = img.shape[:2]
-        
-        # Resize to fixed height
-        ratio = img_h / max(h, 1)
-        resize_w = max(1, int(w * ratio))
-        img = cv2.resize(img, (resize_w, img_h), interpolation=cv2.INTER_LINEAR)
-        
-        # Pad width (320px for short tokens; dynamic 32x padding for long lines)
-        if resize_w <= img_w:
-            if resize_w < img_w:
-                padded = np.ones((img_h, img_w, 3), dtype=np.uint8) * 255
-                padded[:, :resize_w, :] = img
-                img = padded
-        elif getattr(self, '_rec_dynamic_width', True):
-            dyn_w = int(np.ceil(resize_w / 32.0) * 32)
-            if resize_w < dyn_w:
-                padded = np.ones((img_h, dyn_w, 3), dtype=np.uint8) * 255
-                padded[:, :resize_w, :] = img
-                img = padded
-        else:
-            img = cv2.resize(img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
-        
-        # Normalize to [-1, 1]
-        img = img.astype(np.float32) / 255.0
-        img = (img - 0.5) / 0.5
-        
-        # CHW + batch
-        img = img.transpose(2, 0, 1)
-        img = np.expand_dims(img, axis=0)
-        
-        return img.astype(np.float32)
-    
-    def _decode_recognition(self, preds: np.ndarray) -> Tuple[str, float]:
-        """CTC decoding for recognition output with confidence calculation."""
-        char_indices = np.argmax(preds, axis=1)
-        char_probs = np.max(preds, axis=1)  # Get max probabilities
-
-        decoded_chars = []
-        confidence_scores = []
-        previous_idx = -1
-
-        for idx, prob in zip(char_indices, char_probs):
-            if idx == previous_idx:
-                continue
-            if idx == 0 or idx >= len(self.character_dict):
-                previous_idx = idx
-                continue
-
-            decoded_chars.append(self.character_dict[idx])
-            confidence_scores.append(prob)
-            previous_idx = idx
-
-        # Calculate overall confidence as geometric mean of character probabilities
-        text = ''.join(decoded_chars)
-        if confidence_scores:
-            # Geometric mean is more robust to outliers than arithmetic mean
-            confidence = float(np.exp(np.mean(np.log(np.clip(confidence_scores, 1e-10, 1.0)))))
-        else:
-            confidence = 0.0
-
-        return text, confidence
-    
-    @staticmethod
-    def _compute_hash(image: np.ndarray) -> int:
-        """Compute fast hash for image deduplication."""
-        try:
-            # Try using xxhash for faster hashing
-            import xxhash
-            return xxhash.xxh64(image.tobytes()).intdigest()
-        except ImportError:
-            # Fallback to basic hash if xxhash not available
-            return hash(image.tobytes())
-    
-    def __del__(self):
-        """Clean up resources."""
-        if hasattr(self, '_executor'):
-            self._executor.shutdown(wait=False)
+    def _load_character_dict(self, dict_path: str):
+        """Backwards-compatible wrapper."""
+        return common.load_character_dict(dict_path)

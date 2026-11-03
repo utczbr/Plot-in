@@ -220,6 +220,30 @@ class FileListModel(QAbstractListModel):
             )
         return True
 
+    def reset_all_states(self) -> None:
+        """Reset all items in the model back to PENDING and uncached (used when clearing cache)."""
+        if not self._items:
+            return
+        for item in self._items:
+            item.state = ImageReviewState.PENDING.value
+            item.confidence = None
+            item.failure_reason = None
+            item.is_cached = False
+        top_left = self.index(0, 0)
+        bottom_right = self.index(len(self._items) - 1, 0)
+        self.dataChanged.emit(
+            top_left,
+            bottom_right,
+            [
+                Qt.ItemDataRole.DisplayRole,
+                Qt.ItemDataRole.ToolTipRole,
+                FileListRoles.StateRole,
+                FileListRoles.ConfidenceRole,
+                FileListRoles.FailureReasonRole,
+                FileListRoles.IsCachedRole,
+            ],
+        )
+
     def update_file_cached(self, file_path: str, cached: bool) -> bool:
         row = self._path_to_row.get(file_path)
         if row is None or not (0 <= row < len(self._items)):
@@ -432,14 +456,38 @@ class FileStateLoader(QRunnable):
             self.signals.finished.emit()
             return
 
+        from visual.file_list_controller import (
+            build_image_identity_metadata,
+            compute_unique_image_stem,
+            verify_identity_metadata,
+        )
+
         for fpath in self.file_paths:
             if self._is_cancelled:
                 break
 
-            stem = self.unique_stems.get(fpath, Path(fpath).stem)
+            stem = self.unique_stems.get(fpath) or compute_unique_image_stem(fpath)
             failed_file = self.output_dir / f"{stem}_failed.json"
             summary_file = self.output_dir / f"{stem}_summary.json"
             analysis_file = self.output_dir / f"{stem}_analysis.json"
+
+            # Fallback to raw stem only when unique_stems was not populated and legacy file exists
+            if (
+                fpath not in self.unique_stems
+                and not failed_file.is_file()
+                and not summary_file.is_file()
+                and not analysis_file.is_file()
+            ):
+                raw_stem = Path(fpath).stem
+                if (
+                    (self.output_dir / f"{raw_stem}_failed.json").is_file()
+                    or (self.output_dir / f"{raw_stem}_summary.json").is_file()
+                    or (self.output_dir / f"{raw_stem}_analysis.json").is_file()
+                ):
+                    stem = raw_stem
+                    failed_file = self.output_dir / f"{stem}_failed.json"
+                    summary_file = self.output_dir / f"{stem}_summary.json"
+                    analysis_file = self.output_dir / f"{stem}_analysis.json"
 
             # 1. Failed marker
             if failed_file.is_file():
@@ -461,12 +509,14 @@ class FileStateLoader(QRunnable):
                 )
                 continue
 
-            # 2. Summary sidecar (lightweight)
+            # 2. Summary sidecar (lightweight + identity check)
             if summary_file.is_file():
                 try:
                     with open(summary_file, "r", encoding="utf-8") as f:
                         summary_data = json.load(f)
-                    if isinstance(summary_data, dict):
+                    if isinstance(summary_data, dict) and verify_identity_metadata(
+                        fpath, summary_data.get("_image_identity")
+                    ):
                         state = derive_image_state(summary_data, threshold=self.threshold)
                         conf = summary_data.get("min_confidence")
                         self.signals.state_ready.emit(
@@ -483,7 +533,6 @@ class FileStateLoader(QRunnable):
 
             # 3. Analysis JSON exists
             if analysis_file.is_file():
-                # Emit unknown immediately to unblock UI
                 self.signals.state_ready.emit(
                     fpath,
                     ImageReviewState.UNKNOWN.value,
@@ -492,13 +541,30 @@ class FileStateLoader(QRunnable):
                     True,
                     self.generation,
                 )
-                # Off-thread backfill summary
                 try:
                     with open(analysis_file, "r", encoding="utf-8") as f:
                         res = json.load(f)
                     if isinstance(res, dict):
+                        stored_id = (
+                            res.get("_image_identity")
+                            or (res.get("metadata") or {}).get("image_identity")
+                        )
+                        if not verify_identity_metadata(fpath, stored_id):
+                            self.signals.state_ready.emit(
+                                fpath,
+                                ImageReviewState.PENDING.value,
+                                None,
+                                None,
+                                False,
+                                self.generation,
+                            )
+                            continue
                         summary = build_summary(res)
-                        write_summary(self.output_dir, stem, summary)
+                        summary["_image_identity"] = stored_id or build_image_identity_metadata(fpath, unique_stem=stem)
+                        try:
+                            write_summary(summary_file, summary)
+                        except TypeError:
+                            write_summary(self.output_dir, stem, summary)
                         state = derive_image_state(summary, threshold=self.threshold)
                         conf = summary.get("min_confidence")
                         self.signals.state_ready.emit(
@@ -513,7 +579,7 @@ class FileStateLoader(QRunnable):
                 except Exception as ex:
                     logger.warning("Failed to backfill summary for %s: %s", analysis_file, ex)
 
-            # 4. No files exist -> Pending
+            # 4. No valid cached files exist -> Pending
             self.signals.state_ready.emit(
                 fpath,
                 ImageReviewState.PENDING.value,

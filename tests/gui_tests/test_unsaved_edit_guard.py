@@ -120,6 +120,8 @@ def review_window(qapp, tmp_path: Path):
          patch.object(ModernChartAnalysisApp, "save_advanced_settings", lambda self: None), \
          patch.object(ModernChartAnalysisApp, "save_config", lambda self: None):
         win = ModernChartAnalysisApp(context=mock_ctx)
+    win.save_config = lambda: None
+    win.save_advanced_settings = lambda: None
     win.advanced_settings_file = tmp_path / "advanced_settings.json"
 
     out_dir = tmp_path / "output"

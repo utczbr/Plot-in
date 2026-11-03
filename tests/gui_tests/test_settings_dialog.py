@@ -73,7 +73,7 @@ def test_settings_dialog_basic_tab_layout_and_groups():
     assert "Review" in group_titles
     assert "Display" in group_titles
     assert "Workflow" in group_titles
-    assert "Paths" in group_titles
+    assert ("Paths" in group_titles or "Paths & Cache" in group_titles)
     assert "Extraction" in group_titles
 
 

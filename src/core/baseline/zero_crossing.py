@@ -106,6 +106,14 @@ def baseline_from_scale_zero(
     ]
     candidate_labels = axis_tagged if axis_tagged else axis_labels
 
+    # Exclude explicitly tagged tick_labels / axis_titles when scale_labels exist
+    scale_only = [
+        lbl for lbl in candidate_labels
+        if lbl.get("label_type") not in ("tick_label", "axis_title")
+    ]
+    if scale_only:
+        candidate_labels = scale_only
+
     usable = [
         lbl
         for lbl in candidate_labels
@@ -132,13 +140,17 @@ def baseline_from_scale_zero(
     if not usable:
         return None
 
-    zeros = [lbl for lbl in usable if abs(float(lbl["cleanedvalue"])) < 1e-6]
-    if zeros:
-        if is_vertical:
-            coords = [(z["xyxy"][1] + z["xyxy"][3]) / 2.0 for z in zeros]
-        else:
-            coords = [(z["xyxy"][0] + z["xyxy"][2]) / 2.0 for z in zeros]
-        return float(np.nanmean(coords))
+    zeros = [
+        lbl for lbl in usable
+        if abs(float(lbl["cleanedvalue"])) < 1e-6
+        and (
+            lbl.get("text") is None
+            or str(lbl.get("text", "")).strip().replace(".0", "").replace("-0", "0") in ("0", "0%", "$0")
+        )
+    ]
+    if len(zeros) == 1:
+        z = zeros[0]
+        return float((z["xyxy"][1] + z["xyxy"][3]) / 2.0 if is_vertical else (z["xyxy"][0] + z["xyxy"][2]) / 2.0)
 
     if len(usable) < 2:
         return None
@@ -161,8 +173,8 @@ def baseline_from_scale_zero(
 
         result = engine.calibrate(usable, axis_type)
 
-        if result is None or result.coeffs is None:
-            log.debug("Calibration returned None, falling back to interpolation")
+        if result is None or result.coeffs is None or getattr(result, "r2", 0.0) < 0.50:
+            log.debug("Calibration returned None or low R², falling back to interpolation")
             return baseline_fallback_interpolation(usable, is_vertical, logger=log)
 
         m, b = result.coeffs

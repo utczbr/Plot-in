@@ -193,43 +193,51 @@ class CanvasEditorMixin:
         if img_bgr is None:
             return
 
+        import math
         h_img, w_img = img_bgr.shape[:2]
         xyxy = item.detection.get('xyxy', [0, 0, 0, 0])
-        x1, y1, x2, y2 = [int(c) for c in xyxy]
+        rx1, ry1, rx2, ry2 = xyxy[:4]
+        x1, y1 = int(math.floor(float(rx1))), int(math.floor(float(ry1)))
+        x2, y2 = int(math.ceil(float(rx2))), int(math.ceil(float(ry2)))
         w_box = max(1, x2 - x1)
         h_box = max(1, y2 - y1)
 
-        if class_name in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_labels'):
-            if h_box > w_box:
-                pad_x = int(round(w_box * 0.20))
-                pad_y = int(round(h_box * 0.05))
-            else:
-                pad_x = int(round(w_box * 0.05))
-                pad_y = int(round(h_box * 0.20))
-        else:
-            pad_x = 5
-            pad_y = 5
+        should_rotate = False
+        if class_name in ('title', 'chart_title', 'axis_title', 'color_bar_title'):
+            if h_box > 1.35 * w_box:
+                should_rotate = True
+        elif class_name in ('axis_labels', 'axis_label', 'tick_label', 'data_label', 'color_bar_label'):
+            if h_box >= 24 and h_box > 2.0 * w_box:
+                should_rotate = True
+        elif h_box >= 24 and h_box > 2.0 * w_box:
+            should_rotate = True
 
-        x1_pad, y1_pad = max(0, x1 - pad_x), max(0, y1 - pad_y)
-        x2_pad, y2_pad = min(w_img, x2 + pad_x), min(h_img, y2 + pad_y)
+        if should_rotate:
+            pad_left = max(3, int(round(w_box * 0.25)))
+            pad_right = max(3, int(round(w_box * 0.25)))
+            pad_top = max(3, int(round(h_box * 0.08)))
+            pad_bottom = max(3, int(round(h_box * 0.08)))
+        else:
+            pad_left = max(4, int(round(h_box * 0.30)))
+            pad_right = max(4, int(round(h_box * 0.30)))
+            pad_top = max(1, int(round(h_box * 0.08)))
+            pad_bottom = max(4, int(round(h_box * 0.35)))
+
+        x1_pad, y1_pad = max(0, x1 - pad_left), max(0, y1 - pad_top)
+        x2_pad, y2_pad = min(w_img, x2 + pad_right), min(h_img, y2 + pad_bottom)
 
         crop = img_bgr[y1_pad:y2_pad, x1_pad:x2_pad]
         if crop.size == 0:
             return
 
-        should_rotate = False
-        if crop.size > 0:
-            if class_name in ('title', 'chart_title', 'axis_title'):
-                if crop.shape[0] > 1.2 * crop.shape[1]:
-                    should_rotate = True
-            elif class_name in ('axis_labels', 'axis_label', 'tick_label', 'data_label'):
-                if crop.shape[0] >= 22 and crop.shape[0] > 1.5 * crop.shape[1]:
-                    should_rotate = True
-            elif crop.shape[0] > 1.5 * crop.shape[1] and crop.shape[0] >= 22:
-                should_rotate = True
+        from pipelines.chart_pipeline import ChartAnalysisPipeline
 
         if should_rotate:
             crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            ocr_context = f"{class_name}:rotated"
+        else:
+            crop = ChartAnalysisPipeline._strip_border_tick_marks(crop)
+            ocr_context = class_name
 
         ocr_engine = self._get_active_ocr_engine()
         if not ocr_engine:
@@ -237,7 +245,7 @@ class CanvasEditorMixin:
 
         try:
             if hasattr(ocr_engine, 'process_batch'):
-                res_list = ocr_engine.process_batch([(crop, class_name)])
+                res_list = ocr_engine.process_batch([(crop, ocr_context)])
                 if res_list and len(res_list) > 0:
                     res = res_list[0]
                     if isinstance(res, dict):
@@ -253,7 +261,14 @@ class CanvasEditorMixin:
             else:
                 return
 
-            text = str(text).strip()
+            from ocr.preprocessing.ocr_validator import OCRValidator
+            validator = getattr(self, 'ocr_validator', None)
+            if validator is None:
+                validator = OCRValidator()
+            clean_text, _ = validator.validate_and_clean(str(text).strip(), context_type=class_name)
+            conf = validator.validate_confidence(clean_text, float(conf), context_type=class_name)
+            text = clean_text
+
             if hasattr(item, 'update_text_and_tooltip'):
                 item.update_text_and_tooltip(text, float(conf))
             else:
@@ -307,16 +322,50 @@ class CanvasEditorMixin:
         if self._editor_toolbar:
             self._editor_toolbar.sync_class_to_selection(new_class)
 
+    def _sync_canvas_create_class(self, class_name: str | None = None) -> None:
+        """Synchronize the canvas view's creation class with the toolbar or active chart type."""
+        if not self._det_canvas_view or not hasattr(self._det_canvas_view, "set_create_class"):
+            return
+
+        resolved = (class_name or "").strip()
+        if not resolved and self._editor_toolbar:
+            if hasattr(self._editor_toolbar, "_class_combo") and self._editor_toolbar._class_combo is not None:
+                resolved = self._editor_toolbar._class_combo.currentText().strip()
+            if not resolved and hasattr(self._editor_toolbar, "selected_class"):
+                resolved = (self._editor_toolbar.selected_class or "").strip()
+
+        if not resolved and self.current_analysis_result:
+            ct = str(self.current_analysis_result.get("chart_type", "")).lower().strip()
+            classes = self._CHART_TYPE_CLASSES.get(ct, self._CHART_TYPE_CLASSES_FALLBACK)
+            if classes:
+                resolved = classes[0]
+
+        if resolved:
+            self._det_canvas_view.set_create_class(resolved)
+
     def _on_scene_item_created(self, class_name, xyxy):
         """Handle new box drawn via rubber band."""
         if not self._editor_state or not self._det_scene:
             return
-        new_det = {"xyxy": xyxy, "conf": 1.0, "text": ""}
+        if not class_name and self._editor_toolbar:
+            class_name = getattr(self._editor_toolbar, "selected_class", "") or "bar"
+
+        colors_map = getattr(self._det_scene, "_colors", {})
+        palette = colors_map.get(class_name, colors_map.get("other")) if isinstance(colors_map, dict) else None
+
+        new_det = {"xyxy": list(xyxy), "conf": 1.0, "text": ""}
         new_item = EditableRectItem(
             xyxy=xyxy,
             class_name=class_name,
             detection=new_det,
+            colors=palette,
         )
+        if hasattr(self._det_scene, "_next_z_value"):
+            new_item._base_z = self._det_scene._next_z_value()
+            new_item.setZValue(new_item._base_z)
+        if hasattr(self._det_scene, "_mode"):
+            new_item.set_editor_mode(self._det_scene._mode)
+
         self._re_ocr_detection_item(new_item)
         self._editor_state.push(CreateCommand(self._det_scene, new_item))
         self._det_scene.highlight_item_by_bbox(xyxy, class_name)
@@ -364,9 +413,16 @@ class CanvasEditorMixin:
     def _on_editor_mode_changed(self, mode):
         """Switch canvas interaction mode via toolbar toggle."""
         if self._det_canvas_view:
+            self._sync_canvas_create_class()
             self._det_canvas_view.set_mode(mode)
 
     def _on_editor_class_dropdown_changed(self, new_class: str):
+        if not new_class:
+            return
+
+        # Always keep the canvas creation class synchronized with the dropdown
+        self._sync_canvas_create_class(new_class)
+
         if not self._editor_toolbar or not self._det_scene:
             return
 
@@ -375,10 +431,6 @@ class CanvasEditorMixin:
             if len(selected) == 1 and isinstance(selected[0], EditableRectItem):
                 if selected[0].class_name != new_class:
                     self._on_scene_item_class_changed(selected[0], new_class)
-
-        elif self._editor_toolbar._current_mode == EditorMode.CREATE_BOX:
-            if hasattr(self._det_canvas_view, "set_create_class"):
-                self._det_canvas_view.set_create_class(new_class)
 
     def _on_toolbar_chart_type_changed(self, new_type: str):
         """Handle chart type selection changes in the canvas editor toolbar."""
@@ -394,6 +446,7 @@ class CanvasEditorMixin:
             self._det_scene.set_available_classes(classes)
         if self._det_scene and hasattr(self._det_scene, "set_chart_type"):
             self._det_scene.set_chart_type(ct)
+        self._sync_canvas_create_class(classes[0] if classes else None)
         self.statusBar().showMessage(f"Chart type set to '{ct}'. Click Apply && Re-Extract to re-analyze.", 5000)
 
     def _on_editor_undo(self):
@@ -607,6 +660,7 @@ class CanvasEditorMixin:
                 self._det_scene.set_available_classes(classes)
             if self._det_scene and hasattr(self._det_scene, "set_chart_type"):
                 self._det_scene.set_chart_type(chart_type)
+            self._sync_canvas_create_class(classes[0] if classes else None)
 
         self._update_scene_display()
         self.statusBar().showMessage("🔄 Detections reset to auto-detected", 2000)
@@ -639,6 +693,7 @@ class CanvasEditorMixin:
                     self._det_scene.set_available_classes(classes)
                 if self._det_scene and hasattr(self._det_scene, "set_chart_type"):
                     self._det_scene.set_chart_type(chart_type.lower())
+                self._sync_canvas_create_class(classes[0] if classes else None)
                 has_keypoints = chart_type.lower() in ("pie",)
                 self._editor_toolbar.set_keypoint_buttons_visible(has_keypoints)
                 if hasattr(self._editor_toolbar, "_btn_apply"):

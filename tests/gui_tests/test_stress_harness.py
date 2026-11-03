@@ -169,13 +169,17 @@ class TestConfigIsolation:
     def test_config_files_unmodified_during_window_operations(self, window_factory):
         repo_root = Path(__file__).resolve().parents[2]
         gui_cfg_path = repo_root / "config" / "gui_config.json"
+        gui_tpl_path = repo_root / "config" / "gui_config.json.template"
         adv_cfg_path = repo_root / "config" / "advanced_settings.json"
 
         gui_sha_before = _compute_sha256(gui_cfg_path)
+        tpl_sha_before = _compute_sha256(gui_tpl_path)
         adv_sha_before = _compute_sha256(adv_cfg_path)
 
         # Create window with isolation
         win = window_factory()
+        assert win.image_files == []
+        assert win.current_image_index == -1
 
         # Attempt explicit save operations (should be no-ops)
         win.save_config()
@@ -185,9 +189,11 @@ class TestConfigIsolation:
         win.close()
 
         gui_sha_after = _compute_sha256(gui_cfg_path)
+        tpl_sha_after = _compute_sha256(gui_tpl_path)
         adv_sha_after = _compute_sha256(adv_cfg_path)
 
         assert gui_sha_before == gui_sha_after, "config/gui_config.json was modified by window lifecycle!"
+        assert tpl_sha_before == tpl_sha_after, "config/gui_config.json.template was modified by window lifecycle!"
         assert adv_sha_before == adv_sha_after, "config/advanced_settings.json was modified by window lifecycle!"
 
     def test_isolated_load_config_bypasses_real_config_content(self, window_factory):
@@ -199,6 +205,8 @@ class TestConfigIsolation:
         assert win.output_path_edit.text() == ""
         assert win.models_dir_edit.text() == ""
         assert win.conf_slider.value() == 4
+        assert win.image_files == []
+        assert win.current_image_index == -1
 
 
 class TestModelHardwareShielding:

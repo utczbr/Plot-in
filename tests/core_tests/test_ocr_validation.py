@@ -213,3 +213,113 @@ def test_analysis_manager_purged_relics_and_annotated_image():
         mock_save_annotated.assert_called_once()
 
 
+def test_ocr_validator_lookalike_digits_and_percentage_parsing():
+    """Verify OCRValidator allows S0/B0/Z0 digit corrections and preserves raw percentage scale values."""
+    validator = NumericOCRValidator()
+
+    # 1. Lookalike digit corrections: S0 -> 50, B0 -> 80, Z0 -> 20
+    assert validator._should_apply_digit_corrections("S0") is True
+    assert validator._should_apply_digit_corrections("B0") is True
+    assert validator._should_apply_digit_corrections("Z0") is True
+
+    val_s0, _ = validator.validate_numeric("S0")
+    assert val_s0 == 50.0
+
+    val_b0, _ = validator.validate_numeric("B0")
+    assert val_b0 == 80.0
+
+    val_z0, _ = validator.validate_numeric("Z0")
+    assert val_z0 == 20.0
+
+    # 2. Category codes B1, B2, S1, S2, Z1 must be protected
+    assert validator._should_apply_digit_corrections("B1") is False
+    assert validator._should_apply_digit_corrections("S2") is False
+    assert validator._should_apply_digit_corrections("Z3") is False
+
+    # 3. Percentage values in _parse_number must return raw scale values (not divided by 100)
+    parsed_20 = validator._parse_number("20%")
+    assert parsed_20 == 20.0
+
+    parsed_100 = validator._parse_number("100%")
+    assert parsed_100 == 100.0
+
+    val_pct, _ = validator.validate_numeric("20%")
+    assert val_pct == 20.0
+
+
+def test_ocr_validator_normalize_word_casing():
+    """Verify _normalize_word_casing corrects OCR casing corruptions while protecting acronyms and scientific symbols."""
+    validator = ContextOCRValidator()
+
+    # Mixed-case corruptions with glued digits
+    assert validator._normalize_word_casing("CateGorY4") == "Category 4"
+    assert validator._normalize_word_casing("CATEGorY3") == "Category 3"
+    assert validator._normalize_word_casing("category2") == "category 2"
+
+    # Preserved cases
+    assert validator._normalize_word_casing("Category 1") == "Category 1"
+    assert validator._normalize_word_casing("CATEGORY") == "CATEGORY"
+    assert validator._normalize_word_casing("category") == "category"
+    assert validator._normalize_word_casing("mRNA") == "mRNA"
+    assert validator._normalize_word_casing("pH") == "pH"
+    assert validator._normalize_word_casing("IgG") == "IgG"
+    assert validator._normalize_word_casing("CO2") == "CO2"
+    assert validator._normalize_word_casing("HbA1c") == "HbA1c"
+    assert validator._normalize_word_casing("B1") == "B1"
+
+    # Integration via validate_and_clean for non-scale context
+    cleaned_tick, _ = validator.validate_and_clean("CateGorY4", context_type="tick_label")
+    assert cleaned_tick == "Category 4"
+
+    # Scale context should skip casing normalization
+    cleaned_scale, _ = validator.validate_and_clean("100", context_type="scale")
+    assert cleaned_scale == "100"
+
+
+def test_chart_pipeline_strip_border_tick_marks():
+    """Verify _strip_border_tick_marks removes intruding tick mark stubs from top border."""
+    import cv2
+    from src.pipelines.chart_pipeline import ChartAnalysisPipeline
+
+    # White crop with black text at bottom and small tick mark at top edge
+    crop = np.full((30, 80, 3), 255, dtype=np.uint8)
+    # Intruding tick mark tip touching top row: 3px wide, 3px tall at x=40..42
+    crop[0:3, 40:43, :] = 0
+    # Text stroke below (e.g. at y=10..25)
+    crop[10:25, 20:60, :] = 0
+
+    stripped = ChartAnalysisPipeline._strip_border_tick_marks(crop)
+
+    # Tick mark at y=0..2, x=40..42 should be erased (restored to white background >= 250)
+    assert np.all(stripped[0:3, 40:43, :] >= 250)
+    # Text stroke at y=10..25 should remain black (0)
+    assert np.any(stripped[10:25, 20:60, :] == 0)
+
+
+def test_chart_pipeline_harmonize_series_labels():
+    """Verify _harmonize_series_labels harmonizes series labels with dirty OCR corruptions."""
+    from src.pipelines.chart_pipeline import ChartAnalysisPipeline
+
+    regions = [
+        {"text": "Category 1", "ocr_confidence": 0.95},
+        {"text": "category2", "ocr_confidence": 0.82},
+        {"text": "CATEGorY3", "ocr_confidence": 0.70},
+        {"text": "CateGorY4", "ocr_confidence": 0.75},
+        {"text": "Cat_gory 5", "ocr_confidence": 0.60},
+    ]
+
+    ChartAnalysisPipeline._harmonize_series_labels(regions)
+
+    expected_texts = [
+        "Category 1",
+        "Category 2",
+        "Category 3",
+        "Category 4",
+        "Category 5",
+    ]
+    for i, reg in enumerate(regions):
+        assert reg["text"] == expected_texts[i]
+
+
+
+

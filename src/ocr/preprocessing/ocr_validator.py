@@ -85,7 +85,8 @@ class OCRValidator:
             return False
         if all(c.isalpha() or c == '|' for c in stripped):
             return len(stripped) == 1 and stripped in ('O', 'o', 'I', 'l', '|')
-        if re.match(r'^[BSZbsz]\d+$', stripped):
+        # Protect category codes like B1, B2, S1, S2, Z1, but allow round numbers like S0 (50), B0 (80), Z0 (20)
+        if re.match(r'^[BSZbsz][1-9]\d*$', stripped):
             return False
         return True
 
@@ -117,8 +118,38 @@ class OCRValidator:
                 and corrected.count(opener) > corrected.count(closer)
             ):
                 corrected += closer
+
+        if context_type not in ('scale', 'title', 'chart_title', 'axis_title', 'legend'):
+            corrected = self._normalize_word_casing(corrected)
         
         return corrected
+
+    @staticmethod
+    def _normalize_word_casing(text: str) -> str:
+        """
+        Normalize OCR corrupted mixed-casing in words (e.g. 'CateGorY4' -> 'Category 4', 'CATEGorY3' -> 'Category 3').
+        Preserves all-uppercase, all-lowercase, title case, PascalCase (MockTitle), and short scientific symbols.
+        """
+        if not text:
+            return text
+        # Separate glued digits at word end (e.g. 'Category4' -> 'Category 4')
+        text = re.sub(r'([A-Za-z]{3,})(\d+)\b', r'\1 \2', text)
+        words = text.split(' ')
+        normalized_words = []
+        for w in words:
+            # Word must be alphabetic, start with uppercase, length >= 5, have >= 2 lowercase letters,
+            # and contain >= 2 internal or trailing uppercase letters (e.g. 'CateGorY', 'CATEGorY', not 'MockTitle')
+            if (
+                len(w) >= 5
+                and w.isalpha()
+                and w[0].isupper()
+                and sum(1 for c in w if c.islower()) >= 2
+                and sum(1 for c in w[1:] if c.isupper()) >= 2
+            ):
+                normalized_words.append(w.capitalize())
+            else:
+                normalized_words.append(w)
+        return ' '.join(normalized_words)
 
     def _validate_by_context(self, text: str, context_type: str, original: str) -> Tuple[str, float]:
         """Apply context-specific validation and confidence scoring."""
@@ -219,19 +250,36 @@ class OCRValidator:
             confidence = 0.5 + 0.3 * length_factor + 0.2 * variety_factor
             return text, min(1.0, confidence)
 
-    def validate_confidence(self, text: str, original_confidence: float, context_type: str = 'default') -> float:
-        """Apply post-processing validation to adjust confidence scores."""
+    def validate_confidence(
+        self,
+        text: str,
+        original_confidence: float,
+        context_type: str = 'default',
+        heuristic_weight: float = 0.5,
+    ) -> float:
+        """
+        Blend the model's confidence with the character-composition heuristic.
+
+        combined = original ** (1 - w) * heuristic ** w   (weighted geometric mean)
+
+        The default w=0.5 reproduces the previous sqrt(original * heuristic).
+        The heuristic only measures how "number-like"/"word-like" the text looks, not
+        whether it is *correct*; use heuristic_weight=0.0 to keep the model's own
+        confidence untouched, and calibrate any acceptance threshold on labelled crops.
+        """
         if not text or len(text.strip()) == 0:
             return 0.0
 
+        w = min(1.0, max(0.0, heuristic_weight))
+        if w == 0.0:
+            return float(original_confidence)
+
         # Get validation result and score
         _, validation_score = self.validate_and_clean(text, context_type)
-        
-        # Combine original confidence with validation score
-        # Use geometric mean to prevent overly optimistic scores
-        combined_confidence = (original_confidence * validation_score) ** 0.5
-        
-        return combined_confidence
+        if validation_score <= 0.0 or original_confidence <= 0.0:
+            return 0.0
+
+        return float((original_confidence ** (1.0 - w)) * (validation_score ** w))
 
     def validate_numeric(
         self,
@@ -273,17 +321,15 @@ class OCRValidator:
         return value, confidence
 
     def _parse_number(self, text: str) -> Optional[float]:
-        """Parse cleaned text to number - fast path."""
+        """Parse cleaned text to number - fast path (preserves raw percentage scale numbers, e.g. '20%' -> 20.0)."""
         if not text:
             return None
 
-        is_percentage = text.endswith('%')
-        if is_percentage:
-            text = text[:-1]
+        if text.endswith('%'):
+            text = text[:-1].strip()
 
         try:
-            value = float(text)
-            return value / 100.0 if is_percentage else value
+            return float(text)
         except ValueError:
             return None
 

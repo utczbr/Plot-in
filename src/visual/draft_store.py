@@ -39,6 +39,7 @@ __all__ = [
     "is_draft_newer",
     "get_draft_path",
     "has_valid_draft",
+    "clear_drafts",
 ]
 
 
@@ -219,12 +220,28 @@ def is_draft_newer(
         return False
 
 
-def get_draft_path(output_dir: Union[str, Path], stem: str) -> Path:
-    """Return the canonical draft file path for a given output dir and unique stem.
+def get_draft_path(
+    output_dir: Union[str, Path],
+    stem_or_image_path: Union[str, Path],
+    image_size: Optional[Tuple[int, int]] = None,
+) -> Path:
+    """Return the canonical draft file path for a given output dir and unique stem or image path.
 
-    Draft files are stored in <output_dir>/.drafts/<stem>_draft.json.
+    If ``stem_or_image_path`` points to an existing file on disk, its unique stem
+    (``<stem>_<file_size>_<w>x<h>``) is computed automatically.
+    Draft files are stored in ``<output_dir>/.drafts/<unique_stem>_draft.json``.
     """
-    return Path(output_dir) / ".drafts" / f"{stem}_draft.json"
+    raw = str(stem_or_image_path)
+    candidate_path = Path(raw)
+    if candidate_path.is_file():
+        try:
+            from visual.file_list_controller import compute_unique_image_stem
+            resolved_stem = compute_unique_image_stem(candidate_path, image_size=image_size)
+        except Exception:
+            resolved_stem = candidate_path.stem
+    else:
+        resolved_stem = raw
+    return Path(output_dir) / ".drafts" / f"{resolved_stem}_draft.json"
 
 
 def has_valid_draft(
@@ -232,6 +249,30 @@ def has_valid_draft(
     stem: str,
     analysis_json_path: Optional[Union[str, Path]] = None,
 ) -> bool:
-    """Check whether a valid and newer draft exists for a given output dir and stem."""
+    """Check whether a valid and newer draft exists for a given output dir and unique stem."""
     draft_path = get_draft_path(output_dir, stem)
     return is_draft_newer(draft_path, analysis_json_path)
+
+
+def clear_drafts(output_dir: Union[str, Path]) -> int:
+    """Delete all draft files inside ``<output_dir>/.drafts/`` and remove the directory if empty.
+
+    Returns:
+        Number of draft files deleted.
+    """
+    drafts_dir = Path(output_dir) / ".drafts"
+    if not drafts_dir.is_dir():
+        return 0
+    deleted = 0
+    for item in drafts_dir.glob("*"):
+        if item.is_file():
+            try:
+                item.unlink()
+                deleted += 1
+            except OSError as e:
+                logger.warning("Failed to delete draft file %s: %s", item, e)
+    try:
+        drafts_dir.rmdir()
+    except OSError:
+        pass
+    return deleted

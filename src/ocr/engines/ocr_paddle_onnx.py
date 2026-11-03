@@ -1,501 +1,128 @@
 """
-PaddleOCR ONNX Engine implementation for text detection and recognition.
+PaddleOCR ONNX recognition engine for pre-cropped text lines.
 
-This implementation uses ONNX Runtime for inference with PaddleOCR models.
-Architecture: Detection → Orientation Classification → Recognition
+Pipeline actually executed by ``process_batch``:
+    (optional) orientation handling  ->  recognition (CRNN/SVTR + CTC)
 
-Performance characteristics:
-- Detection: DB (Differentiable Binarization) algorithm
-- Recognition: CRNN-based with CTC decoder
-- Preprocessing: Specific normalization required for each stage
+Text *detection* is not run: callers hand in crops that are already text lines.
+``det_model_path`` / ``load_det_model`` and the ``det_db_*`` values are kept only
+so the session can be reused by a page-level caller; ``process_batch`` never
+uses them.
+
+All recognition logic (preprocessing, batching, decoding, orientation, caching)
+lives in ``paddle_rec_common.PaddleRecognitionMixin`` and is shared with
+``PaddleOCRFullPipeline``.
 """
 
-import cv2
-import numpy as np
-try:
-    import onnxruntime as ort
-except (ImportError, OSError):
-    ort = None  # type: ignore[assignment]
-from typing import List, Tuple, Optional, Dict, Any
 import logging
 from pathlib import Path
+from typing import Iterable, Optional
+
 from ..ocr_base import BaseOCREngine
-from ..runtime.cache_runtime import ZeroCopyHashCache, HashDeduplicator
-
-try:
-    import yaml
-except ModuleNotFoundError:
-    yaml = None
+from . import paddle_rec_common as common
+from .paddle_rec_common import PaddleRecognitionMixin, ort  # noqa: F401  (ort re-exported for tests)
 
 
-class PaddleOCREngine(BaseOCREngine):
+class PaddleOCREngine(PaddleRecognitionMixin, BaseOCREngine):
     """
-    PaddleOCR ONNX inference engine with three-stage pipeline.
-    
-    Pipeline stages:
-    1. Text Detection: Locates text regions in image (bounding boxes)
-    2. Text Orientation: Determines if text needs rotation correction
-    3. Text Recognition: Recognizes characters in detected text regions
-    
+    PaddleOCR ONNX inference engine (recognition over pre-cropped lines).
+
     Args:
-        det_model_path: Path to detection ONNX model (.onnx file)
-        rec_model_path: Path to recognition ONNX model (.onnx file)
-        cls_model_path: Optional path to orientation classifier ONNX model
-        dict_path: Path to character dictionary YAML file
-        use_gpu: Whether to use GPU for inference (requires onnxruntime-gpu)
-        max_workers: Number of parallel workers for batch processing
+        det_model_path: Optional detection ONNX model (only loaded if load_det_model=True).
+        rec_model_path: Recognition ONNX model.
+        dict_path: Character dictionary (YAML or TXT).
+        cls_model_path: Optional 0/180 text-line orientation classifier.
+        use_gpu: Use CUDA / CoreML when available.
+        max_workers: Reserved (inference is sequential per batch).
+        det_db_*: Reserved for page-level detection; unused by process_batch.
+        rec_batch_size: Max crops per ONNX call (now actually used).
+        cls_thresh: Classifier threshold for the legacy orientation path.
+        intra_op_threads / inter_op_threads: ONNX Runtime threads (default 1/1 as before).
+        rec_pad_mode, confidence_mode, try_both_orientations, try_vertical_hypotheses,
+        vertical_aspect_ratio, orientation_margin, numeric_contexts, numeric_min_alt_mass:
+            see ``PaddleRecognitionMixin._configure_recognition``.
     """
-    
+
     def __init__(
         self,
-        det_model_path: str,
-        rec_model_path: str,
-        dict_path: str,
+        det_model_path: Optional[str] = None,
+        rec_model_path: str = "",
+        dict_path: str = "",
         cls_model_path: Optional[str] = None,
         use_gpu: bool = False,
         max_workers: int = 4,
         det_db_thresh: float = 0.3,
         det_db_box_thresh: float = 0.6,
         det_db_unclip_ratio: float = 1.5,
-        rec_batch_size: int = 6
+        rec_batch_size: int = 6,
+        cls_thresh: float = 0.9,
+        load_det_model: bool = False,
+        intra_op_threads: int = 1,
+        inter_op_threads: int = 1,
+        rec_pad_mode: str = 'background',
+        confidence_mode: str = 'geometric',
+        try_both_orientations: bool = True,
+        try_vertical_hypotheses: bool = True,
+        vertical_aspect_ratio: float = 1.5,
+        orientation_margin: float = 0.1,
+        numeric_contexts: Optional[Iterable[str]] = None,
+        numeric_min_alt_mass: float = 0.2,
     ):
-        """
-        Initialize PaddleOCR ONNX inference sessions.
-        
-        Session initialization:
-        - Creates separate ONNX Runtime sessions for each model
-        - Configures execution providers (GPU/CPU)
-        - Loads character dictionary for decoding
-        - Extracts input/output tensor names from models
-        """
-        # Configure ONNX Runtime session options
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 1  # Reduce threads to prevent hangs
-        sess_options.inter_op_num_threads = 1  # Reduce threads to prevent hangs
-        
-        # Set execution providers based on GPU availability
-        # Priority order: CUDA (GPU) → CPUExecutionProvider
-        import platform
-        import os
-        is_mac = platform.system() == 'Darwin'
-        force_cpu = os.environ.get('ORT_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
-        disable_coreml = os.environ.get('DISABLE_COREML', '').lower() in ('1', 'true', 'yes') or force_cpu
-        disable_cuda = os.environ.get('DISABLE_CUDA', '').lower() in ('1', 'true', 'yes') or force_cpu
-        if use_gpu and not force_cpu:
-            if is_mac and not disable_coreml:
-                providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider']
-            elif not is_mac and not disable_cuda:
-                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            else:
-                providers = ['CPUExecutionProvider']
-        else:
-            providers = ['CPUExecutionProvider']
-        
+        rt = common.require_ort()
+        sess_options = common.make_session_options(intra_op_threads, inter_op_threads)
+        providers = common.select_providers(use_gpu)
+
         try:
-            # Initialize detection model session
-            # Detection model input: [batch, 3, height, width] (BGR image)
-            # Detection model output: [batch, 1, height, width] (probability map)
-            self.det_session = ort.InferenceSession(
-                det_model_path,
-                sess_options=sess_options,
-                providers=providers
-            )
-            self._det_input_name = self.det_session.get_inputs()[0].name
-            self._det_output_name = self.det_session.get_outputs()[0].name
-            logging.info(f"Detection model loaded: {det_model_path}")
-            logging.info(f"Detection input: {self._det_input_name}, output: {self._det_output_name}")
-            
-            # Initialize recognition model session
-            # Recognition model input: [batch, 3, 48, W] (normalized text line image)
-            # Recognition model output: [batch, sequence_length, num_classes] (character probabilities)
-            self.rec_session = ort.InferenceSession(
-                rec_model_path,
-                sess_options=sess_options,
-                providers=providers
-            )
+            self.det_session = None
+            self._det_input_name = None
+            self._det_output_name = None
+            if load_det_model and det_model_path and Path(det_model_path).exists():
+                self.det_session = rt.InferenceSession(det_model_path, sess_options=sess_options, providers=providers)
+                self._det_input_name = self.det_session.get_inputs()[0].name
+                self._det_output_name = self.det_session.get_outputs()[0].name
+                logging.info(f"Detection model loaded: {det_model_path}")
+
+            self.rec_session = rt.InferenceSession(rec_model_path, sess_options=sess_options, providers=providers)
             self._rec_input_name = self.rec_session.get_inputs()[0].name
             self._rec_output_name = self.rec_session.get_outputs()[0].name
             logging.info(f"Recognition model loaded: {rec_model_path}")
-            logging.info(f"Recognition input: {self._rec_input_name}, output: {self._rec_output_name}")
-            
-            # Initialize optional orientation classifier session
-            # Classifier input: [batch, 3, 48, 192] (text line image)
-            # Classifier output: [batch, 2] (probabilities for 0° and 180° rotation)
+
             self.cls_session = None
             self._cls_input_name = None
             self._cls_output_name = None
             if cls_model_path and Path(cls_model_path).exists():
-                self.cls_session = ort.InferenceSession(
-                    cls_model_path,
-                    sess_options=sess_options,
-                    providers=providers
-                )
+                self.cls_session = rt.InferenceSession(cls_model_path, sess_options=sess_options, providers=providers)
                 self._cls_input_name = self.cls_session.get_inputs()[0].name
                 self._cls_output_name = self.cls_session.get_outputs()[0].name
                 logging.info(f"Orientation classifier loaded: {cls_model_path}")
-            
         except Exception as e:
             logging.error(f"Failed to load ONNX models: {e}")
             raise RuntimeError(f"Model loading failed: {e}")
-        
-        # Load character dictionary for CTC decoding
-        # Dictionary format: one character per line or YAML format
-        self.character_dict = self._load_character_dict(dict_path)
 
-        # Align trailing space token (' ') when model was exported with use_space_char=True
-        rec_in_shape = self.rec_session.get_inputs()[0].shape
-        rec_out_shape = self.rec_session.get_outputs()[0].shape
-        self._rec_dynamic_width = not isinstance(rec_in_shape[-1], int) if rec_in_shape else True
-        if (
-            rec_out_shape
-            and isinstance(rec_out_shape[-1], int)
-            and rec_out_shape[-1] == len(self.character_dict) + 1
-        ):
-            self.character_dict.append(' ')
-
+        self.character_dict = common.load_character_dict(dict_path)
+        self._rec_dynamic_width = common.align_dictionary_with_model(self.character_dict, self.rec_session)
         logging.info(f"Loaded character dictionary with {len(self.character_dict)} characters")
-        
-        # Store configuration
+
         self.use_gpu = use_gpu
         self.max_workers = max_workers
-        
-        # Detection hyperparameters
-        # det_db_thresh: Binarization threshold for probability map (0-1)
-        # det_db_box_thresh: Minimum confidence for detected boxes (0-1)
-        # det_db_unclip_ratio: Expansion ratio for detected boxes (>1.0 expands boxes)
+        # Reserved for page-level detection (not used in process_batch).
         self.det_db_thresh = det_db_thresh
         self.det_db_box_thresh = det_db_box_thresh
         self.det_db_unclip_ratio = det_db_unclip_ratio
-        
-        # Recognition batch size for processing multiple text regions
-        self.rec_batch_size = rec_batch_size
-        
-        # Content hash LRU cache for recognition results
-        self._cache = ZeroCopyHashCache(max_size=512)
-    
-    def _load_character_dict(self, dict_path: str) -> List[str]:
-        """
-        Load character dictionary from YAML or text file.
-        
-        Dictionary format:
-        - YAML: Contains 'character' key with list of characters
-        - Text: One character per line
-        
-        Special tokens:
-        - 'blank' token is automatically added for CTC decoding
-        - Common format: ['blank', 'a', 'b', 'c', ...]
-        
-        Args:
-            dict_path: Path to dictionary file (.yaml or .txt)
-            
-        Returns:
-            List of characters including special tokens
-        """
-        path = Path(dict_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Dictionary file not found: {dict_path}")
-        
-        try:
-            if path.suffix in ['.yaml', '.yml']:
-                if yaml is None:
-                    raise RuntimeError(
-                        "PyYAML is required to load YAML dictionaries for PaddleOCR. "
-                        "Install with `pip install PyYAML` or use a plain text dictionary file."
-                    )
-                with open(dict_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    if isinstance(config, dict):
-                        # Look for character list in common keys
-                        if 'character' in config:
-                            characters = config['character']
-                        elif 'PostProcess' in config and isinstance(config['PostProcess'], dict) and 'character_dict' in config['PostProcess']:
-                            characters = config['PostProcess']['character_dict']
-                        else:
-                            # If no known key is found, we can't proceed
-                            raise ValueError("Could not find character list in YAML file.")
-                    elif isinstance(config, list):
-                        characters = config
-                    else:
-                        raise TypeError("Unsupported YAML format for dictionary.")
-            else:
-                with open(dict_path, 'r', encoding='utf-8') as f:
-                    characters = [line.rstrip('\r\n') for line in f if line.rstrip('\r\n') != '']
-            
-            if not isinstance(characters, list):
-                 raise TypeError(f"Character dictionary loaded from {dict_path} is not a list.")
 
-            # Normalize ideographic spaces (\u3000) to standard ASCII spaces (' ')
-            characters = [(' ' if c in ('\u3000', ' ') else c) for c in characters]
+        self._configure_recognition(
+            rec_batch_size=rec_batch_size,
+            cls_thresh=cls_thresh,
+            rec_pad_mode=rec_pad_mode,
+            confidence_mode=confidence_mode,
+            try_both_orientations=try_both_orientations,
+            try_vertical_hypotheses=try_vertical_hypotheses,
+            vertical_aspect_ratio=vertical_aspect_ratio,
+            orientation_margin=orientation_margin,
+            numeric_contexts=numeric_contexts,
+            numeric_min_alt_mass=numeric_min_alt_mass,
+        )
 
-            # Add blank token for CTC decoding if not present
-            # CTC uses blank token to represent no-character state
-            if 'blank' not in characters:
-                characters = ['blank'] + characters
-            
-            return characters
-            
-        except Exception as e:
-            logging.error(f"Failed to load dictionary from {dict_path}: {e}")
-            raise RuntimeError(f"Dictionary loading failed: {e}")
-    
-    def process_batch(
-        self,
-        crops_with_context: List[Tuple[np.ndarray, str]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Process a batch of image crops using PaddleOCR pipeline.
-
-        This method adapts PaddleOCR's full pipeline to work with
-        pre-cropped text regions (similar to EasyOCR interface).
-
-        Processing flow:
-        1. For each crop, run text detection to refine region
-        2. Optionally classify orientation and rotate if needed
-        3. Recognize text using recognition model
-        4. Return recognized text with confidence scores
-
-        Note: Since crops are already text regions, detection stage
-        primarily serves to normalize and validate the regions.
-
-        Args:
-            crops_with_context: List of (image_crop, context_type) tuples
-                - image_crop: np.ndarray in BGR format
-                - context_type: str ('scale', 'tick', 'title', etc.)
-
-        Returns:
-            List of results as {'text': str, 'confidence': float} (one per crop)
-        """
-        if not crops_with_context:
-            return []
-
-        results: List[Dict[str, Any]] = [{'text': '', 'confidence': 0.0} for _ in crops_with_context]
-
-        unique_crops, hash_to_original_indices = HashDeduplicator.deduplicate_crops(crops_with_context)
-
-        for crop, context in unique_crops:
-            crop_hash = HashDeduplicator._compute_content_hash(crop, context)
-            cached_result = self._cache.get_by_hash(crop, context)
-            if cached_result is not None:
-                res = cached_result
-            else:
-                try:
-                    # Since crops are already text regions, directly recognize
-                    # Skip detection stage to avoid redundant processing
-                    text, confidence = self._recognize_text_region(crop, context)
-                    res = {'text': text, 'confidence': confidence}
-                except Exception as e:
-                    logging.warning(f"OCR failed for crop with context '{context}': {e}")
-                    res = {'text': '', 'confidence': 0.0}
-                self._cache.put(crop, res, context)
-
-            _, _, indices = hash_to_original_indices[crop_hash]
-            for idx in indices:
-                results[idx] = res
-
-        return results
-    
-    def _recognize_text_region(self, crop: np.ndarray, context: str = 'default') -> Tuple[str, float]:
-        """
-        Recognize text in a single cropped region.
-
-        Recognition pipeline:
-        1. Apply minimal preprocessing to enhance image quality
-        2. Preprocess: Resize to fixed height (48px), normalize
-        3. Optional: Classify orientation and rotate if needed
-        4. Inference: Run recognition model
-        5. Decode: Convert output probabilities to text using CTC decoding
-
-        Args:
-            crop: Text region image in BGR format
-            context: Context for adaptive preprocessing (e.g., 'scale', 'tick', 'title')
-
-        Returns:
-            Tuple[str, float]: (recognized_text, confidence_score)
-        """
-        # Check orientation and rotate if needed
-        if self.cls_session is not None:
-            crop = self._classify_and_rotate(crop)
-
-        # Preprocess for recognition
-        preprocessed = self._preprocess_recognition(crop)
-
-        # Run recognition inference
-        # Output shape: [1, sequence_length, num_characters]
-        rec_output = self.rec_session.run(
-            [self._rec_output_name],
-            {self._rec_input_name: preprocessed}
-        )[0]
-
-        # Decode output to text using CTC decoding
-        text, confidence = self._decode_recognition(rec_output[0])
-
-        return text, confidence
-    
-    def _preprocess_recognition(
-        self,
-        image: np.ndarray,
-        img_h: int = 48,
-        img_w: int = 320
-    ) -> np.ndarray:
-        """
-        Preprocess image for text recognition model.
-        
-        PaddleOCR recognition preprocessing:
-        1. Convert to RGB
-        2. Resize to fixed height (48px) while maintaining aspect ratio
-        3. Pad width to fixed size (320px) or dynamic based on content
-        4. Normalize: (pixel / 255.0 - 0.5) / 0.5  → range [-1, 1]
-        5. Transpose to CHW format
-        6. Add batch dimension
-        
-        Args:
-            image: Input image in BGR format
-            img_h: Target height (typically 48)
-            img_w: Target width (typically 320)
-            
-        Returns:
-            Preprocessed tensor [1, 3, img_h, img_w], dtype=float32
-        """
-        # Convert to RGB
-        img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        h, w = img.shape[:2]
-        
-        # Calculate resize ratio to match target height
-        ratio = img_h / max(h, 1)
-        resize_w = max(1, int(w * ratio))
-        
-        # Resize maintaining aspect ratio
-        img = cv2.resize(img, (resize_w, img_h), interpolation=cv2.INTER_LINEAR)
-        
-        # Pad width to target width (320px for short tokens; dynamic 32x padding for long lines)
-        if resize_w <= img_w:
-            if resize_w < img_w:
-                # Pad with white (255) on the right
-                padded = np.ones((img_h, img_w, 3), dtype=np.uint8) * 255
-                padded[:, :resize_w, :] = img
-                img = padded
-        elif getattr(self, '_rec_dynamic_width', True):
-            dyn_w = int(np.ceil(resize_w / 32.0) * 32)
-            if resize_w < dyn_w:
-                padded = np.ones((img_h, dyn_w, 3), dtype=np.uint8) * 255
-                padded[:, :resize_w, :] = img
-                img = padded
-        else:
-            # Fixed-width model fallback: scale to fit max width instead of cropping text
-            img = cv2.resize(img, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
-        
-        # Normalize to [-1, 1] range
-        # Formula: (pixel / 255.0 - 0.5) / 0.5
-        img = img.astype(np.float32) / 255.0
-        img = (img - 0.5) / 0.5
-        
-        # Transpose to CHW and add batch dimension
-        img = img.transpose(2, 0, 1)
-        img = np.expand_dims(img, axis=0)
-        
-        return img.astype(np.float32)
-    
-    def _classify_and_rotate(self, image: np.ndarray) -> np.ndarray:
-        """
-        Classify text line orientation and rotate if needed.
-        
-        Orientation classifier:
-        - Predicts whether text is upright (0°) or upside-down (180°)
-        - Returns probabilities for [0°, 180°]
-        - Rotates image if 180° confidence > 0.5
-        
-        Args:
-            image: Text line image in BGR format
-            
-        Returns:
-            Potentially rotated image
-        """
-        # Preprocess for classifier
-        img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (160, 80), interpolation=cv2.INTER_LINEAR)
-        img = img.astype(np.float32) / 255.0
-        img = (img - 0.5) / 0.5
-        
-        # CHW + batch
-        img = img.transpose(2, 0, 1)
-        img = np.expand_dims(img, axis=0)
-        
-        # Run classifier inference
-        # Output shape: [1, 2] (probabilities for 0° and 180°)
-        cls_output = self.cls_session.run(
-            [self._cls_output_name],
-            {self._cls_input_name: img.astype(np.float32)}
-        )[0]
-        
-        # Get predicted class (0 or 1)
-        cls_label = np.argmax(cls_output[0])
-        
-        # If upside-down (label=1), rotate 180°
-        if cls_label == 1:
-            image = cv2.rotate(image, cv2.ROTATE_180)
-        
-        return image
-    
-    def _decode_recognition(self, preds: np.ndarray) -> Tuple[str, float]:
-        """
-        Decode recognition model output using CTC decoding with confidence calculation.
-
-        CTC (Connectionist Temporal Classification) decoding:
-        1. For each time step, select character with highest probability
-        2. Calculate character-level confidence from max probabilities
-        3. Merge consecutive duplicate characters and their confidences
-        4. Remove blank tokens and their confidences
-        5. Calculate overall confidence as geometric mean of character probabilities
-        6. Concatenate remaining characters to form text
-
-        Example:
-            Input:  [blank, 'h', 'h', 'e', 'blank', 'l', 'l', 'o']
-            Output: "hello", confidence
-
-        Args:
-            preds: Model output [sequence_length, num_classes]
-
-        Returns:
-            Tuple[str, float]: (decoded_text, confidence_score)
-        """
-        # Get character index with max probability at each time step
-        # Shape: [sequence_length]
-        char_indices = np.argmax(preds, axis=1)
-        char_probs = np.max(preds, axis=1)  # Get max probabilities
-
-        # CTC decoding: merge duplicates and remove blanks, with confidence tracking
-        decoded_chars = []
-        confidence_scores = []
-        previous_idx = -1
-
-        for idx, prob in zip(char_indices, char_probs):
-            # Skip if same as previous (CTC duplicate rule)
-            if idx == previous_idx:
-                continue
-
-            # Skip blank token (index 0)
-            if idx == 0 or idx >= len(self.character_dict):
-                previous_idx = idx
-                continue
-
-            # Add character and its confidence
-            decoded_chars.append(self.character_dict[idx])
-            confidence_scores.append(prob)
-            previous_idx = idx
-
-        # Calculate overall confidence as geometric mean of character probabilities
-        text = ''.join(decoded_chars)
-        if confidence_scores:
-            # Geometric mean is more robust to outliers than arithmetic mean
-            confidence = float(np.exp(np.mean(np.log(np.clip(confidence_scores, 1e-10, 1.0)))))
-        else:
-            confidence = 0.0
-
-        return text, confidence
-    
-    def __del__(self):
-        """Clean up ONNX Runtime sessions."""
-        # Sessions are automatically cleaned up by ONNX Runtime
-        pass
+    def _load_character_dict(self, dict_path: str):
+        """Backwards-compatible wrapper."""
+        return common.load_character_dict(dict_path)

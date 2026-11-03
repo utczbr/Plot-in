@@ -1195,6 +1195,116 @@ class ChartAnalysisPipeline(BasePipeline):
         result = service.detect(elements, img.shape[1], img.shape[0], chart_type=chart_type)
         return result.orientation
 
+    @staticmethod
+    def _strip_border_tick_marks(crop: np.ndarray) -> np.ndarray:
+        """Remove tiny axis tick-mark tips intruding into the top/bottom 1-2 rows of a horizontal label crop."""
+        if crop is None or crop.size == 0:
+            return crop
+        h, w = crop.shape[:2]
+        if h < 8 or w < 12:
+            return crop
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        bg_val = float(np.median(np.concatenate([gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]])))
+        if bg_val < 128:
+            return crop  # Only apply to light-background chart crops
+
+        dark_mask = (gray < (bg_val - 35)).astype(np.uint8)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+        cleaned = None
+        bg_pixel = [int(np.median(crop[:, :, c])) for c in range(crop.shape[2])] if crop.ndim == 3 else int(bg_val)
+
+        max_tick_w = max(4, int(round(h * 0.28)))
+        max_tick_h = max(3, int(round(h * 0.25)))
+
+        for comp_id in range(1, num_labels):
+            x, y, cw, ch, area = stats[comp_id]
+            touches_top = (y == 0)
+            touches_bottom = (y + ch >= h)
+            # A vertical tick mark tip touching the top/bottom border is narrow and short
+            if (touches_top or touches_bottom) and cw <= max_tick_w and ch <= max_tick_h:
+                if cleaned is None:
+                    cleaned = crop.copy()
+                cleaned[labels == comp_id] = bg_pixel
+
+        return cleaned if cleaned is not None else crop
+
+    @staticmethod
+    def _harmonize_series_labels(regions: List[Dict[str, Any]]) -> None:
+        """Harmonize numbered sibling labels (e.g. 'Category 1', 'category2', 'CateGorY4', 'Cat_gory 5')."""
+        pattern = re.compile(r'^([A-Za-z_]{3,})\s*(\d+)$')
+        candidates = []
+        for reg in regions:
+            txt = str(reg.get('text', '')).strip()
+            m = pattern.match(txt)
+            if m:
+                prefix, num_str = m.group(1), m.group(2)
+                has_space = (' ' in txt)
+                candidates.append((reg, prefix, num_str, has_space, float(reg.get('ocr_confidence', 0.5))))
+
+        if len(candidates) < 2:
+            return
+
+        def _edit_dist_le_1(a: str, b: str) -> bool:
+            if a == b:
+                return True
+            if abs(len(a) - len(b)) > 1:
+                return False
+            if len(a) == len(b):
+                return sum(1 for c1, c2 in zip(a, b) if c1 != c2) <= 1
+            longer, shorter = (a, b) if len(a) > len(b) else (b, a)
+            i = j = diffs = 0
+            while i < len(longer) and j < len(shorter):
+                if longer[i] != shorter[j]:
+                    diffs += 1
+                    if diffs > 1:
+                        return False
+                    i += 1
+                else:
+                    i += 1
+                    j += 1
+            return True
+
+        used = set()
+        for i, (_, pref_i, _, _, _) in enumerate(candidates):
+            if i in used:
+                continue
+            norm_i = pref_i.lower().replace('_', '')
+            if len(norm_i) < 3:
+                continue
+            group = [candidates[i]]
+            used.add(i)
+            for j in range(i + 1, len(candidates)):
+                if j in used:
+                    continue
+                pref_j = candidates[j][1]
+                if _edit_dist_le_1(pref_i.lower(), pref_j.lower()):
+                    group.append(candidates[j])
+                    used.add(j)
+
+            if len(group) < 2:
+                continue
+
+            # Pick cleanest alphabetic prefix (no underscores, highest confidence, Title Case preferred)
+            clean_prefixes = [
+                (
+                    ('_' not in item[1]),
+                    (item[1][0].isupper() and item[1][1:].islower()),
+                    item[4],
+                    item[1],
+                )
+                for item in group
+            ]
+            clean_prefixes.sort(reverse=True)
+            best_prefix = clean_prefixes[0][3]
+            if '_' not in best_prefix and not (best_prefix[0].isupper() and best_prefix[1:].islower()):
+                best_prefix = best_prefix.capitalize()
+
+            use_space = any(item[3] for item in group)
+            sep = " " if use_space else ""
+            for reg, _, num_str, _, _ in group:
+                reg['text'] = f"{best_prefix}{sep}{num_str}"
+
     def _process_ocr(self, img: np.ndarray, detections: Dict):
         """Runs OCR on all textual elements and DocLayout text regions in-place.
 
@@ -1227,59 +1337,65 @@ class ChartAnalysisPipeline(BasePipeline):
         if not all_regions:
             return
 
+        import math
         h, w = img.shape[:2]
         crops = []
         for region in all_regions:
-            x1, y1, x2, y2 = [int(c) for c in region['xyxy']]
+            rx1, ry1, rx2, ry2 = region['xyxy'][:4]
+            x1, y1 = int(math.floor(float(rx1))), int(math.floor(float(ry1)))
+            x2, y2 = int(math.ceil(float(rx2))), int(math.ceil(float(ry2)))
             w_box = max(1, x2 - x1)
             h_box = max(1, y2 - y1)
             label_type = region.get('ocr_source', 'axis_label')
 
-            if label_type in ('axis_title', 'chart_title', 'legend', 'tick_label', 'axis_label', 'axis_labels'):
-                if h_box > w_box:
-                    # Vertical text: 20% horizontal padding, 5% vertical padding (per side)
-                    pad_x = int(round(w_box * 0.20))
-                    pad_y = int(round(h_box * 0.05))
-                else:
-                    # Horizontal text: 5% horizontal padding, 20% vertical padding (per side)
-                    pad_x = int(round(w_box * 0.05))
-                    pad_y = int(round(h_box * 0.20))
-            else:
-                pad_x = 5
-                pad_y = 5
+            should_rotate = False
+            if label_type in ('title', 'chart_title', 'axis_title', 'color_bar_title'):
+                if h_box > 1.35 * w_box:
+                    should_rotate = True
+            elif label_type in ('axis_labels', 'axis_label', 'tick_label', 'data_label', 'color_bar_label'):
+                if h_box >= 24 and h_box > 2.0 * w_box:
+                    should_rotate = True
+            elif h_box >= 24 and h_box > 2.0 * w_box:
+                should_rotate = True
 
-            x1_pad, y1_pad = max(0, x1 - pad_x), max(0, y1 - pad_y)
-            x2_pad, y2_pad = min(w, x2 + pad_x), min(h, y2 + pad_y)
+            if should_rotate:
+                # Vertical text line: horizontal padding becomes top/bottom after 90° CCW rotation
+                pad_left = max(3, int(round(w_box * 0.25)))
+                pad_right = max(3, int(round(w_box * 0.25)))
+                pad_top = max(3, int(round(h_box * 0.08)))
+                pad_bottom = max(3, int(round(h_box * 0.08)))
+            else:
+                # Horizontal text line:
+                # - Small top padding (1-2px) to avoid hitting X-axis tick marks above the box
+                # - Generous bottom padding (>=4px / 35% of height) to capture descenders ('g', 'y', 'p', 'q')
+                # - Horizontal padding scaled to font height (30% of h_box, >=4px)
+                pad_left = max(4, int(round(h_box * 0.30)))
+                pad_right = max(4, int(round(h_box * 0.30)))
+                pad_top = max(1, int(round(h_box * 0.08)))
+                pad_bottom = max(4, int(round(h_box * 0.35)))
+
+            x1_pad = max(0, x1 - pad_left)
+            y1_pad = max(0, y1 - pad_top)
+            x2_pad = min(w, x2 + pad_right)
+            y2_pad = min(h, y2 + pad_bottom)
 
             crop = img[y1_pad:y2_pad, x1_pad:x2_pad]
 
-            # Rotate vertical text lines 90° counter-clockwise so horizontal OCR models
-            # can read vertical text accurately.
-            # Avoid transposing single digits and small horizontal numbers whose glyph aspect ratio > 1.2:
-            # - For titles ('axis_title', 'chart_title'): rotate when height > 1.2 * width
-            # - For labels ('axis_labels', 'axis_label', 'tick_label', 'data_label'): only rotate when
-            #   height >= 22px and height > 1.5 * width (true multi-character vertical lines)
-            should_rotate = False
-            if crop.size > 0:
-                if label_type in ('title', 'chart_title', 'axis_title'):
-                    if crop.shape[0] > 1.2 * crop.shape[1]:
-                        should_rotate = True
-                elif label_type in ('axis_labels', 'axis_label', 'tick_label', 'data_label'):
-                    if crop.shape[0] >= 22 and crop.shape[0] > 1.5 * crop.shape[1]:
-                        should_rotate = True
-                elif crop.shape[0] > 1.5 * crop.shape[1] and crop.shape[0] >= 22:
-                    should_rotate = True
-
-            if should_rotate:
+            if should_rotate and crop.size > 0:
                 crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                ocr_context = f"{label_type}:rotated"
+            else:
+                crop = self._strip_border_tick_marks(crop)
+                ocr_context = label_type
 
-            crops.append((crop, label_type))
+            crops.append((crop, ocr_context))
 
         try:
             results = self.ocr_engine.process_batch(crops)
             for i, res in enumerate(results):
                 target = all_regions[i]
-                label_type = target.get('ocr_source', crops[i][1] if i < len(crops) else 'default')
+                raw_ctx = crops[i][1] if i < len(crops) else 'default'
+                label_type = target.get('ocr_source', raw_ctx.split(':')[0] if raw_ctx else 'default')
                 if isinstance(res, dict):
                     raw_text = res.get('text', '')
                     raw_conf = float(res.get('confidence', 0.0))
@@ -1292,12 +1408,24 @@ class ChartAnalysisPipeline(BasePipeline):
                 target['text'] = clean_text
                 target['ocr_confidence'] = adj_conf
 
-                if label_type in ('axis_labels', 'axis_label', 'data_label') and target.get('cleanedvalue') is None:
-                    token_core = re.sub(r'[\s\$\%\€\£]', '', clean_text)
+                if label_type in ('axis_labels', 'axis_label', 'data_label', 'color_bar_label') and target.get('cleanedvalue') is None:
+                    token_core = re.sub(r'[\s\$\%\€\£,]', '', clean_text)
                     if is_numeric(token_core):
-                        target['cleanedvalue'] = self.ocr_validator.validate_numeric(clean_text)[0]
+                        num_val, _ = self.ocr_validator.validate_numeric(clean_text)
+                        target['cleanedvalue'] = num_val
                     else:
-                        target['cleanedvalue'] = None
+                        stripped_alpha = re.sub(r'[\s\$\%\€\£\+\-\.,\d]', '', clean_text)
+                        if stripped_alpha and all(c in self.ocr_validator.char_corrections for c in stripped_alpha):
+                            num_val, _ = self.ocr_validator.validate_numeric(clean_text)
+                            if num_val is not None:
+                                target['cleanedvalue'] = num_val
+                                target['text'] = f"{num_val:g}%" if clean_text.endswith('%') else f"{num_val:g}"
+                        else:
+                            target['cleanedvalue'] = None
+
+            # Harmonize numbered sibling series across axis_labels and legend
+            self._harmonize_series_labels(axis_labels)
+            self._harmonize_series_labels(detections.get('legend', []))
         except Exception as e:
             self.logger.error(f"OCR failed: {e}")
 
@@ -1378,12 +1506,40 @@ class ChartAnalysisPipeline(BasePipeline):
                     continue
         return default
 
-    def _save_results(self, result: Dict, img: np.ndarray, output_dir: Path, annotated: bool, output_stem: Optional[str] = None):
-        """Saves JSON and optional annotated image."""
+    def _save_results(
+        self,
+        result: Dict,
+        img: np.ndarray,
+        output_dir: Path,
+        annotated: bool,
+        output_stem: Optional[str] = None,
+    ):
+        """Saves JSON, summary, sidecars, and optional annotated image using the unified unique stem."""
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        stem = output_stem or Path(result['image_file']).stem
-        
+
+        shape = getattr(img, "shape", None)
+        if isinstance(shape, (tuple, list)) and len(shape) >= 2:
+            h, w = int(shape[0]), int(shape[1])
+        else:
+            h, w = 0, 0
+        orig_path = result.get("original_image_path") or result.get("image_file", "result")
+        from visual.file_list_controller import (
+            build_image_identity_metadata,
+            compute_unique_image_stem,
+        )
+
+        stem = output_stem or compute_unique_image_stem(
+            orig_path,
+            image_size=(w, h) if w > 0 and h > 0 else None,
+        )
+        identity_meta = build_image_identity_metadata(
+            orig_path,
+            unique_stem=stem,
+            image_size=(w, h) if w > 0 and h > 0 else None,
+        )
+        result["_image_identity"] = identity_meta
+        result.setdefault("metadata", {})["image_identity"] = identity_meta
+
         # Save JSON
         json_path = output_dir / f"{stem}_analysis.json"
         with open(json_path, 'w', encoding='utf-8') as f:
@@ -1391,59 +1547,30 @@ class ChartAnalysisPipeline(BasePipeline):
 
         # Save summary sidecar and clear failure marker (T-014.1b)
         try:
-            write_summary(output_dir / f"{stem}_summary.json", build_summary(result))
+            summary_payload = build_summary(result)
+            summary_payload["_image_identity"] = identity_meta
+            write_summary(output_dir / f"{stem}_summary.json", summary_payload)
             clear_failure_marker(output_dir, stem)
         except Exception as e:
             self.logger.warning(f"Failed to write review summary sidecar: {e}")
-            
-        # Export edited detections to a separate file if manually corrected or reviewed
-        if result.get('review_status') in ('reviewed', 'corrected'):
-            edited_path = output_dir / f"{stem}_edited_detections.json"
-            with open(edited_path, 'w', encoding='utf-8') as f:
-                json.dump(sanitize_for_json(result.get('detections', {})), f, indent=2, ensure_ascii=False)
 
-        # Export protocol corrections sidecar if protocol edits exist
-        protocol_rows = result.get('protocol_rows', [])
-        has_corrections = any(
-            isinstance(r, dict) and (r.get('review_status') == 'corrected' or r.get('_original') is not None)
-            for r in protocol_rows
-        )
-        if has_corrections or result.get('review_status') == 'corrected':
-            corrections_path = output_dir / f"{stem}_protocol_corrections.json"
-            corrections_payload = {
-                "schema_version": "1.0",
-                "image_file": str(result.get("image_file", "")),
-                "chart_type": str(result.get("chart_type", "")),
-                "review_status": result.get("review_status", "corrected"),
-                "rows": [
-                    {
-                        "row_index": idx,
-                        "field_corrections": {
-                            k: r.get(k) for k in r.keys() if not k.startswith('_')
-                        },
-                        "original": r.get("_original"),
-                        "review_status": r.get("review_status", "uncorrected")
-                    }
-                    for idx, r in enumerate(protocol_rows)
-                    if isinstance(r, dict) and (r.get("review_status") == "corrected" or r.get("_original") is not None)
-                ]
-            }
-            with open(corrections_path, 'w', encoding='utf-8') as f:
-                json.dump(sanitize_for_json(corrections_payload), f, indent=2, ensure_ascii=False)
-            
+        # Export edited detections and protocol corrections sidecars via ExportManager
+        from core.export_manager import ExportManager
+        ExportManager.write_protocol_corrections_sidecar(result, output_dir, stem=stem)
+
         # Save Annotated Image
         if annotated:
             try:
                 if result['chart_type'] == 'box':
                     vis = VisualizationService.draw_results_on_image(img, result)
                     vis = BoxPlotVisualizer.draw_box_annotations(
-                        vis, 
-                        result.get('elements', []), # Box elements are usually here or separate 'boxes' key depending on mapping
-                        orientation=result.get('orientation', 'vertical')
+                        vis,
+                        result.get('elements', []),
+                        orientation=result.get('orientation', 'vertical'),
                     )
                 else:
-                     vis = VisualizationService.draw_results_on_image(img, result)
-                     
+                    vis = VisualizationService.draw_results_on_image(img, result)
+
                 cv2.imwrite(str(output_dir / f"{stem}_annotated.png"), vis)
             except Exception as e:
                 self.logger.error(f"Annotation failed: {e}")

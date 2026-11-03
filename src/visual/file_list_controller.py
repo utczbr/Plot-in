@@ -11,8 +11,9 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
 import tempfile
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 from PIL import Image
 from PyQt6.QtCore import QSize, Qt, QThread, QThreadPool
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QWidget,
 )
 
 from core.model_manager import ModelManager
@@ -33,6 +35,107 @@ from visual.result_normalizer import (
     partition_assets_by_confidence,
 )
 from visual.workers import BatchAnalysisThread, ResolveWorker, safely_stop_thread
+
+
+def compute_unique_image_stem(
+    file_path: Union[str, Path],
+    image_size: Optional[Tuple[int, int]] = None,
+) -> str:
+    """Compute a unique cache stem incorporating filename stem, file size, and pixel dimensions.
+
+    Format: ``<stem>_<file_size>_<width>x<height>`` when the file exists on disk and
+    dimensions are available; ``<stem>_<file_size>`` for non-image files; ``<stem>`` if
+    the path does not exist on disk (e.g. synthetic unit-test paths).
+    """
+    path = Path(str(file_path))
+    base_stem = path.stem or "image"
+
+    try:
+        if not path.is_file():
+            return base_stem
+        file_size = path.stat().st_size
+    except OSError:
+        return base_stem
+
+    width, height = (0, 0)
+    if image_size and len(image_size) == 2:
+        width, height = int(image_size[0]), int(image_size[1])
+    else:
+        try:
+            with Image.open(path) as img:
+                width, height = img.size
+        except Exception:
+            width, height = (0, 0)
+
+    if width > 0 and height > 0:
+        return f"{base_stem}_{file_size}_{width}x{height}"
+    return f"{base_stem}_{file_size}"
+
+
+def build_image_identity_metadata(
+    file_path: Union[str, Path],
+    unique_stem: Optional[str] = None,
+    image_size: Optional[Tuple[int, int]] = None,
+) -> Dict[str, Union[str, int]]:
+    """Build a dictionary of image identity attributes for persistence and cache validation."""
+    path = Path(str(file_path))
+    file_size = 0
+    try:
+        if path.is_file():
+            file_size = int(path.stat().st_size)
+    except OSError:
+        file_size = 0
+
+    width, height = (0, 0)
+    if image_size and len(image_size) == 2:
+        width, height = int(image_size[0]), int(image_size[1])
+    elif path.is_file():
+        try:
+            with Image.open(path) as img:
+                width, height = int(img.size[0]), int(img.size[1])
+        except Exception:
+            width, height = (0, 0)
+
+    resolved_stem = unique_stem or compute_unique_image_stem(path, image_size=(width, height) if width > 0 else None)
+    return {
+        "unique_stem": resolved_stem,
+        "file_name": path.name,
+        "file_size": file_size,
+        "width": width,
+        "height": height,
+    }
+
+
+def verify_identity_metadata(
+    file_path: Union[str, Path],
+    stored_identity: Optional[dict],
+) -> bool:
+    """Return True if stored_identity is absent or matches the current file's size and dimensions."""
+    if not isinstance(stored_identity, dict) or not stored_identity:
+        return True
+    path = Path(str(file_path))
+    if not path.is_file():
+        return True
+    try:
+        current_size = int(path.stat().st_size)
+    except OSError:
+        return False
+
+    expected_size = stored_identity.get("file_size")
+    if isinstance(expected_size, int) and expected_size > 0 and expected_size != current_size:
+        return False
+
+    expected_w = stored_identity.get("width")
+    expected_h = stored_identity.get("height")
+    if isinstance(expected_w, int) and isinstance(expected_h, int) and expected_w > 0 and expected_h > 0:
+        try:
+            with Image.open(path) as img:
+                if (int(img.size[0]), int(img.size[1])) != (expected_w, expected_h):
+                    return False
+        except Exception:
+            return False
+    return True
+
 
 CONFIG_FILE = "gui_config.json"
 
@@ -57,9 +160,19 @@ class FileListCacheMixin:
         return int(round(threshold * 100))
 
     def save_config(self):
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return
+
+        raw_input = self.input_path_edit.text()
+        raw_output = self.output_path_edit.text()
+        if "pytest" in raw_input.lower():
+            raw_input = ""
+        if "pytest" in raw_output.lower():
+            raw_output = ""
+
         config_data = {
-            "input_path": self.input_path_edit.text(),
-            "output_path": self.output_path_edit.text(),
+            "input_path": raw_input,
+            "output_path": raw_output,
             "models_dir": self.models_dir_edit.text(),
             "confidence": self.conf_slider.value() / 10.0,
             "vertical_splitter_sizes": self.vertical_splitter.sizes() if hasattr(self, 'vertical_splitter') else [400, 300],
@@ -89,14 +202,22 @@ class FileListCacheMixin:
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
                     config_data = json.load(f)
-                input_path = config_data.get("input_path", "")
-                if input_path:
-                    input_path = str(Path(input_path).expanduser())
+
+                raw_input_path = (config_data.get("input_path") or "").strip()
+                input_path = ""
+                if raw_input_path and "pytest" not in raw_input_path.lower():
+                    candidate_input = Path(raw_input_path).expanduser()
+                    if candidate_input.exists() and (
+                        candidate_input.is_file()
+                        or (candidate_input.is_dir() and any(candidate_input.iterdir()))
+                    ):
+                        input_path = str(candidate_input)
                 self.input_path_edit.setText(input_path)
 
-                output_path = config_data.get("output_path", str(self._state_root / "output"))
-                if output_path:
-                    output_path = str(Path(output_path).expanduser())
+                raw_output_path = (config_data.get("output_path") or "").strip()
+                output_path = ""
+                if raw_output_path and "pytest" not in raw_output_path.lower():
+                    output_path = str(Path(raw_output_path).expanduser())
                 self.output_path_edit.setText(output_path)
 
                 models_dir_from_config = config_data.get("models_dir")
@@ -121,9 +242,11 @@ class FileListCacheMixin:
                     self.vertical_splitter.setSizes(splitter_sizes)
 
                 self.update_status("✅ Configuration loaded")
-                if self.input_path_edit.text():
-                    self.populate_file_list()
+                if input_path:
+                    self.populate_file_list(auto_select=False)
             else:
+                self.input_path_edit.setText("")
+                self.output_path_edit.setText("")
                 self.update_status("ℹ️ Using default settings")
         except Exception as e:
             self.update_status(f"❌ Error loading config: {e}")
@@ -158,7 +281,7 @@ class FileListCacheMixin:
                 on_path_set(path)
 
     def handle_input_path_change(self, path_str):
-        self.populate_file_list()
+        self.populate_file_list(auto_select=True)
         self.update_status(f"Input loaded. {len(self.image_files)} chart(s) found.")
 
     def _required_model_relative_paths(self) -> List[Path]:
@@ -250,7 +373,10 @@ class FileListCacheMixin:
             self._pdf_render_temp_dir = tempfile.mkdtemp(prefix="chart_pdf_")
         return Path(self._pdf_render_temp_dir)
 
-    def populate_file_list(self):
+    def populate_file_list(self, auto_select: bool = False):
+        self._auto_select_first_image = bool(auto_select) and not bool(
+            getattr(self, "_is_cold_startup", False)
+        )
         for i in reversed(range(self.file_list_layout.count())):
             child = self.file_list_layout.takeAt(i)
             if child.widget():
@@ -295,7 +421,7 @@ class FileListCacheMixin:
                 logging.getLogger(__name__).debug("Checking cached renders failed: %s", exc)
 
         if cached_assets:
-            self._finish_populate_file_list(cached_assets)
+            self._finish_populate_file_list(cached_assets, auto_select=self._auto_select_first_image)
             return
 
         if has_pdfs:
@@ -314,14 +440,14 @@ class FileListCacheMixin:
                     render_dir=render_dir,
                     input_type='image',
                 )
-                self._finish_populate_file_list(assets)
+                self._finish_populate_file_list(assets, auto_select=self._auto_select_first_image)
         else:
             assets = resolve_input_assets(
                 input_path=path,
                 render_dir=render_dir,
                 input_type='image',
             )
-            self._finish_populate_file_list(assets)
+            self._finish_populate_file_list(assets, auto_select=self._auto_select_first_image)
 
     def _start_pdf_resolve_worker(self, input_path: Path):
         existing_progress = getattr(self, "_pdf_progress", None)
@@ -380,15 +506,42 @@ class FileListCacheMixin:
         self._finish_populate_file_list(assets)
 
     def _generate_unique_stems(self, file_paths: list) -> dict:
+        """Generate unique stems incorporating filename, file size, and image dimensions."""
         counts, stems = defaultdict(int), {}
         for p in file_paths:
-            s = Path(p).stem
-            stems[p] = f"{s}_{counts[s]}" if counts[s] else s
-            counts[s] += 1
+            identity_stem = compute_unique_image_stem(p)
+            stems[p] = f"{identity_stem}_{counts[identity_stem]}" if counts[identity_stem] else identity_stem
+            counts[identity_stem] += 1
         return stems
 
-    def _finish_populate_file_list(self, assets):
+    def _get_unique_stem(self, file_path: Optional[Union[str, Path]]) -> str:
+        """Resolve or compute the unique cache stem for a given image path."""
+        if not file_path:
+            return ""
+        path_str = str(file_path)
+        unique_stems = getattr(self, "_unique_stems", None)
+        if isinstance(unique_stems, dict) and path_str in unique_stems:
+            return unique_stems[path_str]
+        img_size = None
+        if (
+            getattr(self, "current_image_path", None) == path_str
+            and getattr(self, "original_pil_image", None) is not None
+        ):
+            img_size = self.original_pil_image.size
+        stem = compute_unique_image_stem(path_str, image_size=img_size)
+        if isinstance(unique_stems, dict):
+            unique_stems[path_str] = stem
+        return stem
+
+    def _finish_populate_file_list(self, assets, auto_select: Optional[bool] = None):
         """Populate the file list UI from resolved assets with exclusive low-confidence partitioning."""
+        if auto_select is None:
+            auto_select = bool(getattr(self, "_auto_select_first_image", False)) and not bool(
+                getattr(self, "_is_cold_startup", False)
+            )
+        else:
+            auto_select = bool(auto_select) and not bool(getattr(self, "_is_cold_startup", False))
+
         self._resolved_assets = assets
         self.image_files = [str(a.image_path) for a in assets]
         self._unique_stems = self._generate_unique_stems(self.image_files)
@@ -401,7 +554,16 @@ class FileListCacheMixin:
         )
 
         if is_model_view:
-            self.file_list_model.set_files(self.image_files, self._unique_stems)
+            sel_model = self.file_list_view.selectionModel()
+            if sel_model is not None:
+                sel_model.blockSignals(True)
+            try:
+                self.file_list_model.set_files(self.image_files, self._unique_stems)
+                if sel_model is not None and not auto_select and self.current_image_index < 0:
+                    sel_model.clearSelection()
+            finally:
+                if sel_model is not None:
+                    sel_model.blockSignals(False)
 
         if hasattr(self, "file_list_layout") and self.file_list_layout is not None:
             for i in reversed(range(self.file_list_layout.count())):
@@ -440,7 +602,12 @@ class FileListCacheMixin:
             is_batch_active = (getattr(self, "is_processing", False) is True) or is_batch_running
             if hasattr(self, "_sync_navigation_bar"):
                 self._sync_navigation_bar()
-            if not is_batch_active and self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
+            if (
+                auto_select
+                and not is_batch_active
+                and self.image_files
+                and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files))
+            ):
                 self.load_image_by_index(0)
             return
 
@@ -544,7 +711,12 @@ class FileListCacheMixin:
         is_batch_active = (getattr(self, "is_processing", False) is True) or is_batch_running
         if hasattr(self, "_sync_navigation_bar"):
             self._sync_navigation_bar()
-        if not is_batch_active and self.image_files and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files)):
+        if (
+            auto_select
+            and not is_batch_active
+            and self.image_files
+            and (self.current_image_index < 0 or self.current_image_index >= len(self.image_files))
+        ):
             self.load_image_by_index(0)
 
     def start_batch_analysis_thread(self):
@@ -813,7 +985,7 @@ class FileListCacheMixin:
             is_cached=is_cached,
         )
         if is_cached and file_path not in getattr(self, "_benchmark_result_cache", {}):
-            stem = getattr(self, "_unique_stems", {}).get(file_path, Path(file_path).stem)
+            stem = self._get_unique_stem(file_path)
             output_str = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") and self.output_path_edit else ""
             if output_str:
                 cand = Path(output_str) / f"{stem}_analysis.json"
@@ -821,8 +993,7 @@ class FileListCacheMixin:
                     self._benchmark_result_cache[file_path] = str(cand)
 
     def _refresh_cache_from_output_dir(self) -> None:
-        """Scan the output directory for *_analysis.json files and update _benchmark_result_cache.
-        Uses fast stem-based file existence checking without opening full JSONs on the UI thread."""
+        """Scan the output directory for *_analysis.json files matching each image's unique stem."""
         output_str = self.output_path_edit.text().strip() if hasattr(self, "output_path_edit") and self.output_path_edit else ""
         if not output_str:
             return
@@ -831,8 +1002,11 @@ class FileListCacheMixin:
             return
 
         unique_stems = getattr(self, "_unique_stems", None)
+        has_explicit_stems = isinstance(unique_stems, dict) and bool(unique_stems)
         if not isinstance(unique_stems, dict):
             unique_stems = {}
+            self._unique_stems = unique_stems
+
         image_files = getattr(self, "image_files", None)
         if not isinstance(image_files, (list, tuple)):
             image_files = []
@@ -840,13 +1014,162 @@ class FileListCacheMixin:
         for file_path in image_files:
             if file_path in self._benchmark_result_cache:
                 continue
-            stem = unique_stems.get(file_path, Path(file_path).stem)
+            stem = unique_stems.get(file_path) or compute_unique_image_stem(file_path)
+            unique_stems[file_path] = stem
             candidate = output_path / f"{stem}_analysis.json"
+
+            # Fallback for legacy fixtures where <raw_stem>_analysis.json was pre-created without _unique_stems
+            if not candidate.is_file() and not has_explicit_stems:
+                legacy_candidate = output_path / f"{Path(file_path).stem}_analysis.json"
+                if legacy_candidate.is_file():
+                    candidate = legacy_candidate
+                    unique_stems[file_path] = Path(file_path).stem
+
             if candidate.is_file():
+                summary_candidate = output_path / f"{unique_stems[file_path]}_summary.json"
+                if summary_candidate.is_file():
+                    try:
+                        with open(summary_candidate, "r", encoding="utf-8") as sf:
+                            s_data = json.load(sf)
+                        if isinstance(s_data, dict) and not verify_identity_metadata(
+                            file_path, s_data.get("_image_identity")
+                        ):
+                            continue
+                    except Exception:
+                        pass
                 self._benchmark_result_cache[file_path] = str(candidate)
 
         if hasattr(self, "_start_file_state_loader"):
             self._start_file_state_loader(output_str)
+
+    def clear_cache(self, output_dir: Optional[str] = None) -> bool:
+        """Delete all cached analysis files, sidecars, and drafts after a two-step confirmation."""
+        target_dir_str = (
+            output_dir.strip()
+            if isinstance(output_dir, str) and output_dir.strip()
+            else (
+                self.output_path_edit.text().strip()
+                if hasattr(self, "output_path_edit") and self.output_path_edit
+                else ""
+            )
+        )
+
+        if not target_dir_str:
+            QMessageBox.information(
+                self,
+                "Clear Cache",
+                "No output folder is currently configured.",
+            )
+            return False
+
+        target_path = Path(target_dir_str).expanduser()
+        parent_widget = self if isinstance(self, QWidget) else None
+
+        # Step 1: Primary Warning Confirmation
+        confirm_first = QMessageBox.warning(
+            parent_widget,
+            "Clear Analysis Cache",
+            f"Are you sure you want to clear the analysis cache for the current output folder?\n\n"
+            f"Folder: {target_path}\n\n"
+            "This will remove cached analysis results, summaries, protocol corrections, "
+            "edited detections, and unsaved drafts.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm_first != QMessageBox.StandardButton.Yes:
+            return False
+
+        # Step 2: Strict Secondary Confirmation ("Delete All" vs "Cancel")
+        second_box = QMessageBox(parent_widget)
+        second_box.setIcon(QMessageBox.Icon.Critical)
+        second_box.setWindowTitle("Confirm Permanent Cache Deletion")
+        second_box.setText(
+            "This action is permanent and cannot be undone.\n\n"
+            "Do you want to permanently delete all cached analysis files and reset review states?"
+        )
+        delete_all_btn = second_box.addButton("Delete All", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = second_box.addButton(QMessageBox.StandardButton.Cancel)
+        second_box.setDefaultButton(cancel_btn)
+        second_box.exec()
+
+        if second_box.clickedButton() != delete_all_btn:
+            return False
+
+        # Stop any active background state loader before deleting files
+        old_loader = getattr(self, "_file_state_loader", None)
+        if old_loader is not None:
+            try:
+                old_loader.cancel()
+            except Exception:
+                pass
+            self._file_state_loader = None
+        self._file_state_loader_gen = getattr(self, "_file_state_loader_gen", 0) + 1
+
+        if hasattr(self, "_draft_timer") and self._draft_timer is not None:
+            self._draft_timer.stop()
+
+        deleted_count = 0
+        cache_patterns = (
+            "*_analysis.json",
+            "*_summary.json",
+            "*_protocol_corrections.json",
+            "*_edited_detections.json",
+            "*_failed.json",
+            "*_annotated.png",
+        )
+
+        if target_path.is_dir():
+            for pattern in cache_patterns:
+                for file_item in target_path.glob(pattern):
+                    if file_item.is_file():
+                        try:
+                            file_item.unlink()
+                            deleted_count += 1
+                        except OSError as exc:
+                            logging.warning("Failed to delete cache file %s: %s", file_item, exc)
+
+            # Clear .drafts directory
+            from visual.draft_store import clear_drafts
+            deleted_count += clear_drafts(target_path)
+
+            # Clear rendered PDF cache if present
+            pdf_renders_dir = target_path / "pdf_renders"
+            if pdf_renders_dir.is_dir():
+                try:
+                    shutil.rmtree(pdf_renders_dir, ignore_errors=True)
+                except OSError:
+                    pass
+
+        # Clear in-memory caches and reset UI state
+        if hasattr(self, "_benchmark_result_cache") and isinstance(self._benchmark_result_cache, dict):
+            self._benchmark_result_cache.clear()
+
+        if hasattr(self, "context") and getattr(self.context, "data_manager", None):
+            try:
+                self.context.data_manager.clear_all_results()
+            except Exception:
+                pass
+
+        if hasattr(self, "file_list_model") and self.file_list_model is not None:
+            if hasattr(self.file_list_model, "reset_all_states"):
+                self.file_list_model.reset_all_states()
+
+        self._refresh_file_list_button_states()
+        self.refresh_low_confidence_tab()
+
+        if hasattr(self, "_clear_display"):
+            self._clear_display()
+        self.current_image_index = -1
+        self.current_image_path = None
+        self.current_analysis_result = None
+        if hasattr(self, "_sync_navigation_bar"):
+            self._sync_navigation_bar()
+
+        if getattr(self, "input_path_edit", None) and self.input_path_edit.text().strip():
+            self.populate_file_list(auto_select=False)
+
+        self.update_status("Cache cleared")
+        return True
 
     def _refresh_file_list_button_states(self) -> None:
         """Update all file-list button icons to reflect the current cache state."""

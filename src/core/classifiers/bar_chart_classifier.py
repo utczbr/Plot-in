@@ -4,7 +4,7 @@ import logging
 
 from .base_classifier import BaseChartClassifier, ClassificationResult
 from utils.validation_utils import is_numeric
-from services.orientation_service import Orientation
+from services.orientation_service import Orientation, OrientationService
 
 class BarChartClassifier(BaseChartClassifier):
     """Specialized classifier optimized exclusively for bar charts"""
@@ -62,6 +62,7 @@ class BarChartClassifier(BaseChartClassifier):
         """
         Bar chart specific classification with adaptive thresholding.
         """
+        orientation = OrientationService.from_any(orientation)
         bars = chart_elements
         if not self.validate_inputs(axis_labels, bars):
             return self._empty_result()
@@ -80,7 +81,7 @@ class BarChartClassifier(BaseChartClassifier):
             
             best_class = max(scores, key=scores.get)
             
-            # IMPROVEMENT: Adaptive threshold based on margin analysis
+            # Adaptive threshold based on margin analysis
             sorted_scores = sorted(scores.values(), reverse=True)
             margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else float('inf')
             
@@ -95,15 +96,14 @@ class BarChartClassifier(BaseChartClassifier):
             if scores[best_class] > threshold:
                 classified[best_class].append(feat['label'])
             else:
-                # IMPROVEMENT: Enhanced fallback
-                self._apply_fallback_classification(feat, classified)
+                self._apply_fallback_classification(feat, classified, orientation)
         
         # Post-process: align tick labels with bars
         classified['tick_label'] = self._align_ticks_with_bars(
             classified['tick_label'], bars, orientation, img_width, img_height
         )
         
-        # IMPROVEMENT: Apply constraint-based post-processing
+        # Apply constraint-based post-processing
         classified = self._apply_constraints(classified, label_features, orientation)
         
         confidence = self._compute_confidence(all_scores)
@@ -126,17 +126,24 @@ class BarChartClassifier(BaseChartClassifier):
             metadata=metadata
         )
     
-    def _apply_fallback_classification(self, feat: Dict, classified: Dict):
+    def _apply_fallback_classification(
+        self,
+        feat: Dict,
+        classified: Dict,
+        orientation: Orientation = Orientation.VERTICAL,
+    ):
         """Multi-stage fallback when primary classification is ambiguous."""
-        min_edge_dist = feat.get('min_edge_dist', 0.5)
-        
-        if min_edge_dist < 0.15:
+        orientation = OrientationService.from_any(orientation)
+        if orientation == Orientation.VERTICAL:
+            scale_edge_dist = min(feat.get('dist_left', 0.5), feat.get('dist_right', 0.5))
+        else:
+            scale_edge_dist = min(feat.get('dist_bottom', 0.5), feat.get('dist_top', 0.5))
+
+        if feat.get('is_numeric', False) and scale_edge_dist < 0.22:
             classified['scale_label'].append(feat['label'])
-        elif min_edge_dist > 0.3:
+        elif not feat.get('is_numeric', False):
             classified['tick_label'].append(feat['label'])
-        elif feat.get('is_small', False):
-            classified['scale_label'].append(feat['label'])
-        elif feat['is_numeric']:
+        elif feat.get('is_small', False) and scale_edge_dist < 0.25:
             classified['scale_label'].append(feat['label'])
         else:
             classified['tick_label'].append(feat['label'])
@@ -148,27 +155,40 @@ class BarChartClassifier(BaseChartClassifier):
         orientation: Orientation = Orientation.VERTICAL,
     ) -> Dict:
         """Apply domain-specific constraints to refine classifications."""
+        orientation = OrientationService.from_any(orientation)
         label_to_feat = {tuple(f['label']['xyxy']): f for f in features}
         
         refined_scale = []
         refined_tick = []
         swaps = []
+
+        def _scale_axis_dist(f: Dict) -> float:
+            if orientation == Orientation.VERTICAL:
+                return min(f.get('dist_left', 0.5), f.get('dist_right', 0.5))
+            return min(f.get('dist_bottom', 0.5), f.get('dist_top', 0.5))
+
+        def _tick_axis_dist(f: Dict) -> float:
+            if orientation == Orientation.VERTICAL:
+                return f.get('dist_bottom', 0.5)
+            return f.get('dist_left', 0.5)
         
         for label in classified.get('scale_label', []):
             feat = label_to_feat.get(tuple(label['xyxy']))
-            if feat and feat.get('min_edge_dist', 0) >= 0.25:
-                swaps.append((label, 'scale_to_tick'))
+            if feat:
+                s_dist = _scale_axis_dist(feat)
+                t_dist = _tick_axis_dist(feat)
+                if s_dist >= 0.25 and (t_dist < s_dist or not feat.get('is_numeric', False)):
+                    swaps.append((label, 'scale_to_tick'))
+                else:
+                    refined_scale.append(label)
             else:
                 refined_scale.append(label)
         
         for label in classified.get('tick_label', []):
             feat = label_to_feat.get(tuple(label['xyxy']))
             if feat:
-                if orientation == Orientation.VERTICAL:
-                    scale_edge_dist = min(feat.get('dist_left', 0.5), feat.get('dist_right', 0.5))
-                else:
-                    scale_edge_dist = min(feat.get('dist_top', 0.5), feat.get('dist_bottom', 0.5))
-                if feat.get('is_numeric', False) and scale_edge_dist < 0.1:
+                s_dist = _scale_axis_dist(feat)
+                if feat.get('is_numeric', False) and s_dist < 0.15:
                     swaps.append((label, 'tick_to_scale'))
                 else:
                     refined_tick.append(label)
@@ -234,7 +254,7 @@ class BarChartClassifier(BaseChartClassifier):
     def _compute_bar_context(self, bars: List[Dict], w: int, h: int, orientation: Orientation) -> Dict:
         if not bars:
             return {}
-        
+        orientation = OrientationService.from_any(orientation)
         centers = []
         for bar in bars:
             x1, y1, x2, y2 = bar['xyxy']
@@ -276,6 +296,7 @@ class BarChartClassifier(BaseChartClassifier):
         }
     
     def _compute_bar_scores(self, feat: Dict, bar_ctx: Dict, orientation: Orientation) -> Dict[str, float]:
+        orientation = OrientationService.from_any(orientation)
         scores = {'scale_label': 0.0, 'tick_label': 0.0, 'axis_title': 0.0}
         
         nx, ny = feat['nx'], feat['ny']
@@ -283,7 +304,7 @@ class BarChartClassifier(BaseChartClassifier):
         aspect = feat['aspect']
         is_numeric = feat['is_numeric']
         
-        # === GAUSSIAN REGION SCORING (Phase 14) ===
+        # === GAUSSIAN REGION SCORING (Orientation-Aware) ===
         gaussian_weights = {
             'left_axis_weight': self.params.get('left_axis_weight', 5.0),
             'right_axis_weight': self.params.get('right_axis_weight', 4.0),
@@ -301,71 +322,66 @@ class BarChartClassifier(BaseChartClassifier):
         
         kernel_weight = self.params.get('gaussian_kernel_weight', 1.0)
         
-        # Apply Gaussian scores
-        scores['scale_label'] += (region_scores['left_axis'] + region_scores['right_axis']) * kernel_weight
-        scores['tick_label'] += region_scores['bottom_axis'] * kernel_weight  # Ticks at bottom for bar
+        if orientation == Orientation.VERTICAL:
+            scores['scale_label'] += (region_scores['left_axis'] + region_scores['right_axis']) * kernel_weight
+            scores['tick_label'] += region_scores['bottom_axis'] * kernel_weight
+        else:
+            # Horizontal bars: scale is on bottom/top X-axis; ticks are on left Y-axis
+            scores['scale_label'] += region_scores['bottom_axis'] * kernel_weight
+            scores['tick_label'] += region_scores['left_axis'] * kernel_weight
+
         scores['axis_title'] += region_scores['top_title'] * kernel_weight
-        scores['scale_label'] -= region_scores['center_plot']  # Penalty
+        scores['scale_label'] -= region_scores['center_plot']
         scores['tick_label'] -= region_scores['center_plot'] * 0.5
         
         # === SCALE LABEL SCORING ===
-        # Small size
         if rel_w < self.params['scale_size_max_width'] and rel_h < self.params['scale_size_max_height']:
             scores['scale_label'] += 3.0
         
-        # Position: left/right for vertical bars, bottom for horizontal
         if orientation == Orientation.VERTICAL:
-            if nx < 0.15:
+            scale_edge_dist = min(feat.get('dist_left', 0.5), feat.get('dist_right', 0.5))
+            if nx < 0.18:
                 scores['scale_label'] += self.params['scale_left_weight']
-            elif nx > 0.85:
+            elif nx > 0.82:
                 scores['scale_label'] += self.params['scale_right_weight']
         else:
-            if ny > 0.85:
+            scale_edge_dist = min(feat.get('dist_bottom', 0.5), feat.get('dist_top', 0.5))
+            if ny > 0.78:
                 scores['scale_label'] += self.params['scale_bottom_weight']
         
-        # Numeric boost
         if is_numeric:
             scores['scale_label'] += self.params['numeric_boost']
+        else:
+            scores['scale_label'] -= 3.0
         
-        # IMPROVEMENT: Continuous edge scoring
-        min_edge_dist = feat.get('min_edge_dist', 0.5)
-        edge_score = max(0, (0.2 - min_edge_dist) / 0.2)
+        edge_score = max(0.0, (0.22 - scale_edge_dist) / 0.22)
         scores['scale_label'] += edge_score * 2.0
         
         # === TICK LABEL SCORING ===
         if orientation == Orientation.VERTICAL:
-            # Bottom region for vertical bars
             if ny > 0.75:
                 scores['tick_label'] += self.params['tick_bottom_weight']
-            
-            # Alignment with bar centers
             if bar_ctx:
                 alignment_score = self._compute_bar_alignment_score(
                     feat['cx'], feat['cy'], bar_ctx, Orientation.VERTICAL
                 )
                 scores['tick_label'] += alignment_score * self.params['bar_alignment_weight']
         else:
-            # Left region for horizontal bars
             if nx < 0.25:
                 scores['tick_label'] += self.params['tick_left_weight']
-            
-            # Alignment with bar centers
             if bar_ctx:
                 alignment_score = self._compute_bar_alignment_score(
                     feat['cx'], feat['cy'], bar_ctx, Orientation.HORIZONTAL
                 )
                 scores['tick_label'] += alignment_score * self.params['bar_alignment_weight']
         
-        # Non-numeric boost for tick labels
         if not is_numeric:
             scores['tick_label'] += 2.0
         
         # === AXIS TITLE SCORING ===
-        # Large size
         if rel_w > self.params['title_size_min_width'] or rel_h > 0.1:
             scores['axis_title'] += 4.0
         
-        # Extreme aspect ratio
         if aspect > self.params['title_aspect_min'] or aspect < 0.2:
             scores['axis_title'] += 3.5
         
@@ -374,6 +390,7 @@ class BarChartClassifier(BaseChartClassifier):
     def _compute_bar_alignment_score(self, cx: float, cy: float, bar_ctx: Dict, orientation: Orientation) -> float:
         if 'centers' not in bar_ctx or len(bar_ctx['centers']) == 0:
             return 0.0
+        orientation = OrientationService.from_any(orientation)
         centers = bar_ctx['centers']
         avg_spacing = bar_ctx['avg_spacing']
         
@@ -405,6 +422,7 @@ class BarChartClassifier(BaseChartClassifier):
         """Ensure tick labels are properly aligned with bars"""
         if not ticks or not bars:
             return ticks
+        orientation = OrientationService.from_any(orientation)
         
         bar_centers = []
         for bar in bars:

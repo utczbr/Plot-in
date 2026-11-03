@@ -49,6 +49,8 @@ def mock_app_window(qapp, tmp_path):
     models_dir.mkdir(parents=True, exist_ok=True)
 
     win = ModernChartAnalysisApp()
+    win.save_config = lambda: None
+    win.save_advanced_settings = lambda: None
     win.input_path_edit.setText(str(input_dir))
     win.output_path_edit.setText(str(output_dir))
     win.models_dir_edit.setText(str(models_dir))

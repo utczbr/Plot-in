@@ -163,6 +163,7 @@ def compute_custom_settings_diff(
 
 class SettingsDialog(QDialog):
     settings_changed = pyqtSignal(dict)
+    clear_cache_requested = pyqtSignal()
     LIVE_GUI_SECTIONS = LIVE_GUI_SECTIONS
     deep_merge_settings = staticmethod(deep_merge_settings)
     compute_custom_settings_diff = staticmethod(compute_custom_settings_diff)
@@ -499,8 +500,8 @@ class SettingsDialog(QDialog):
         return group
 
     def _create_basic_paths_group(self) -> QGroupBox:
-        """Create Paths configuration group (persisted to gui_config.json)."""
-        group = QGroupBox("Paths")
+        """Create Paths & Cache configuration group (persisted to gui_config.json)."""
+        group = QGroupBox("Paths & Cache")
         grid = QGridLayout(group)
         grid.setSpacing(8)
 
@@ -512,6 +513,18 @@ class SettingsDialog(QDialog):
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self._browse_models_dir)
         grid.addWidget(browse_btn, 0, 2)
+
+        grid.addWidget(QLabel("Analysis Cache:"), 1, 0)
+        self.basic_clear_cache_btn = QPushButton("Clear Cache...")
+        self.basic_clear_cache_btn.setToolTip(
+            "Delete cached analysis JSONs, summaries, sidecars, and drafts in the current output folder."
+        )
+        self.basic_clear_cache_btn.setStyleSheet(
+            "QPushButton { background-color: #8b2626; border: 1px solid #b33a3a; color: #ffffff; font-weight: bold; } "
+            "QPushButton:hover { background-color: #a83232; border-color: #ff6b6b; }"
+        )
+        self.basic_clear_cache_btn.clicked.connect(self._on_clear_cache_clicked)
+        grid.addWidget(self.basic_clear_cache_btn, 1, 1, 1, 2)
 
         return group
 
@@ -1139,11 +1152,11 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(group)
 
-        # ADD IMPORT/EXPORT SECTION
-        import_export_group = QGroupBox("Settings Management")
+        # ADD IMPORT/EXPORT & CACHE MANAGEMENT SECTION
+        import_export_group = QGroupBox("Settings & Cache Management")
         ie_layout = QVBoxLayout(import_export_group)
         
-        ie_info = QLabel("Save or load custom settings profiles")
+        ie_info = QLabel("Save or load custom settings profiles, or clear cached analysis files")
         ie_info.setStyleSheet("color: #888888; font-style: italic; font-size: 9px;")
         ie_layout.addWidget(ie_info)
         
@@ -1156,12 +1169,27 @@ class SettingsDialog(QDialog):
         import_btn = QPushButton("Import Settings")
         import_btn.clicked.connect(self._import_settings)
         ie_buttons.addWidget(import_btn)
+
+        self.clear_cache_btn = QPushButton("Clear Cache...")
+        self.clear_cache_btn.setToolTip(
+            "Delete cached analysis JSONs, summaries, sidecars, and drafts in the current output folder."
+        )
+        self.clear_cache_btn.setStyleSheet(
+            "QPushButton { background-color: #8b2626; border: 1px solid #b33a3a; color: #ffffff; font-weight: bold; } "
+            "QPushButton:hover { background-color: #a83232; border-color: #ff6b6b; }"
+        )
+        self.clear_cache_btn.clicked.connect(self._on_clear_cache_clicked)
+        ie_buttons.addWidget(self.clear_cache_btn)
         
         ie_layout.addLayout(ie_buttons)
         layout.addWidget(import_export_group)
         
         layout.addStretch()
         self.tabs.addTab(tab, "Output")
+
+    def _on_clear_cache_clicked(self):
+        """Emit clear_cache_requested signal so the main controller runs double-confirmed deletion."""
+        self.clear_cache_requested.emit()
 
     def _create_nn_classifier_tab(self):
         """Create neural network classifier configuration tab"""

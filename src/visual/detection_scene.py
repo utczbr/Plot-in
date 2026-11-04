@@ -1193,6 +1193,9 @@ class DetectionScene(QGraphicsScene):
 
     def load_image(self, pixmap: QPixmap) -> None:
         """Set the base chart image. Clears any previous content."""
+        # clear() deletes every item's C++ object; drop the selection first so we never
+        # call into a deleted PieSliceGroup (here or from selectionChanged during clear()).
+        self._selected_slice_group = None
         self.clear()
         self._rect_items.clear()
         self._baseline_item = None

@@ -253,3 +253,18 @@ class TestEditableRectItem:
         assert item.pen().width() == 3  # highlighted
         item.set_highlighted(False)
         assert item.pen().width() == 2  # back to normal
+
+
+def test_load_image_drops_selected_pie_slice_group():
+    """Regression: selected PieSliceGroup deleted by load_image() must not be touched again."""
+    scene = DetectionScene()
+    scene.load_image(_make_pixmap())
+    kps = [[100, 100, 1.0], [150, 100, 1.0], [140, 130, 1.0], [120, 148, 1.0], [100, 150, 1.0]]
+    scene.set_detections({'slice': [{'xyxy': [100, 100, 150, 150], 'conf': 0.9, 'keypoints': kps}]})
+    group = scene._rect_items[0]
+    scene.set_selected_slice_group(group)
+
+    scene.load_image(_make_pixmap())  # deletes the group's C++ object
+    scene.set_detections({'slice': [{'xyxy': [100, 100, 150, 150], 'conf': 0.9, 'keypoints': kps}]})
+
+    assert scene._selected_slice_group is None

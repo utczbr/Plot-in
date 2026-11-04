@@ -85,6 +85,9 @@ fi
 # Apple Silicon CPU directly. Set DISABLE_COREML=0 to re-enable CoreML.
 export DISABLE_COREML="${DISABLE_COREML:-1}"
 
+# Print the failing Python line if a native crash (e.g. Bus error) happens.
+export PYTHONFAULTHANDLER=1
+
 # ── Launch the application ────────────────────────────────────────────────
 echo "» Starting Chart Analysis GUI..."
 "$PYTHON_BIN" src/main_modern.py "$@"

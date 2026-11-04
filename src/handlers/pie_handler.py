@@ -91,6 +91,7 @@ class PieHandler(PolarChartHandler):
             # 2. Center Detection — §4.5: Try RANSAC circle fit from keypoints first
             boundary_kps = self._extract_boundary_keypoints(pie_slices)
             radius = None
+            center_point = None
 
             if len(boundary_kps) >= 6:
                 # Enough boundary keypoints for RANSAC circle fit
@@ -104,12 +105,10 @@ class PieHandler(PolarChartHandler):
                         f"RANSAC circle fit: center=({center_point[0]:.1f}, {center_point[1]:.1f}), "
                         f"r={radius:.1f}, inliers={inlier_count}/{len(boundary_kps)}"
                     )
-                else:
-                    center_point = self._find_pie_center_robust(pie_slices, w, h)
-                    diagnostics['center_method'] = 'mad_centroid_fallback'
-            else:
+
+            if center_point is None:
                 center_point = self._find_pie_center_robust(pie_slices, w, h)
-                diagnostics['center_method'] = 'mad_centroid'
+                diagnostics['center_method'] = 'mad_centroid_fallback' if len(boundary_kps) >= 6 else 'mad_centroid'
 
             self.logger.info(f"Detected Pie Center: {center_point}")
 
@@ -119,8 +118,8 @@ class PieHandler(PolarChartHandler):
 
             for slice_det in pie_slices:
                 bbox = slice_det['xyxy']
-                cx = (bbox[0] + bbox[2]) / 2
-                cy = (bbox[1] + bbox[3]) / 2
+                cx = (bbox[0] + bbox[2]) / 2.0
+                cy = (bbox[1] + bbox[3]) / 2.0
 
                 # Centroid angle (always computed for sorting/fallback)
                 dx = cx - center_point[0]
@@ -224,6 +223,74 @@ class PieHandler(PolarChartHandler):
 
     # ── §4.5: Keypoint Extraction and RANSAC Circle Fit ──────────────────
 
+    @staticmethod
+    def _circle_from_3_points(
+        p1: np.ndarray, p2: np.ndarray, p3: np.ndarray
+    ) -> Optional[Tuple[Tuple[float, float], float]]:
+        """
+        Exact circumcircle of 3 points using closed-form analytical geometry.
+        Does not call LAPACK/BLAS solvers, avoiding multithreading crashes / SIGBUS on macOS.
+        """
+        x1, y1 = float(p1[0]), float(p1[1])
+        x2, y2 = float(p2[0]), float(p2[1])
+        x3, y3 = float(p3[0]), float(p3[1])
+
+        d = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+        if abs(d) < 1e-7:
+            return None  # Collinear points
+
+        sq1 = x1 * x1 + y1 * y1
+        sq2 = x2 * x2 + y2 * y2
+        sq3 = x3 * x3 + y3 * y3
+
+        cx = (sq1 * (y2 - y3) + sq2 * (y3 - y1) + sq3 * (y1 - y2)) / d
+        cy = (sq1 * (x3 - x2) + sq2 * (x1 - x3) + sq3 * (x2 - x1)) / d
+        r_sq = (x1 - cx) ** 2 + (y1 - cy) ** 2
+        if r_sq <= 0 or not (np.isfinite(cx) and np.isfinite(cy) and np.isfinite(r_sq)):
+            return None
+        return (cx, cy), float(np.sqrt(r_sq))
+
+    @staticmethod
+    def _fit_circle_kasa_inliers(
+        points: np.ndarray
+    ) -> Optional[Tuple[Tuple[float, float], float]]:
+        """
+        Refine circle fit on inliers using Kåsa's method in centered coordinates.
+        Solves a 2x2 linear system analytically via Cramer's rule, eliminating
+        any call to np.linalg.lstsq (which invokes native LAPACK and causes Bus error on macOS).
+        """
+        n = len(points)
+        if n < 3:
+            return None
+
+        x = points[:, 0]
+        y = points[:, 1]
+        x_mean = float(np.mean(x))
+        y_mean = float(np.mean(y))
+
+        u = x - x_mean
+        v = y - y_mean
+
+        Suu = float(np.sum(u * u))
+        Svv = float(np.sum(v * v))
+        Suv = float(np.sum(u * v))
+        z = u * u + v * v
+        Suz = float(np.sum(u * z))
+        Svz = float(np.sum(v * z))
+
+        det = Suu * Svv - Suv * Suv
+        if abs(det) < 1e-7:
+            return None
+
+        uc = (Suz * Svv - Svz * Suv) / (2.0 * det)
+        vc = (Svz * Suu - Suz * Suv) / (2.0 * det)
+        cx = uc + x_mean
+        cy = vc + y_mean
+        r_sq = uc * uc + vc * vc + (Suu + Svv) / n
+        if r_sq <= 0 or not (np.isfinite(cx) and np.isfinite(cy) and np.isfinite(r_sq)):
+            return None
+        return (cx, cy), float(np.sqrt(r_sq))
+
     def _extract_boundary_keypoints(self, slices: List[Dict]) -> np.ndarray:
         """
         Collect boundary keypoints from all slices.
@@ -249,19 +316,20 @@ class PieHandler(PolarChartHandler):
             # Take boundary keypoints (indices 1-4)
             for j in range(1, min(5, len(kps))):
                 x, y = float(kps[j, 0]), float(kps[j, 1])
-                # Skip invalid keypoints (zero or negative)
-                if x > 0 and y > 0:
+                # Skip invalid keypoints (zero, negative, non-finite)
+                if np.isfinite(x) and np.isfinite(y) and x > 0 and y > 0:
                     points.append([x, y])
-        return np.array(points) if points else np.empty((0, 2))
+        return np.array(points, dtype=np.float64) if points else np.empty((0, 2), dtype=np.float64)
 
     def _fit_circle_ransac(
         self, points: np.ndarray, max_iter: int = 100, inlier_thresh: float = 2.0
     ) -> Optional[Tuple[Tuple[float, float], float, int]]:
         """
-        §4.5.2: RANSAC circle fit using Kåsa's algebraic method.
+        §4.5.2: RANSAC circle fit using closed-form analytical Kåsa method.
 
         Returns (center, radius, n_inliers) or None if fit fails.
-        Kåsa's method solves x²+y² + Dx + Ey + F = 0 via least-squares on 3 points.
+        Uses pure algebraic calculation (no LAPACK/BLAS solvers) to avoid
+        macOS vecLib multithreading memory faults (SIGBUS / Bus error 10).
         """
         n = len(points)
         if n < 3:
@@ -282,27 +350,14 @@ class PieHandler(PolarChartHandler):
         for _ in range(max_iter):
             # Sample 3 random distinct points
             idx = rng.choice(n, size=3, replace=False)
-            p = points[idx]  # (3, 2)
-
-            # Kåsa's method: solve [x, y, 1] · [D, E, F]^T = -(x² + y²)
-            A = np.column_stack([p[:, 0], p[:, 1], np.ones(3)])
-            b = -(p[:, 0] ** 2 + p[:, 1] ** 2)
-
-            try:
-                DEF = np.linalg.solve(A, b)
-            except np.linalg.LinAlgError:
-                continue  # Collinear points
-
-            D, E, F = DEF
-            cx = -D / 2.0
-            cy = -E / 2.0
-            r_sq = cx ** 2 + cy ** 2 - F
-            if r_sq <= 0:
+            fit = self._circle_from_3_points(points[idx[0]], points[idx[1]], points[idx[2]])
+            if fit is None:
                 continue
-            r = np.sqrt(r_sq)
+
+            (cx, cy), r = fit
 
             # Compute residuals for all points
-            dists = np.sqrt((points[:, 0] - cx) ** 2 + (points[:, 1] - cy) ** 2)
+            dists = np.hypot(points[:, 0] - cx, points[:, 1] - cy)
             residuals = np.abs(dists - r)
             inlier_mask = residuals < inlier_thresh
             n_inliers = int(np.sum(inlier_mask))
@@ -316,19 +371,13 @@ class PieHandler(PolarChartHandler):
         if best_center is None or best_inlier_count < 3:
             return None
 
-        # Refine on inliers via least-squares (Kåsa on all inliers)
-        inlier_pts = points[best_inlier_mask]
-        if len(inlier_pts) >= 3:
-            A = np.column_stack([inlier_pts[:, 0], inlier_pts[:, 1], np.ones(len(inlier_pts))])
-            b = -(inlier_pts[:, 0] ** 2 + inlier_pts[:, 1] ** 2)
-            DEF, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
-            D, E, F = DEF
-            cx = -D / 2.0
-            cy = -E / 2.0
-            r_sq = cx ** 2 + cy ** 2 - F
-            if r_sq > 0:
-                best_center = (cx, cy)
-                best_radius = np.sqrt(r_sq)
+        # Refine on inliers via centered Kåsa closed-form (no LAPACK/lstsq)
+        if best_inlier_mask is not None:
+            inlier_pts = points[best_inlier_mask]
+            if len(inlier_pts) >= 3:
+                refined = self._fit_circle_kasa_inliers(inlier_pts)
+                if refined is not None:
+                    best_center, best_radius = refined
 
         return (best_center, float(best_radius), best_inlier_count)
 
@@ -364,7 +413,7 @@ class PieHandler(PolarChartHandler):
         angles = []
         for j in range(1, min(5, len(kps))):
             x, y = float(kps[j, 0]), float(kps[j, 1])
-            if x <= 0 and y <= 0:
+            if not (np.isfinite(x) and np.isfinite(y)) or (x <= 0 and y <= 0):
                 continue
             theta = np.arctan2(y - center[1], x - center[0])
             if theta < 0:
@@ -564,16 +613,19 @@ class PieHandler(PolarChartHandler):
         points = []
         for s in slices:
             bbox = s['xyxy']
-            points.append([(bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2])
+            points.append([(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0])
 
-        points = np.array(points)
+        points = np.array(points, dtype=np.float64)
         if len(points) < 3:
             if len(points) == 0:
-                return (w / 2, h / 2)
-            return tuple(np.mean(points, axis=0))
+                return (float(w) / 2.0, float(h) / 2.0)
+            mean_pt = np.mean(points, axis=0)
+            return (float(mean_pt[0]), float(mean_pt[1]))
 
         mask = np.ones(len(points), dtype=bool)
         for _ in range(3):
+            if np.sum(mask) == 0:
+                break
             current_center = np.mean(points[mask], axis=0)
             dists = np.linalg.norm(points - current_center, axis=1)
 
@@ -595,7 +647,13 @@ class PieHandler(PolarChartHandler):
                 break
             mask = new_mask
 
-        return tuple(np.mean(points[mask], axis=0))
+        if np.sum(mask) == 0:
+            return (float(w) / 2.0, float(h) / 2.0)
+        center = np.mean(points[mask], axis=0)
+        cx, cy = float(center[0]), float(center[1])
+        if not (np.isfinite(cx) and np.isfinite(cy)):
+            return (float(w) / 2.0, float(h) / 2.0)
+        return (cx, cy)
 
     def extract_values(self, img, detections, calibration, baselines, orientation) -> List[Dict]:
          return []

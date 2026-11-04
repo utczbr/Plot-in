@@ -1,3 +1,12 @@
+import os
+import sys
+
+# macOS: Apple vecLib/Accelerate can hit "Bus error: 10" when multithreaded BLAS
+# runs inside Qt worker threads. Must be set before numpy is first imported.
+if sys.platform == "darwin":
+    for _var in ("VECLIB_MAXIMUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ.setdefault(_var, "1")
+
 # ---------------------------------------------------------------------------
 # Pre-import onnxruntime early to bind cleanly to system C++ runtime DLLs.
 try:

@@ -230,10 +230,12 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
         bars = result.get("bars")
         if not isinstance(bars, list):
             bars = []
-        bars = sorted(bars, key=lambda b: (_bbox_from_element(b) or [0])[0])
-        for idx, bar in enumerate(bars):
-            if not isinstance(bar, dict):
-                continue
+        # Sort for display but keep each bar's ORIGINAL index for edit writeback.
+        indexed_bars = sorted(
+            ((i, b) for i, b in enumerate(bars) if isinstance(b, dict)),
+            key=lambda ib: (_bbox_from_element(ib[1]) or [0])[0],
+        )
+        for orig_idx, bar in indexed_bars:
             tick_label = bar.get("tick_label")
             tick_text = ""
             if isinstance(tick_label, dict):
@@ -252,7 +254,7 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
             }
             rows.append(
                 DataTabRow(
-                    element_index=idx,
+                    element_index=orig_idx,
                     source=source,
                     values=row_values,
                     editable_fields=_editable_fields_for_chart(chart_type),
@@ -265,14 +267,22 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
     elements = result.get("elements")
     if not isinstance(elements, list):
         elements = []
+    # Keep each element's ORIGINAL index in result["elements"] so that
+    # apply_data_tab_edits writes back to the right element after display sorting.
+    indexed_elements = [(i, e) for i, e in enumerate(elements) if isinstance(e, dict)]
     if chart_type == "heatmap":
-        elements = sorted(elements, key=lambda e: (e.get("row") or 0, e.get("col") or 0))
+        indexed_elements.sort(key=lambda ie: (ie[1].get("row") or 0, ie[1].get("col") or 0))
     else:
-        elements = sorted(elements, key=lambda e: (_bbox_from_element(e) or [0])[0])
+        def _sort_key(ie):
+            el = ie[1]
+            is_summary = str(el.get("type", "")).endswith("_summary")
+            bbox = _bbox_from_element(el)
+            # Summary rows (no bbox) go last; stable sort keeps series order otherwise.
+            return (1 if is_summary else 0, (bbox or [0])[0])
+        indexed_elements.sort(key=_sort_key)
 
-    for idx, element in enumerate(elements):
-        if not isinstance(element, dict):
-            continue
+    for display_idx, (orig_idx, element) in enumerate(indexed_elements):
+        idx = display_idx
 
         row_kind = "summary" if str(element.get("type", "")).endswith("_summary") else "element"
         editable_fields = _editable_fields_for_chart(chart_type, row_kind=row_kind)
@@ -379,7 +389,7 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
 
         rows.append(
             DataTabRow(
-                element_index=idx,
+                element_index=orig_idx,
                 source="elements",
                 values=row_values,
                 editable_fields=editable_fields,

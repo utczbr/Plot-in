@@ -323,11 +323,14 @@ def build_protocol_rows(
             else:
                 box_fields['outliers_str'] = ''
 
-        # Scatter x-coordinate
+        # Scatter x-coordinate; line/area carry the calibrated X under 'x_value'
         scatter_x = None
-        if chart_type == 'scatter':
+        if chart_type in ('scatter', 'line', 'area'):
+            raw_x = element.get('x') if chart_type == 'scatter' else element.get('x_value')
+            if raw_x is None and chart_type != 'scatter':
+                raw_x = element.get('x')
             try:
-                scatter_x = float(element.get('x')) if element.get('x') is not None else None
+                scatter_x = float(raw_x) if raw_x is not None else None
             except (TypeError, ValueError):
                 pass
 
@@ -338,15 +341,17 @@ def build_protocol_rows(
             if v is not None:
                 pie_pct = round(v * 100.0, 4)
 
+        series_label = _extract_series_id(element, chart_type)
         row: Dict[str, Any] = {
             '_uid': uuid4().hex,
             'source_file': str(source_file),
             'page_index': page_index,
             'chart_type': chart_type,
             'element_index': element.get('index', idx),
-            'series_id': _extract_series_id(element, chart_type),
+            'series_id': series_label,
             'group': _extract_group(element),
-            'outcome': outcome,
+            # 'Legend' column: context outcome when available, else the series/legend label
+            'outcome': outcome or series_label,
             'value': _extract_value(element),
             'unit': unit,
             'error_bar_type': context_error_bar_type,

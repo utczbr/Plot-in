@@ -91,7 +91,14 @@ class ChartAnalysisOrchestrator:
             heatmap_config: Optional HeatmapConfig for advanced heatmap features
         """
         self.calibration_service = calibration_service
-        hyperparams_path = Path(__file__).resolve().parent / 'lylaa_hypertuning_results.json'
+        # Look for hypertuning output in the known locations (models dir, config dir, src).
+        _src_dir = Path(__file__).resolve().parent
+        _candidates = [
+            _src_dir / 'models' / 'lylaa_hypertuning_results.json',
+            _src_dir.parent / 'config' / 'lylaa_hypertuning_results.json',
+            _src_dir / 'lylaa_hypertuning_results.json',
+        ]
+        hyperparams_path = next((c for c in _candidates if c.exists()), _candidates[0])
         self.spatial_classifier = ProductionSpatialClassifier(hyperparams_path=hyperparams_path)
         self.logger = logger or logging.getLogger(__name__)
         self.heatmap_config = heatmap_config or HeatmapConfig()

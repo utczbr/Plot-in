@@ -69,6 +69,8 @@ class AreaExtractor(BaseExtractor):
                 'xyxy': point['xyxy'],
                 'x_center': x_center,
                 'y_center': y_center,
+                'series_id': point.get('series_id', 0),
+                'x_value': float(self._resolve_scale_func(x_scale_model)(x_center)) if x_scale_model is not None else None,
                 'confidence': point.get('conf', 0.0),
                 'pixel_distance': pixel_distance,
                 'estimated_value': estimated_value,
@@ -98,7 +100,12 @@ class AreaExtractor(BaseExtractor):
             result['data_points'].append(point_info)
 
         # Compute AUC per series
-        auc_info = self._compute_auc(result['data_points'], scale_func, baseline_coord)
+        auc_info = self._compute_auc(
+            result['data_points'],
+            scale_func if scale_model is not None else None,
+            baseline_coord,
+            x_scale_func=self._resolve_scale_func(x_scale_model) if x_scale_model is not None else None,
+        )
         result['auc'] = auc_info
 
         self._add_calibration_info(result, r_squared, baseline_coord)
@@ -109,6 +116,7 @@ class AreaExtractor(BaseExtractor):
         data_points: List[Dict],
         scale_func: Optional[Callable],
         baseline_coord: Optional[float],
+        x_scale_func: Optional[Callable] = None,
     ) -> Dict:
         """Compute area under curve using the trapezoidal rule.
 
@@ -118,39 +126,40 @@ class AreaExtractor(BaseExtractor):
         if not data_points or scale_func is None or baseline_coord is None:
             return {'total_auc': None, 'num_points': len(data_points)}
 
-        sorted_points = sorted(data_points, key=lambda p: p.get('x_center', 0))
-
-        x_coords = []
-        y_values = []
-        baseline_value = None
-
         try:
             baseline_value = float(scale_func(baseline_coord))
         except Exception:
             baseline_value = 0.0
 
-        for point in sorted_points:
-            x_coords.append(point['x_center'])
-            val = point.get('estimated_value')
-            if val is not None:
-                y_values.append(float(val))
+        # Integrate each series separately (never interleave series into one curve)
+        by_series: Dict = {}
+        for point in data_points:
+            by_series.setdefault(point.get('series_id', 0), []).append(point)
+
+        _trapezoid = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
+        series_auc: Dict = {}
+        total = 0.0
+        n_integrated = 0
+        for sid, pts in by_series.items():
+            pts = sorted(pts, key=lambda p: p.get('x_center', 0))
+            if len(pts) < 2:
+                continue
+            if x_scale_func is not None:
+                try:
+                    x_arr = np.array([float(x_scale_func(p['x_center'])) for p in pts])
+                except Exception:
+                    x_arr = np.array([p['x_center'] for p in pts], dtype=float)
             else:
-                y_values.append(0.0)
-
-        if len(x_coords) < 2:
-            return {
-                'total_auc': None,
-                'baseline_value': baseline_value,
-                'num_points': len(x_coords),
-            }
-
-        x_arr = np.array(x_coords)
-        y_arr = np.array(y_values)
-        _trapezoid = getattr(np, 'trapezoid', np.trapz)  # NumPy ≥2.0 compat
-        total_auc = float(_trapezoid(y_arr, x_arr))
+                x_arr = np.array([p['x_center'] for p in pts], dtype=float)
+            y_arr = np.array([float(p.get('estimated_value') or 0.0) for p in pts])
+            series_auc[sid] = float(_trapezoid(y_arr, x_arr))
+            total += series_auc[sid]
+            n_integrated += 1
 
         return {
-            'total_auc': total_auc,
+            'total_auc': total if n_integrated else None,
+            'series_auc': series_auc,
+            'auc_units': 'value*x' if x_scale_func is not None else 'value*pixel_x',
             'baseline_value': baseline_value,
-            'num_points': len(x_coords),
+            'num_points': len(data_points),
         }

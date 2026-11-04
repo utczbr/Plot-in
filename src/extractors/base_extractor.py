@@ -97,6 +97,8 @@ class BaseExtractor(ABC):
             Callable function for scaling
         """
         if scale_model is None:
+            # NOTE: returns a truthy identity function, NOT None. Callers that must
+            # distinguish 'uncalibrated' should test `scale_model is None` instead.
             return lambda x: x  # No-op identity if None
             
         if hasattr(scale_model, 'func'):

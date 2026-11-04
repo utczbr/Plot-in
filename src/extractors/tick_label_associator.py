@@ -42,7 +42,10 @@ class TickLabelAssociator:
         def _add_label(lbl: Any):
             if not isinstance(lbl, dict):
                 return
-            if lbl.get('label_type') in ('scale_label', 'axis_title'):
+            indep_axis = 'x' if orientation == 'vertical' else 'y'
+            if lbl.get('label_type') == 'axis_title':
+                return
+            if lbl.get('label_type') == 'scale_label' and lbl.get('axis') != indep_axis:
                 return
             bbox = lbl.get('xyxy') or lbl.get('bbox')
             if not bbox or len(bbox) < 4:
@@ -110,7 +113,7 @@ class TickLabelAssociator:
                 # Y-scale labels usually have lcx < min_elem_x - 15
                 if lcx >= min_elem_x - 30 and lcx <= max_elem_x + 30:
                     # Near bottom or within x-bounds of plot
-                    if lcy >= min_elem_y - 20:
+                    if lcy >= max_elem_y - 20:
                         tick_candidates.append(lbl)
             else:
                 # Horizontal chart: Y is independent. Exclude labels clearly on bottom scale axis

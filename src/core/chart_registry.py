@@ -48,3 +48,18 @@ def get_chart_element_key(chart_type: Any, default: str = "bar") -> str:
     """Resolve the primary element key expected for a chart type."""
     normalized = normalize_chart_type(chart_type)
     return CHART_ELEMENT_KEY_MAP.get(normalized, default)
+
+
+def resolve_chart_elements(chart_type: Any, detections: dict) -> list:
+    """Primary chart elements, falling back to segmentation/marker detections
+    for line/area charts when ``data_point`` is empty."""
+    key = get_chart_element_key(chart_type)
+    elements = detections.get(key) or []
+    if elements:
+        return elements
+    normalized = normalize_chart_type(chart_type)
+    if normalized == ChartType.LINE.value:
+        return detections.get("line_series") or detections.get("data_marker") or []
+    if normalized == ChartType.AREA.value:
+        return detections.get("area_series") or []
+    return elements

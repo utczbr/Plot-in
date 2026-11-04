@@ -37,9 +37,18 @@ class LineExtractor(BaseExtractor):
         # Sort data points left-to-right by x-center so output order matches the X-axis.
         data_points.sort(key=lambda p: (p['xyxy'][0] + p['xyxy'][2]) / 2)
 
+        x_scale_func = self._resolve_scale_func(x_scale_model) if x_scale_model is not None else None
+
         for i, point in enumerate(data_points):
             x1, y1, x2, y2 = point['xyxy']
             y_center = (y1 + y2) / 2
+            x_center = (x1 + x2) / 2
+            x_value = None
+            if x_scale_func is not None:
+                try:
+                    x_value = float(x_scale_func(x_center))
+                except Exception as e:
+                    logging.warning(f"X scale model failed for line point: {e}")
             estimated_value = None
             pixel_distance = 0
 
@@ -59,6 +68,10 @@ class LineExtractor(BaseExtractor):
             point_info = {
                 'index': i,
                 'xyxy': point['xyxy'],
+                'x_center': x_center,
+                'y_center': y_center,
+                'x_value': x_value,
+                'series_id': point.get('series_id', 0),
                 'confidence': point.get('conf', 0.0),
                 'pixel_distance': pixel_distance,
                 'estimated_value': estimated_value,

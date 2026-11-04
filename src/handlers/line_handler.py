@@ -33,10 +33,13 @@ class LineHandler(CartesianExtractionHandler):
         # Prepare detections dict for extractor
         # Map 'line' to 'data_point' if needed for legacy path
         detections_for_extractor = detections.copy()
-        if 'line' in detections and 'data_point' not in detections:
-            detections_for_extractor['data_point'] = detections['line']
-        elif 'data_marker' in detections and 'data_point' not in detections:
-            detections_for_extractor['data_point'] = detections['data_marker']
+        if not detections.get('data_point'):
+            if detections.get('line'):
+                detections_for_extractor['data_point'] = detections['line']
+            elif detections.get('data_marker'):
+                detections_for_extractor['data_point'] = detections['data_marker']
+        # Only independent-axis tick labels (not raw OCR incl. Y scale/titles)
+        detections_for_extractor['axis_labels'] = self._get_extractor_axis_labels(detections)
 
         try:
             orientation_enum = OrientationService.from_any(orientation)
@@ -123,7 +126,7 @@ class LineHandler(CartesianExtractionHandler):
                 entry['tick_label'] = point['tick_label']
             extracted.append(entry)
             
-        # 1-to-1 error bar association for points without error bars
+        # 1-to-1 error bar association (requires X proximity AND vertical overlap)
         error_bars = detections.get('error_bar', [])
         if error_bars:
             eb_pairs = []
@@ -131,20 +134,36 @@ class LineHandler(CartesianExtractionHandler):
                 if point.get('error_bar'):
                     continue
                 px = (point['bbox'][0] + point['bbox'][2]) / 2.0
+                py = (point['bbox'][1] + point['bbox'][3]) / 2.0
                 for eb_idx, eb in enumerate(error_bars):
-                    eb_x = (eb['xyxy'][0] + eb['xyxy'][2]) / 2.0
-                    dist = abs(eb_x - px)
-                    if dist < 25.0:
-                        eb_pairs.append((dist, pt_idx, eb_idx))
+                    ex1, ey1, ex2, ey2 = eb['xyxy'][:4]
+                    if orientation_enum == Orientation.VERTICAL:
+                        indep_d = abs((ex1 + ex2) / 2.0 - px)
+                        lo, hi, pos = ey1, ey2, py
+                    else:
+                        indep_d = abs((ey1 + ey2) / 2.0 - py)
+                        lo, hi, pos = ex1, ex2, px
+                    tol = 5.0
+                    if indep_d < 25.0 and lo - tol <= pos <= hi + tol:
+                        eb_pairs.append((indep_d + abs((lo + hi) / 2.0 - pos) * 0.01, pt_idx, eb_idx))
             eb_pairs.sort(key=lambda x: x[0])
             assigned_pts = set()
             assigned_ebs = set()
             for dist, pt_idx, eb_idx in eb_pairs:
                 if pt_idx not in assigned_pts and eb_idx not in assigned_ebs:
-                    extracted[pt_idx]['error_bar'] = {'bbox': error_bars[eb_idx]['xyxy'], 'margin': None}
+                    ebox = error_bars[eb_idx]['xyxy']
+                    if orientation_enum == Orientation.VERTICAL:
+                        e_lo, e_hi = ebox[1], ebox[3]
+                    else:
+                        e_lo, e_hi = ebox[0], ebox[2]
+                    try:
+                        margin = abs(float(scale_model(e_lo)) - float(scale_model(e_hi))) / 2.0
+                    except Exception:
+                        margin = None
+                    extracted[pt_idx]['error_bar'] = {'bbox': ebox, 'margin': margin}
                     assigned_pts.add(pt_idx)
                     assigned_ebs.add(eb_idx)
-                
+
         # Associate tick labels along the independent axis
         from extractors.tick_label_associator import TickLabelAssociator
         axis_lbls = self._get_extractor_axis_labels(detections)

@@ -126,8 +126,9 @@ def estimate_endpoint_tangent_pca(
 
 def compute_cielab_color_distance(color1_bgr: np.ndarray, color2_bgr: np.ndarray) -> float:
     """Computes CIELAB Delta E94 color distance between two BGR color values."""
-    img1 = np.uint8([[color1_bgr]])
-    img2 = np.uint8([[color2_bgr]])
+    # float32 in [0,1] -> true CIE L*[0,100], a*/b* centered at 0
+    img1 = np.array([[color1_bgr]], dtype=np.float32) / 255.0
+    img2 = np.array([[color2_bgr]], dtype=np.float32) / 255.0
     lab1 = cv2.cvtColor(img1, cv2.COLOR_BGR2LAB)[0, 0].astype(float)
     lab2 = cv2.cvtColor(img2, cv2.COLOR_BGR2LAB)[0, 0].astype(float)
 
@@ -173,6 +174,16 @@ def fit_anchor_guided_curve(
     if len(skeleton_pts) < 4:
         return skeleton_pts.astype(float)
 
+    # 0. Collapse skeleton to a single mean y per integer x column
+    skeleton_pts = np.asarray(skeleton_pts, dtype=float)
+    cols = np.round(skeleton_pts[:, 0]).astype(int)
+    uniq_cols = np.unique(cols)
+    skeleton_pts = np.array(
+        [[c, skeleton_pts[cols == c, 1].mean()] for c in uniq_cols], dtype=float
+    )
+    if len(skeleton_pts) < 4:
+        return skeleton_pts
+
     # 1. Spatially bind markers to skeleton via KD-Tree
     all_points = list(skeleton_pts)
     weights = [1.0] * len(skeleton_pts)
@@ -193,11 +204,17 @@ def fit_anchor_guided_curve(
     all_points = all_points[order]
     weights = weights[order]
 
-    # Deduplicate coincident points to avoid splprep singular parameter intervals
-    _, unique_indices = np.unique(all_points, axis=0, return_index=True)
-    unique_indices = np.sort(unique_indices)
-    all_points = all_points[unique_indices]
-    weights = weights[unique_indices]
+    # Deduplicate points sharing the same x (keep highest-weight, i.e. marker anchor)
+    keep = []
+    i = 0
+    while i < len(all_points):
+        j = i
+        while j + 1 < len(all_points) and abs(all_points[j + 1, 0] - all_points[i, 0]) < 1e-6:
+            j += 1
+        keep.append(i + int(np.argmax(weights[i:j + 1])))
+        i = j + 1
+    all_points = all_points[keep]
+    weights = weights[keep]
 
     if len(all_points) < 4:
         return all_points
@@ -207,7 +224,7 @@ def fit_anchor_guided_curve(
         tck, u = splprep(
             [all_points[:, 0], all_points[:, 1]],
             w=weights,
-            s=smoothing,
+            s=smoothing * len(all_points),
             k=min(3, len(all_points) - 1),
         )
         u_fine = np.linspace(0, 1, num_samples)

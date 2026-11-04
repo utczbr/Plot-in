@@ -12,7 +12,7 @@ from .base_pipeline import BasePipeline
 from .types import PipelineResult
 from core.model_manager import ModelManager
 from models.config import MODELS_CONFIG
-from core.chart_registry import get_chart_element_key, normalize_chart_type
+from core.chart_registry import get_chart_element_key, normalize_chart_type, resolve_chart_elements
 from utils import run_inference_on_image, sanitize_for_json
 from core.review_summary import build_summary, write_summary, clear_failure_marker
 from utils.validation_utils import is_numeric
@@ -307,7 +307,7 @@ class ChartAnalysisPipeline(BasePipeline):
                 )
 
             element_key = get_chart_element_key(chart_type)
-            chart_elements = detections.get(element_key, [])
+            chart_elements = resolve_chart_elements(chart_type, detections)
             axis_labels = detections.get('axis_labels', [])
 
             pipeline_mode = 'standard'
@@ -578,7 +578,10 @@ class ChartAnalysisPipeline(BasePipeline):
         else:
             element_key = get_chart_element_key(chart_type)
             
-        chart_elements = detections.get(element_key, [])
+        chart_elements = (
+            detections.get(element_key, []) if chart_type == 'heatmap'
+            else resolve_chart_elements(chart_type, detections)
+        )
         if not chart_elements:
             return 0.0
             
@@ -665,43 +668,45 @@ class ChartAnalysisPipeline(BasePipeline):
             else:
                 organized['unknown'].append(det)
 
-        def _reclassify_top_boxes(organized: dict, img_width: int) -> dict:
-            """Reclassify top-positioned title/legend candidates based on spatial heuristics.
-
-            Trained model predictions are preserved unless spatial dimensions
-            strongly indicate a mismatch (e.g., a legend box spanning >85% of
-            image width is a title, or a tall narrow title box on the side is a legend).
-            """
-            titles = organized.get('chart_title', [])
-            legends = organized.get('legend', [])
-            new_titles, new_legends = [], []
-
-            for det in titles:
-                x1, y1, x2, y2 = det['xyxy']
-                w = x2 - x1
-                h = y2 - y1
-                # If a title box is extremely tall and narrow (e.g. side legend misclassified as title)
-                if h > 3.0 * w and w < 0.2 * img_width:
-                    new_legends.append(det)
-                else:
-                    new_titles.append(det)
-
-            for det in legends:
-                x1, y1, x2, y2 = det['xyxy']
-                w = x2 - x1
-                # If a legend box spans almost the full width, it is almost certainly a title
-                if w > 0.85 * img_width:
-                    new_titles.append(det)
-                else:
-                    new_legends.append(det)
-
-            organized['chart_title'] = new_titles
-            organized['legend'] = new_legends
-            return organized
-            
-        organized = _reclassify_top_boxes(organized, img.shape[1])
+        organized = self._reclassify_top_boxes(organized, img.shape[1])
                 
         return organized
+
+    @staticmethod
+    def _reclassify_top_boxes(organized: dict, img_width: int) -> dict:
+        """Reclassify top-positioned title/legend candidates based on spatial heuristics.
+
+        Trained model predictions are preserved unless spatial dimensions
+        strongly indicate a mismatch (e.g., a legend box spanning >85% of
+        image width is a title, or a tall narrow title box on the side is a legend).
+        """
+        titles = organized.get('chart_title', [])
+        legends = organized.get('legend', [])
+        new_titles, new_legends = [], []
+
+        for det in titles:
+            x1, y1, x2, y2 = det['xyxy']
+            w = x2 - x1
+            h = y2 - y1
+            # If a title box is extremely tall and narrow (e.g. side legend misclassified as title)
+            if h > 3.0 * w and w < 0.2 * img_width:
+                new_legends.append(det)
+            else:
+                new_titles.append(det)
+
+        for det in legends:
+            x1, y1, x2, y2 = det['xyxy']
+            w = x2 - x1
+            # If a legend box spans almost the full width, it is almost certainly a title
+            if w > 0.85 * img_width:
+                new_titles.append(det)
+            else:
+                new_legends.append(det)
+
+        organized['chart_title'] = new_titles
+        organized['legend'] = new_legends
+        return organized
+        
 
     def _detect_line_experts(
         self,
@@ -727,6 +732,12 @@ class ChartAnalysisPipeline(BasePipeline):
             if isinstance(det_conf, dict) and 'line' in det_conf:
                 try:
                     conf = float(det_conf['line'])
+                except (TypeError, ValueError):
+                    pass
+            det_nms = advanced_settings.get('detection_nms_overrides', {})
+            if isinstance(det_nms, dict) and 'line' in det_nms:
+                try:
+                    nms = float(det_nms['line'])
                 except (TypeError, ValueError):
                     pass
 
@@ -765,6 +776,7 @@ class ChartAnalysisPipeline(BasePipeline):
             organized['data_marker'] = marker_dets
             self.logger.info("Line Markers: %d markers found", len(marker_dets))
 
+        organized = self._reclassify_top_boxes(organized, img.shape[1])
         return organized
 
     def _detect_area_experts(
@@ -789,6 +801,12 @@ class ChartAnalysisPipeline(BasePipeline):
             if isinstance(det_conf, dict) and 'area' in det_conf:
                 try:
                     conf = float(det_conf['area'])
+                except (TypeError, ValueError):
+                    pass
+            det_nms = advanced_settings.get('detection_nms_overrides', {})
+            if isinstance(det_nms, dict) and 'area' in det_nms:
+                try:
+                    nms = float(det_nms['area'])
                 except (TypeError, ValueError):
                     pass
 
@@ -816,6 +834,7 @@ class ChartAnalysisPipeline(BasePipeline):
             organized['area_series'] = seg_dets
             self.logger.info("Area Segmentation: %d series found", len(seg_dets))
 
+        organized = self._reclassify_top_boxes(organized, img.shape[1])
         return organized
 
     def _detect_box_experts(

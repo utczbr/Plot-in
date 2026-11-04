@@ -33,6 +33,58 @@ class LineSegExtractor(BaseExtractor):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _assign_markers_to_series(img, marker_pts, series_data, max_dist: float = 15.0) -> Dict[int, List[List[float]]]:
+        """Assign each marker to at most one series (nearest skeleton within max_dist).
+
+        Near-ties (< 1 px) are broken by CIELAB distance between the marker pixel
+        and the series stroke colour.
+        """
+        from scipy.spatial import cKDTree
+
+        assigned: Dict[int, List[List[float]]] = {}
+        if marker_pts is None or len(marker_pts) == 0 or not series_data:
+            return assigned
+        trees = [cKDTree(sd['global_skel_pts']) for sd in series_data]
+
+        def _color(pt):
+            if img is None or getattr(img, 'size', 0) == 0:
+                return None
+            h, w = img.shape[:2]
+            return img[int(np.clip(pt[1], 0, h - 1)), int(np.clip(pt[0], 0, w - 1))]
+
+        def _stroke_color(sd):
+            if img is None or getattr(img, 'size', 0) == 0:
+                return None
+            h, w = img.shape[:2]
+            pts = sd['global_skel_pts']
+            mid = pts[len(pts) // 2]
+            return img[int(np.clip(mid[1], 0, h - 1)), int(np.clip(mid[0], 0, w - 1))]
+
+        for pt in marker_pts:
+            cands = []
+            for sd, tree in zip(series_data, trees):
+                d, _ = tree.query(pt)
+                if d <= max_dist:
+                    cands.append((float(d), sd))
+            if not cands:
+                continue
+            cands.sort(key=lambda c: c[0])
+            best_d = cands[0][0]
+            tied = [c for c in cands if c[0] - best_d < 1.0]
+            winner = tied[0][1]
+            mc = _color(pt)
+            if len(tied) > 1 and mc is not None:
+                try:
+                    winner = min(
+                        tied,
+                        key=lambda c: compute_cielab_color_distance(mc, _stroke_color(c[1])),
+                    )[1]
+                except Exception:
+                    pass
+            assigned.setdefault(winner['series_idx'], []).append([float(pt[0]), float(pt[1])])
+        return assigned
+
     def extract(
         self,
         img: np.ndarray,
@@ -73,27 +125,40 @@ class LineSegExtractor(BaseExtractor):
             marker_coords.append([(mx1 + mx2) / 2.0, (my1 + my2) / 2.0])
         marker_pts_array = np.array(marker_coords, dtype=float) if marker_coords else None
 
-        result_data_points = []
-        series_curves = []
-
+        # Pass 1: skeletonize every series so each marker can be owned by exactly one series
+        series_data = []
         for series_idx, series_det in enumerate(line_series_list):
             sx1, sy1, sx2, sy2 = series_det['xyxy']
             local_mask = series_det.get('mask')
-            conf = float(series_det.get('conf', 1.0))
-
             if local_mask is None or local_mask.size == 0 or not np.any(local_mask):
                 continue
-
-            # 1. Skeletonize local mask
             skel = skeletonize_mask(local_mask)
             skel_y, skel_x = np.where(skel > 0)
             if len(skel_x) == 0:
                 continue
+            series_data.append({
+                'series_idx': series_idx,
+                'det': series_det,
+                'skel': skel,
+                'global_skel_pts': np.column_stack([skel_x + sx1, skel_y + sy1]).astype(float),
+            })
+
+        assigned_markers = self._assign_markers_to_series(
+            img, marker_pts_array, series_data, max_dist=15.0
+        )
+
+        result_data_points = []
+        series_curves = []
+
+        for sd in series_data:
+            series_idx = sd['series_idx']
+            series_det = sd['det']
+            skel = sd['skel']
+            global_skel_pts = sd['global_skel_pts']
+            sx1, sy1, sx2, sy2 = series_det['xyxy']
+            conf = float(series_det.get('conf', 1.0))
 
             junctions, endpoints = find_skeleton_junctions(skel)
-
-            # 2. Map skeleton coordinates to full image coordinates
-            global_skel_pts = np.column_stack([skel_x + sx1, skel_y + sy1]).astype(float)
 
             # Resolve multi-segment tracklets when endpoints > 2 (occlusion/branching)
             endpoint_tangents = []
@@ -114,14 +179,18 @@ class LineSegExtractor(BaseExtractor):
                         img[ep0_y, ep0_x], img[ep1_y, ep1_x]
                     )
 
-            # Record in input series_det dict as well
             series_det['junction_count'] = int(len(junctions))
             series_det['endpoint_count'] = int(len(endpoints))
 
-            # 3. Anchor-Guided Spline Curve Fitting (w=1.0 for skel, w=50.0 for markers)
+            own_markers = assigned_markers.get(series_idx, [])
+            own_marker_pts = (
+                np.array(own_markers, dtype=float) if own_markers else None
+            )
+
+            # 3. Anchor-Guided Spline Curve Fitting (only this series' own markers)
             curve_pts = fit_anchor_guided_curve(
                 skeleton_pts=global_skel_pts,
-                marker_pts=marker_pts_array,
+                marker_pts=own_marker_pts,
                 max_marker_dist=15.0,
                 smoothing=1.0,
                 num_samples=max(50, int((sx2 - sx1) / 2)),
@@ -129,6 +198,7 @@ class LineSegExtractor(BaseExtractor):
 
             if len(curve_pts) == 0:
                 continue
+            curve_pts = curve_pts[np.argsort(curve_pts[:, 0])]
 
             curve_metadata = {
                 'series_id': series_idx,
@@ -144,28 +214,34 @@ class LineSegExtractor(BaseExtractor):
 
             series_curves.append(curve_metadata)
 
-            # 4. Generate discrete data points from the continuous curve
-            # If categorical X-axis labels exist, snap curve evaluation to label centers
+            # 4. Generate discrete data points from the continuous curve.
+            # Only genuine independent-axis tick labels below the plot are used as X ticks.
             x_tick_centers = []
-            if axis_labels:
-                # Find horizontal center of axis labels lying below the chart
-                for lbl in axis_labels:
-                    lx1, ly1, lx2, ly2 = lbl.get('xyxy', [0, 0, 0, 0])
-                    x_center = (lx1 + lx2) / 2.0
-                    if sx1 - 10 <= x_center <= sx2 + 10:
-                        x_tick_centers.append(x_center)
-                x_tick_centers.sort()
+            for lbl in axis_labels:
+                if not isinstance(lbl, dict):
+                    continue
+                if lbl.get('label_type') in ('scale_label', 'axis_title'):
+                    continue
+                lx1, ly1, lx2, ly2 = lbl.get('xyxy', [0, 0, 0, 0])
+                x_center = (lx1 + lx2) / 2.0
+                y_center = (ly1 + ly2) / 2.0
+                if sx1 - 10 <= x_center <= sx2 + 10 and y_center >= sy2:
+                    x_tick_centers.append(x_center)
+            x_tick_centers.sort()
 
-            # Determine query X points (snapped to ticks or resampled along curve)
-            if len(x_tick_centers) >= 2:
-                # Interpolate curve Y at discrete tick centers
-                query_x = np.array(x_tick_centers)
-                query_y = np.interp(query_x, curve_pts[:, 0], curve_pts[:, 1])
-                sample_pts = np.column_stack([query_x, query_y])
+            if own_marker_pts is not None and len(own_marker_pts) >= 2:
+                # Real markers are the series' true data points
+                sample_pts = own_marker_pts[np.argsort(own_marker_pts[:, 0])]
             else:
-                # Subsample curve points for discrete output representation
-                step = max(1, len(curve_pts) // 30)
-                sample_pts = curve_pts[::step]
+                lo, hi = curve_pts[0, 0], curve_pts[-1, 0]
+                in_range = [x for x in x_tick_centers if lo <= x <= hi]
+                if len(in_range) >= 2:
+                    query_x = np.array(in_range)
+                    query_y = np.interp(query_x, curve_pts[:, 0], curve_pts[:, 1])
+                    sample_pts = np.column_stack([query_x, query_y])
+                else:
+                    step = max(1, len(curve_pts) // 30)
+                    sample_pts = curve_pts[::step]
 
             for pt_idx, (px, py) in enumerate(sample_pts):
                 estimated_val = None

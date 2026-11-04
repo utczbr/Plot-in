@@ -226,6 +226,15 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         """Shared 7-stage Cartesian processing pipeline."""
         h, w = image.shape[:2]
         self.last_image_size = (w, h)
+        if not chart_elements:
+            chart_elements = (
+                detections.get("data_marker")
+                or detections.get("line_series")
+                or detections.get("area_series")
+                or detections.get("area")
+                or detections.get("line")
+                or []
+            )
         self.last_chart_elements = chart_elements
         self._axis_labels = axis_labels
 
@@ -301,7 +310,7 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         # Stage 3: Dual-axis detection
         try:
             dual_decision = self.dual_axis_service.detect(
-                axis_labels=classified.scale_labels,
+                axis_labels=self._dependent_scale_labels(classified, orientation),
                 chart_elements=chart_elements,
                 orientation=orientation,
                 image_size=(w, h),
@@ -380,6 +389,30 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
             warnings=warnings,
             orientation=orientation,
         )
+
+    @staticmethod
+    def _dependent_scale_labels(classified: Any, orientation: Orientation) -> List[Dict]:
+        """Scale labels on the dependent (value) axis only, when the classifier split X/Y."""
+        attr = "y_scale_labels" if orientation == Orientation.VERTICAL else "x_scale_labels"
+        split = getattr(classified, attr, None)
+        if split:
+            return list(split)
+        return list(getattr(classified, "scale_labels", []) or [])
+
+    @staticmethod
+    def _label_on_dependent_axis(lbl: Dict[str, Any], axis_type: str, w: float, h: float) -> bool:
+        """True if a label plausibly sits on the `axis_type` scale margin (not the other axis)."""
+        axis = lbl.get("axis")
+        if axis in ("x", "y"):
+            return axis == axis_type
+        bbox = lbl.get("xyxy") or lbl.get("bbox")
+        if not bbox or len(bbox) < 4:
+            return False
+        cx, cy = 0.5 * (bbox[0] + bbox[2]), 0.5 * (bbox[1] + bbox[3])
+        if axis_type == "y":
+            nx = cx / max(w, 1)
+            return nx < 0.22 or nx > 0.78
+        return cy / max(h, 1) > 0.75 or cy / max(h, 1) < 0.22
 
     @staticmethod
     def _tag_classified_labels(classified: Any) -> None:
@@ -532,9 +565,12 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         # Fallback 1: If scale_labels are insufficient (< 2), check numeric tick_labels
         if len(primary_labels) < 2:
             candidate_ticks = getattr(classified_labels, "tick_labels", []) or []
+            _w, _h = self.last_image_size or (1000, 1000)
             fallback_ticks = [
                 lbl for lbl in candidate_ticks
-                if isinstance(lbl, dict) and (
+                if isinstance(lbl, dict)
+                and self._label_on_dependent_axis(lbl, axis_type, _w, _h)
+                and (
                     lbl.get("cleanedvalue") is not None
                     or is_numeric(str(lbl.get("text", "")).replace("$", "").replace("%", "").strip())
                 )
@@ -595,6 +631,25 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
 
         calibrations["primary"] = cal_primary
         calibrations[axis_type] = cal_primary
+
+        # Independent axis (X for vertical charts): calibrate when the classifier
+        # produced a separate pool of numeric labels for it.
+        indep_type = "x" if axis_type == "y" else "y"
+        indep_attr = "x_scale_labels" if indep_type == "x" else "y_scale_labels"
+        indep_labels = [
+            lbl for lbl in (getattr(classified_labels, indep_attr, None) or [])
+            if isinstance(lbl, dict) and (
+                lbl.get("cleanedvalue") is not None
+                or is_numeric(str(lbl.get("text", "")).replace("$", "").replace("%", "").strip())
+            )
+        ]
+        if len(indep_labels) >= 2:
+            try:
+                calibrations[indep_type] = self.calibration_service.calibrate(
+                    indep_labels, axis_type=indep_type
+                )
+            except Exception as exc:
+                self.logger.warning("%s-axis calibration failed: %s", indep_type, exc)
 
         if dual_decision.has_dual_axis and dual_decision.secondary_labels:
             try:
@@ -663,7 +718,7 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
 
         if self.get_chart_type() in {"bar", "histogram"}:
             config.dbscan_eps_px = 0.04 * image.shape[0]
-        elif self.get_chart_type() in {"scatter", "line"}:
+        elif self.get_chart_type() in {"scatter", "line", "area"}:
             config.hdbscan_min_cluster_size = 3
             config.hdbscan_min_samples = 1
 
@@ -732,7 +787,8 @@ class CartesianExtractionHandler(CartesianChartHandler, ABC):
         family_map = {
             'bar': [('value', 'bar.y')],
             'scatter': [('x', 'scatter.x'), ('y', 'scatter.y')],
-            'line': [('x', 'line.x'), ('y', 'line.y')],
+            'line': [('x_value', 'line.x'), ('value', 'line.y')],
+            'area': [('x_value', 'area.x'), ('value', 'area.y')],
             'box': [('median', 'box.median'), ('q1', 'box.q1'), ('q3', 'box.q3')],
             'histogram': [('value', 'histogram.value')]
         }

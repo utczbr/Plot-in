@@ -29,6 +29,25 @@ class AreaSegExtractor(BaseExtractor):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _independent_tick_centers(axis_labels, layers) -> List[float]:
+        """X centres of tick labels lying below every area layer (excludes scale labels/titles)."""
+        if not axis_labels or not layers:
+            return []
+        plot_bottom = max(float(np.max(l['y_bottom'])) for l in layers)
+        centers = []
+        for lbl in axis_labels:
+            if not isinstance(lbl, dict):
+                continue
+            if lbl.get('label_type') in ('scale_label', 'axis_title'):
+                continue
+            box = lbl.get('xyxy') or lbl.get('bbox')
+            if not box or len(box) < 4:
+                continue
+            if (box[1] + box[3]) / 2.0 >= plot_bottom - 2:
+                centers.append((box[0] + box[2]) / 2.0)
+        return sorted(centers)
+
     def extract(
         self,
         img: np.ndarray,
@@ -106,26 +125,43 @@ class AreaSegExtractor(BaseExtractor):
         result_data_points = []
         auc_results = []
 
+        # Independent-axis tick centres (genuine tick labels below the plot only)
+        tick_centers = self._independent_tick_centers(
+            detections.get('axis_labels', []), layer_envelopes
+        )
+
         for layer_k, layer in enumerate(layer_envelopes):
             x_cols = layer['x_cols']
             y_top = layer['y_top']
             conf = layer['confidence']
 
-            # Dynamic baseline: layer below it or chart baseline
-            if layer_k == 0:
-                # Bottom-most layer: baseline is the detected chart baseline
-                dynamic_base_y = np.full_like(y_top, baseline_coord if baseline_coord is not None else float(np.max(layer['y_bottom'])))
-            else:
-                # Stacked layer: dynamic baseline is the top envelope of layer (k-1) below it
+            # Stacked vs overlapping: a stacked layer's lower boundary tracks the
+            # top envelope of the layer below it; an overlapping one sits on the baseline.
+            is_stacked = False
+            if layer_k > 0:
                 prev_layer = layer_envelopes[layer_k - 1]
-                dynamic_base_y = np.interp(x_cols, prev_layer['x_cols'], prev_layer['y_top'])
+                lo, hi = prev_layer['x_cols'][0], prev_layer['x_cols'][-1]
+                in_rng = (x_cols >= lo) & (x_cols <= hi)
+                if np.count_nonzero(in_rng) >= 2:
+                    prev_top = np.interp(x_cols[in_rng], prev_layer['x_cols'], prev_layer['y_top'])
+                    is_stacked = float(np.median(np.abs(layer['y_bottom'][in_rng] - prev_top))) <= 8.0
 
-            # Net pixel thickness per column
+            if is_stacked:
+                dynamic_base_y = np.interp(x_cols, prev_layer['x_cols'], prev_layer['y_top'])
+            else:
+                base = baseline_coord if baseline_coord is not None else float(np.max(layer['y_bottom']))
+                dynamic_base_y = np.full_like(y_top, base, dtype=float)
+
+            # Net pixel thickness per column (pixel-space diagnostic only)
             pixel_thickness = np.maximum(0.0, dynamic_base_y - y_top)
 
-            # Sample discrete points along envelope for output representation
-            step = max(1, len(x_cols) // 25)
-            sample_indices = range(0, len(x_cols), step)
+            # Sample at independent-axis ticks when available (1-to-1 with tick labels)
+            in_range_ticks = [t for t in tick_centers if x_cols[0] <= t <= x_cols[-1]]
+            if len(in_range_ticks) >= 2:
+                sample_indices = sorted({int(np.argmin(np.abs(x_cols - t))) for t in in_range_ticks})
+            else:
+                step = max(1, len(x_cols) // 25)
+                sample_indices = list(range(0, len(x_cols), step))
 
             layer_points = []
             for idx in sample_indices:
@@ -137,8 +173,12 @@ class AreaSegExtractor(BaseExtractor):
                 if scale_model is not None:
                     try:
                         val_top = float(scale_func(py))
-                        val_base = float(scale_func(dynamic_base_y[idx]))
-                        estimated_val = abs(val_base - val_top)
+                        if is_stacked:
+                            # signed layer delta over the layer below
+                            estimated_val = val_top - float(scale_func(dynamic_base_y[idx]))
+                        else:
+                            # absolute value on the axis (preserves sign and non-zero minima)
+                            estimated_val = val_top
                     except Exception:
                         estimated_val = thick_px
                 else:
@@ -179,11 +219,20 @@ class AreaSegExtractor(BaseExtractor):
                 layer_points.append(pt_info)
 
             # 3. Compute AUC using cross-version trapezoidal integration
+            auc_units = 'pixel^2'
             try:
-                if x_scale_func is not None and scale_model is not None:
-                    x_real_arr = np.array([float(x_scale_func(x)) for x in x_cols])
-                    y_real_arr = np.array([abs(float(scale_func(dynamic_base_y[i])) - float(scale_func(y_top[i]))) for i in range(len(x_cols))])
-                    layer_auc = float(_trapz(y_real_arr, x_real_arr))
+                if scale_model is not None:
+                    y_real_arr = np.array([
+                        float(scale_func(y_top[i])) - float(scale_func(dynamic_base_y[i]))
+                        for i in range(len(x_cols))
+                    ])
+                    if x_scale_func is not None:
+                        x_arr = np.array([float(x_scale_func(x)) for x in x_cols])
+                        auc_units = 'value*x'
+                    else:
+                        x_arr = x_cols.astype(float)
+                        auc_units = 'value*pixel_x'
+                    layer_auc = float(_trapz(y_real_arr, x_arr))
                 else:
                     layer_auc = float(_trapz(pixel_thickness, x_cols))
             except Exception as e:
@@ -194,6 +243,8 @@ class AreaSegExtractor(BaseExtractor):
                 'series_id': layer['series_id'],
                 'layer_index': layer_k,
                 'auc': layer_auc,
+                'auc_units': auc_units,
+                'stacked': is_stacked,
                 'confidence': conf,
             })
 

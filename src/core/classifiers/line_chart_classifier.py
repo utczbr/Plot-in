@@ -84,7 +84,7 @@ class LineChartClassifier(BaseChartClassifier):
                     if feat['is_numeric']:
                         numeric_val = clean_numeric_text(feat.get('text'))
                         if numeric_val is not None:
-                            feat['label']['cleaned_value'] = numeric_val
+                            feat['label']['cleanedvalue'] = numeric_val
                             classified['scale_label'].append(feat['label'])
                         else:
                             classified['axis_title'].append(feat['label'])
@@ -96,6 +96,9 @@ class LineChartClassifier(BaseChartClassifier):
                     classified[best_class].append(feat['label'])
             else:
                 if feat['is_numeric']:
+                    numeric_val = clean_numeric_text(feat.get('text'))
+                    if numeric_val is not None:
+                        feat['label']['cleanedvalue'] = numeric_val
                     classified['scale_label'].append(feat['label'])
                 elif feat['ny'] > 0.70 and feat['rel_h'] <= 0.08:
                     classified['tick_label'].append(feat['label'])
@@ -106,6 +109,11 @@ class LineChartClassifier(BaseChartClassifier):
         x_scales, y_scales = self._separate_xy_scales(
             classified['scale_label'], img_width, img_height
         )
+        # X-axis numeric labels are tick labels on the independent axis
+        for lbl in x_scales:
+            lbl['label_type'] = 'tick_label'
+        classified['tick_label'].extend(x_scales)
+        classified['scale_label'] = list(y_scales)
         
         confidence = self._compute_confidence(all_scores)
         
@@ -291,14 +299,14 @@ class LineChartClassifier(BaseChartClassifier):
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
             nx, ny = cx / w, cy / h
             
-            # X-axis: bottom region
-            if ny > 0.75:
-                label['axis'] = 'x'
-                x_scales.append(label)
-            # Y-axis: left or right edges
-            elif nx < 0.25 or nx > 0.75:
+            # Y-axis: left or right margins take priority (keeps bottom-most Y label)
+            if nx < 0.22 or nx > 0.78:
                 label['axis'] = 'y'
                 y_scales.append(label)
+            # X-axis: bottom region
+            elif ny > 0.75:
+                label['axis'] = 'x'
+                x_scales.append(label)
             else:
                 # Ambiguous: use position bias
                 if ny > nx:

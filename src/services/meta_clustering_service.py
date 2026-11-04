@@ -91,7 +91,7 @@ class MetaClusteringService:
         else:
             # Default rule-based model (for cold-start)
             self.meta_model = None
-            self.logger.warning("No pre-trained model, using rule-based defaults")
+            self.logger.info("No pre-trained meta-clustering model configured; using rule-based defaults")
     
     def extract_features(self, 
                          chart_elements: List[Dict],

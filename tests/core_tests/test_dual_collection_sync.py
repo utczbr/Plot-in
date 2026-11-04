@@ -214,9 +214,12 @@ class TestXSortIndexDesynchronization:
     from loop index, causing edits to target the wrong underlying element.
     """
 
-    def test_x_sort_scrambles_element_index(self):
+    def test_x_sort_preserves_original_element_index(self):
         """
-        T-015.0: Characterize X-sort desynchronization bug:
+        Fixed (ADR-015 Rule 3): display rows are X-sorted but `element_index`
+        keeps the ORIGINAL extraction index, so edits hit the right element.
+
+        Previously characterized as T-015.0 X-sort desynchronization bug:
         When `bars` are not pre-sorted by horizontal X coordinate,
         `build_data_tab_model` sorts by X and sets `element_index = idx` (from sorted list).
         An edit targeting row 0 (the left-most bar in display) modifies `bars[0]`,
@@ -247,16 +250,15 @@ class TestXSortIndexDesynchronization:
         assert rows[0]["values"]["label"] == "Low_X_Bar"
         assert rows[1]["values"]["label"] == "High_X_Bar"
 
-        # Notice that in legacy data_tab_schema.py:
-        # rows[0].element_index is assigned 0 (the index in the SORTED list)
-        assert rows[0]["element_index"] == 0
+        # element_index is the index in the ORIGINAL collection
+        assert rows[0]["element_index"] == 1
+        assert rows[1]["element_index"] == 0
 
         # 2. User edits row 0 (visually "Low_X_Bar") in the table to value 77.0
-        # The edit payload carries element_index = 0
         edits = [
             {
                 "row": 0,
-                "element_index": 0,
+                "element_index": rows[0]["element_index"],
                 "source": "bars",
                 "field": "value",
                 "value": "77.0",
@@ -265,13 +267,11 @@ class TestXSortIndexDesynchronization:
         ]
         apply_data_tab_edits(result, edits)
 
-        # 3. Bug verification:
-        # Because element_index was 0, apply_data_tab_edits modified result['bars'][0]
-        # which is "High_X_Bar", NOT "Low_X_Bar"!
+        # 3. The edit lands on Low_X_Bar; High_X_Bar is untouched.
         assert result["bars"][0]["bar_label"] == "High_X_Bar"
-        assert result["bars"][0]["estimated_value"] == 77.0  # High_X_Bar was corrupted!
+        assert result["bars"][0]["estimated_value"] == 10.0
         assert result["bars"][1]["bar_label"] == "Low_X_Bar"
-        assert result["bars"][1]["estimated_value"] == 50.0  # Low_X_Bar remained untouched!
+        assert result["bars"][1]["estimated_value"] == 77.0
 
     def test_canonical_element_index_preservation_contract(self):
         """

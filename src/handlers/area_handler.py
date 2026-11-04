@@ -32,8 +32,9 @@ class AreaHandler(CartesianExtractionHandler):
 
         # Map 'area' to 'data_point' if needed for legacy path
         detections_for_extractor = detections.copy()
-        if 'area' in detections and 'data_point' not in detections:
+        if detections.get('area') and not detections.get('data_point'):
             detections_for_extractor['data_point'] = detections['area']
+        detections_for_extractor['axis_labels'] = self._get_extractor_axis_labels(detections)
 
         try:
             orientation_enum = OrientationService.from_any(orientation)
@@ -142,6 +143,7 @@ class AreaHandler(CartesianExtractionHandler):
                     'series_id': layer_auc.get('series_id', 0),
                     'layer_index': layer_auc.get('layer_index', 0),
                     'auc': layer_auc.get('auc', 0.0),
+                    'auc_units': layer_auc.get('auc_units'),
                     'confidence': layer_auc.get('confidence', 1.0),
                 })
         elif isinstance(auc_info, dict) and auc_info.get('total_auc') is not None:

@@ -96,7 +96,7 @@ import json
 from pathlib import Path
 import gc
 import logging
-from typing import Optional, Any, Dict, List, Tuple
+from typing import Optional, Any, Dict, Iterable, List, Tuple
 from core.app_context import ApplicationContext
 from services.service_container import create_service_container
 
@@ -113,6 +113,10 @@ from visual.data_tab_schema import build_data_tab_model, apply_data_tab_edits
 from visual.qt_utils import safe_combo_populate
 
 from core.export_manager import ExportManager, atomic_write_json
+from core.label_overrides import (
+    collect_label_overrides, mark_user_edit, match_by_overlap, sync_edit_to_copies,
+    sync_edit_to_protocol_rows, sync_heatmap_axis_label,
+)
 
 PROTOCOL_COLUMNS = ExportManager.PROTOCOL_COLUMNS
 READONLY_COLUMNS = frozenset({'source_file', 'page_index', 'chart_type', 'confidence'})
@@ -1199,6 +1203,15 @@ Click to configure advanced options."""
         section_order = [
             ("chart_title", "Chart Title"),
             ("axis_title", "Axis Titles"),
+            # Cartesian charts: axis labels are split into tick / scale labels.
+            # "scale_label_2" only appears for 3-axis (dual value axis) charts.
+            ("tick_label", "Tick Labels"),
+            ("scale_label", "Scale Labels"),
+            ("scale_label_2", "Scale Labels (Axis 2)"),
+            # Heatmaps: row labels (beside the grid) and column labels (above/below it).
+            ("row_label", "Row Labels"),
+            ("col_label", "Column Labels"),
+            # Non-Cartesian charts (pie, heatmap, ...) keep the merged section.
             ("axis_labels", "Axis Labels"),
             ("legend", "Legend"),
             ("data_label", "Data Labels"),
@@ -2513,14 +2526,31 @@ Click to configure advanced options."""
             bar_label_texts = set(assigned_bar_labels.get('texts', []))
             bar_label_bboxes = set(tuple(bbox) for bbox in assigned_bar_labels.get('bboxes', []))
 
-            from visual.ocr_tab_builder import categorize_ocr_records
-            section_records = categorize_ocr_records(self.current_analysis_result)
+            from visual.ocr_tab_builder import categorize_ocr_sections
+            section_records, layout_info = categorize_ocr_sections(self.current_analysis_result)
 
             widgets_created = 0
-            for section_key in ("chart_title", "axis_title", "axis_labels", "legend", "data_label", "color_bar_label", "color_bar_title", "other", "layout_text"):
+            # Section titles come from the builder (they depend on how this chart's labels
+            # were split). Defaults reset any title changed by a previous chart.
+            axis_titles = {
+                "tick_label": "Tick Labels",
+                "scale_label": "Scale Labels",
+                "scale_label_2": "Scale Labels (2nd Axis)",
+                "row_label": "Row Labels",
+                "col_label": "Column Labels",
+                "axis_labels": "Axis Labels",
+            }
+            axis_titles.update(layout_info.get("titles", {}))
+            for section_key in (
+                "chart_title", "axis_title", "tick_label", "scale_label", "scale_label_2",
+                "row_label", "col_label", "axis_labels", "legend", "data_label",
+                "color_bar_label", "color_bar_title", "other", "layout_text",
+            ):
                 section_info = self.ocr_section_widgets.get(section_key)
                 if not section_info:
                     continue
+                if section_key in axis_titles:
+                    section_info["group"].setTitle(axis_titles[section_key])
 
                 section_group = section_info["group"]
                 section_layout = section_info["layout"]
@@ -2530,7 +2560,10 @@ Click to configure advanced options."""
                 for item, source_class in section_records[section_key]:
                     text = str(item.get("text", "")).strip()
                     bbox_tuple = tuple(item.get("xyxy", []))
-                    cleaned_value = item.get("cleaned_value")
+                    # The pipeline writes "cleanedvalue"; "cleaned_value" is the older spelling.
+                    cleaned_value = item.get("cleanedvalue")
+                    if cleaned_value is None:
+                        cleaned_value = item.get("cleaned_value")
 
                     if text in bar_label_texts or bbox_tuple in bar_label_bboxes:
                         continue
@@ -2552,7 +2585,9 @@ Click to configure advanced options."""
                     item_layout.setContentsMargins(2, 2, 2, 2)
                     item_layout.setSpacing(6)
 
-                    entry_text = text if text else str(cleaned_value)
+                    # Never show the literal "None" for a label without text: flushing it later
+                    # would store that string as a (locked) user correction.
+                    entry_text = text if text else ("" if cleaned_value is None else str(cleaned_value))
                     entry = QLineEdit(entry_text)
                     entry.textEdited.connect(self._on_ocr_text_edited)
                     entry.setMinimumWidth(140)
@@ -2581,9 +2616,12 @@ Click to configure advanced options."""
                             cleaned_repr = format_display(cleaned_value) or str(cleaned_value)
                         except (TypeError, ValueError):
                             cleaned_repr = str(cleaned_value)
-                        cleaned_label = QLabel(f"→ {cleaned_repr}")
-                        cleaned_label.setStyleSheet("QLabel { color: #4CAF50; font-weight: bold; font-size: 9px; }")
-                        item_layout.addWidget(cleaned_label)
+                        # Only worth showing where the parse differs from what is displayed
+                        # ("1O0" -> 100, "45%" -> 45), not as "50 -> 50" on every label.
+                        if cleaned_repr.strip() != text.strip():
+                            cleaned_label = QLabel(f"→ {cleaned_repr}")
+                            cleaned_label.setStyleSheet("QLabel { color: #4CAF50; font-weight: bold; font-size: 9px; }")
+                            item_layout.addWidget(cleaned_label)
 
                     item_layout.addStretch()
                     section_layout.addWidget(item_frame)
@@ -2603,6 +2641,10 @@ Click to configure advanced options."""
                         "entry": entry,
                         "original_item": item,
                         "section": section_key,
+                        # What the entry was populated with. A flush only counts as a user
+                        # edit when the entry differs from this, not from the stored text
+                        # (which can differ by whitespace or be empty).
+                        "shown_text": entry_text,
                     }
 
             if widgets_created == 0:
@@ -2619,8 +2661,11 @@ Click to configure advanced options."""
                 entry = w.get("entry")
                 orig_item = w.get("original_item")
                 if entry is not None and isinstance(orig_item, dict):
-                    orig_val = orig_item.get("bar_label") if w.get("type") == "bar_label" else orig_item.get("text")
-                    orig_str = str(orig_val) if orig_val is not None else ""
+                    if "shown_text" in w:
+                        orig_str = w["shown_text"]
+                    else:
+                        orig_val = orig_item.get("bar_label") if w.get("type") == "bar_label" else orig_item.get("text")
+                        orig_str = str(orig_val) if orig_val is not None else ""
                     if entry.text() != orig_str:
                         is_dirty = True
                         break
@@ -3821,6 +3866,7 @@ Click to configure advanced options."""
 
     def _flush_widgets_to_result(self, refresh_ui: bool = False) -> None:
         logging.debug("Flushing widgets to result (refresh_ui=%s)...", refresh_ui)
+        ocr_edited = False
         for widget_id, widget_info in getattr(self, "analysis_results_widgets", {}).items():
             if not isinstance(widget_info, dict) or 'entry' not in widget_info or 'original_item' not in widget_info:
                 continue
@@ -3831,9 +3877,39 @@ Click to configure advanced options."""
             if widget_info.get('type') == 'bar_label':
                 logging.debug("Updating bar_label from '%s' to '%s'", original_item.get('bar_label'), new_text)
                 original_item['bar_label'] = new_text
+            elif 'shown_text' in widget_info and new_text == widget_info['shown_text']:
+                # Untouched entry: nothing to record (see "shown_text" where it is registered).
+                continue
             else:
                 logging.debug("Updating text from '%s' to '%s'", original_item.get('text'), new_text)
-                original_item['text'] = new_text
+                old_text = original_item.get('text')
+                section = widget_info.get('section')
+                # Records the edit (text, user_edited_text flag, refreshed numeric value) so it
+                # survives Recalibrate and calibration sees the corrected value.
+                if mark_user_edit(original_item, new_text):
+                    # The element/bar tick labels and the classifier pools hold *copies* of
+                    # this label; update them so tables, exports and the Recalibrate merge
+                    # see the correction rather than the stale OCR string.
+                    sync_edit_to_copies(self.current_analysis_result, original_item, new_text)
+                    # Heatmap axis labels are plain strings on the cells (no bbox to match), and
+                    # rows already edited in the Results table keep a stale group/label.
+                    if section in ("row_label", "col_label"):
+                        sync_heatmap_axis_label(self.current_analysis_result, section, old_text, new_text)
+                    sync_edit_to_protocol_rows(self.current_analysis_result, old_text, new_text, section)
+                    ocr_edited = True
+                # The entry now matches what was stored, so "back to the text it was first shown
+                # with" is a real edit on the next flush instead of being skipped as untouched.
+                widget_info['shown_text'] = new_text
+
+        # An OCR edit just changed the tick/category text on the elements. protocol_rows still
+        # hold the old OCR string, and the write-through below would copy that stale "group"
+        # straight back over the correction (and Recalibrate would then snapshot the stale text).
+        # Rebuild untouched rows from the corrected elements first; rows the user edited in the
+        # Results table are preserved by merge_context_into_rows.
+        if (ocr_edited and self.current_analysis_result is not None
+                and self.current_analysis_result.get("protocol_rows")
+                and hasattr(self, "_refresh_protocol_rows_from_result")):
+            self._refresh_protocol_rows_from_result()
 
         # Results table edits write through live via RowEditService (ADR-015 T-015.3).
         if self.current_analysis_result is not None:
@@ -3910,23 +3986,35 @@ Click to configure advanced options."""
             self._apply_protocol_filters()
 
     @staticmethod
-    def _preserve_manual_text_fields(previous: Dict[str, Any], refreshed: Dict[str, Any]) -> None:
+    def _preserve_manual_text_fields(previous: Dict[str, Any], refreshed: Dict[str, Any],
+                                     protected_texts: Optional[Iterable[str]] = None) -> None:
+        """Carry manually edited element/bar labels over to a re-run result.
+
+        Items are paired by box overlap (see ``match_by_overlap``), not by list position, so a
+        detection that appears, disappears or changes order in the re-run cannot shift every
+        later label onto the wrong item.
+
+        ``protected_texts`` are the user's own OCR corrections (label overrides). The re-run
+        already applied them, so a refreshed field that holds one of them is never replaced by
+        the stale pre-recalibration string.
+        """
+        protected = {t for t in (protected_texts or ()) if isinstance(t, str)}
+
         def _copy_fields(old_rows: Any, new_rows: Any):
-            if not isinstance(old_rows, list) or not isinstance(new_rows, list):
-                return
             fields = ("label", "bar_label", "text", "text_label", "row_label", "col_label")
-            for index in range(min(len(old_rows), len(new_rows))):
-                old_item = old_rows[index]
-                new_item = new_rows[index]
-                if not isinstance(old_item, dict) or not isinstance(new_item, dict):
-                    continue
+            for old_item, new_item in match_by_overlap(old_rows, new_rows):
                 for field in fields:
                     value = old_item.get(field)
+                    if new_item.get(field) in protected:
+                        continue
                     if isinstance(value, str) and value.strip():
                         new_item[field] = value
                 old_tick = old_item.get("tick_label")
                 if isinstance(old_tick, dict):
                     old_tick_text = old_tick.get("text")
+                    new_tick_now = new_item.get("tick_label")
+                    if isinstance(new_tick_now, dict) and new_tick_now.get("text") in protected:
+                        continue
                     if isinstance(old_tick_text, str) and old_tick_text.strip():
                         new_tick = new_item.get("tick_label")
                         if not isinstance(new_tick, dict):
@@ -4101,6 +4189,9 @@ Click to configure advanced options."""
         self.update_status("🔄 Recalibrating scale...")
         self._update_results_from_gui()
         self._pending_recalibration_previous = dict(self.current_analysis_result)
+        # Carry the user's OCR corrections into the re-run so a fixed scale label
+        # actually feeds calibration instead of being re-OCR'd back to the misread.
+        label_overrides = collect_label_overrides(self.current_analysis_result)
 
         provenance = self.current_analysis_result.get("_provenance")
         if not isinstance(provenance, dict):
@@ -4127,6 +4218,7 @@ Click to configure advanced options."""
             provenance=provenance,
             output_stem=output_stem,
             chart_type=chart_type,
+            label_overrides=label_overrides or None,
             parent=None,
         )
         callback = getattr(self, '_on_recalibration_complete', lambda res: None)
@@ -4148,7 +4240,19 @@ Click to configure advanced options."""
             return
 
         normalized_refreshed = self._normalize_result_for_gui(refreshed)
-        self._preserve_manual_text_fields(previous_result, normalized_refreshed)
+        self._preserve_manual_text_fields(
+            previous_result, normalized_refreshed,
+            protected_texts=[o.get("text") for o in collect_label_overrides(previous_result)],
+        )
+        report = (normalized_refreshed.get("metadata") or {}).get("label_overrides")
+        override_warning = ""
+        if isinstance(report, dict) and report.get("applied", 0) < report.get("requested", 0):
+            lost = report["requested"] - report["applied"]
+            # Kept until the final status below: setting it here would be overwritten at once.
+            override_warning = (
+                f"⚠️ {lost} of {report['requested']} corrected label(s) could not be matched after "
+                "re-detection and were re-read from the image. Please check them."
+            )
         normalized_refreshed["data_tab_model"] = build_data_tab_model(normalized_refreshed)
         self.current_analysis_result = normalized_refreshed
         self._refresh_protocol_rows_from_result()
@@ -4165,9 +4269,10 @@ Click to configure advanced options."""
         if isinstance(scale_info, dict):
             r_squared = scale_info.get("r_squared")
         if isinstance(r_squared, (int, float)):
-            self.update_status(f"✅ Recalibrated (R² = {float(r_squared):.4f})")
+            final_status = f"✅ Recalibrated (R² = {float(r_squared):.4f})"
         else:
-            self.update_status("✅ Recalibrated")
+            final_status = "✅ Recalibrated"
+        self.update_status(f"{final_status}  —  {override_warning}" if override_warning else final_status)
 
     def resizeEvent(self, event):
         """Handle window resize events to adjust splitter sizes dynamically."""

@@ -83,7 +83,11 @@ class ScatterHandler(CartesianExtractionHandler):
                 'bbox': point['xyxy'],
                 'x': point['x_calibrated'],
                 'y': point['y_calibrated'],
-                'center': [point['x_pixel'], point['y_pixel']]
+                'center': [point['x_pixel'], point['y_pixel']],
+                # These were computed by the extractor and then silently discarded.
+                'confidence': point.get('confidence'),
+                'error_bar': point.get('error_bar'),
+                'data_label': point.get('data_label'),
             })
             
         self.logger.info(f"Extracted {len(extracted)} scatter points")

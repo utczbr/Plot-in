@@ -60,7 +60,10 @@ class BarHandler(CartesianExtractionHandler):
 
         if has_secondary_cal:
             from core.baseline.clustering import cluster_bars_by_axis
-            partition = cluster_bars_by_axis(bars, w, {'has_dual_axis': True})
+            partition = cluster_bars_by_axis(
+                bars, w, {'has_dual_axis': True},
+                orientation=orientation_enum.value,
+            )
             primary_bars = partition.get('primary_bars', bars)
             secondary_bars = partition.get('secondary_bars', [])
 
@@ -96,7 +99,22 @@ class BarHandler(CartesianExtractionHandler):
             s_bars = res_sec.get('bars', [])
             for b in s_bars:
                 b['axis'] = 'secondary'
+                # BarExtractor labels everything it is given 'primary'; keep metadata consistent
+                # with the axis that was actually used.
+                b['axis_assignment'] = 'secondary'
+                b['model_used'] = 'secondary'
+            for b in p_bars:
+                b.setdefault('axis', 'primary')
             bars = p_bars + s_bars
+            # Each extract() call numbered its bars from 0, so 'index' collided between axes.
+            # Downstream merges (merge_context_into_rows) key on it; make it unique.
+            for n, b in enumerate(bars):
+                b['axis_local_index'] = b.get('index')
+                b['index'] = n
+            self.logger.warning(
+                "Dual-axis bar assignment is heuristic (%s); verify the '2nd axis' bars in the data tab.",
+                partition.get('method', 'spatial_kmeans'),
+            )
         else:
             extraction_result = extractor.extract(
                 img=img,
@@ -143,19 +161,23 @@ class BarHandler(CartesianExtractionHandler):
                     margin = None
                     try:
                         eb_bbox = eb_data['bbox']
-                        if orient_str == 'vertical':
-                            eb_span_px = abs(eb_bbox[3] - eb_bbox[1])
-                        else:
-                            eb_span_px = abs(eb_bbox[2] - eb_bbox[0])
-                        # half-span represents ± margin in pixel space
-                        half_span_px = eb_span_px / 2.0
-                        if cal_model is not None:
-                            # Convert pixel span to data units using the
-                            # calibration model (difference, not absolute)
-                            ref_px = baseline_coord or 0.0
-                            val_at_ref = cal_model(ref_px)
-                            val_at_span = cal_model(ref_px + half_span_px)
-                            margin = abs(val_at_span - val_at_ref)
+                        # Secondary-axis bars must use the secondary calibration (a 0-100 primary
+                        # vs 0-1 secondary axis differ by 100x in the error margin otherwise).
+                        bar_cal_model = cal_model
+                        if bars[i].get('axis') == 'secondary':
+                            sec_cal = calibration.get('secondary')
+                            sec_func = getattr(sec_cal, 'func', None)
+                            if sec_func is not None:
+                                bar_cal_model = sec_func
+                        if bar_cal_model is not None:
+                            # Evaluate the model at the error bar's own two ends. The old code
+                            # evaluated it at baseline +/- half-span, which is only right on a
+                            # linear axis (on a log axis the margin depends on where it sits).
+                            lo_px, hi_px = (
+                                (eb_bbox[1], eb_bbox[3]) if orient_str == 'vertical'
+                                else (eb_bbox[0], eb_bbox[2])
+                            )
+                            margin = abs(float(bar_cal_model(hi_px)) - float(bar_cal_model(lo_px))) / 2.0
                     except Exception:
                         self.logger.debug(
                             "Could not calibrate error bar margin for bar %d",

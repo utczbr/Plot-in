@@ -170,7 +170,9 @@ class BaseCalibration(ABC):
                         core = re.sub(r'[\s\$\%\€\£,]', '', txt_norm)
                         if not re.search(r'[A-Za-df-z]', core):
                             matches = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', core)
-                            if matches:
+                            # Exactly one number only: "10-20" / "5-10" are range/bin labels (two
+                            # matches) and must not silently become a tick value of 10 / 5.
+                            if len(matches) == 1:
                                 try:
                                     val = float(matches[0])
                                 except (ValueError, TypeError):

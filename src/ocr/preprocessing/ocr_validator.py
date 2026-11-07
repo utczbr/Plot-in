@@ -6,6 +6,8 @@ import re
 import numpy as np
 from typing import Optional, Tuple
 
+from utils.validation_utils import normalize_decimal_separators
+
 
 _UNICODE_MINUS_TRANS = str.maketrans({
     '\u2212': '-',  # Mathematical minus '−'
@@ -15,6 +17,9 @@ _UNICODE_MINUS_TRANS = str.maketrans({
     '\ufe63': '-',  # Small hyphen-minus
     '\uff0d': '-',  # Fullwidth hyphen-minus
 })
+
+# Currency symbols are not part of the number itself.
+_CURRENCY_RE = re.compile('[$\u20ac\u00a3\u00a5]')
 
 
 class OCRValidator:
@@ -109,7 +114,7 @@ class OCRValidator:
         
         # Remove invalid characters at start/end that are common OCR errors (preserving currency and percent)
         before_strip = corrected
-        corrected = re.sub(r'^[^\w\s\-\_\.\$\%\€\£]+|[^\w\s\-\_\.\$\%\€\£]+$', '', corrected).strip()
+        corrected = re.sub(r'^[^\w\s\-\_\.\$\%\€\£\u00a5]+|[^\w\s\-\_\.\$\%\€\£\u00a5]+$', '', corrected).strip()
 
         # Restore a closing bracket that balances an unmatched opener (e.g. "Time (s)")
         for opener, closer in (('(', ')'), ('[', ']')):
@@ -298,15 +303,14 @@ class OCRValidator:
 
         original_text = text
         text = text.translate(_UNICODE_MINUS_TRANS).replace(' ', '').replace('\n', '')
-        if ',' in text and '.' not in text:
-            if re.match(r'^[-+]?\d{1,3}(?:,\d{3})+%?$', text):
-                text = text.replace(',', '')
-            elif text.count(',') == 1:
-                text = text.replace(',', '.')
-            else:
-                text = text.replace(',', '')
-        else:
-            text = text.replace(',', '')
+        # Strip currency symbols *before* the separator handling below, which expects a bare
+        # number. Left in, float() fails and the digit-concatenating fallback silently drops the
+        # decimal point ("$12.5" -> 125).
+        text = _CURRENCY_RE.sub('', text)
+        # Same separator rules as clean_numeric_text (one shared helper). A trailing '%' is
+        # re-attached because _parse_number strips it itself.
+        has_pct = text.endswith('%')
+        text = normalize_decimal_separators(text[:-1] if has_pct else text) + ('%' if has_pct else '')
         corrected = text.translate(self._correction_trans)
 
         value = self._parse_number(corrected)
@@ -335,6 +339,9 @@ class OCRValidator:
 
     def _fuzzy_parse(self, text: str) -> Optional[float]:
         """Fuzzy parsing by extracting digits - optimized regex."""
+        # "10^{2}" would otherwise become 102: exponent/brace syntax is not a digit string.
+        if '^' in text or '{' in text or '}' in text:
+            return None
         digit_parts = re.findall(r'\d+', text)
         if not digit_parts:
             return None

@@ -271,7 +271,11 @@ class RowEditService:
     ) -> None:
         if field == "group":
             if chart_type == "heatmap":
-                el["col_label"] = value
+                # Heatmap rows have no group; their protocol "group" is always empty. Writing that
+                # back blanked every cell's col_label on Save (the Results table edits Row/Col
+                # labels directly), so an empty value must not overwrite the label.
+                if str(value or "").strip():
+                    el["col_label"] = value
             elif chart_type == "pie":
                 el["label"] = value
                 if "text_label" in el:
@@ -287,7 +291,8 @@ class RowEditService:
                     el["label"] = value
         elif field == "outcome":
             if chart_type == "heatmap":
-                el["row_label"] = value
+                if str(value or "").strip():   # same reason as "group" above
+                    el["row_label"] = value
             else:
                 el["series_label"] = value
                 if "legend_label" in el:
@@ -298,6 +303,7 @@ class RowEditService:
             else:
                 el["series_id"] = value
         elif field == "value":
+            el["value_is_pixels"] = False  # an edited value is a real data value, not a pixel length
             if chart_type == "scatter":
                 el["y"] = value
                 if "value" in el:

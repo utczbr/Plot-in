@@ -509,7 +509,13 @@ class CanvasEditorMixin:
                 if entry is None or not isinstance(orig_item, dict):
                     continue
                 orig_val = orig_item.get("bar_label") if widget_info.get("type") == "bar_label" else orig_item.get("text")
-                if entry.text() != (str(orig_val) if orig_val is not None else ""):
+                baseline_text = (
+                    widget_info["shown_text"] if "shown_text" in widget_info
+                    else (str(orig_val) if orig_val is not None else "")
+                )
+                # shown_text is what the entry was filled with (trimmed text / cleanedvalue
+                # fallback); comparing with the raw text counted untouched entries as edits.
+                if entry.text() != baseline_text:
                     ocr_edits += 1
 
         protocol_edits = 0

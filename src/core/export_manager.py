@@ -9,6 +9,27 @@ from pathlib import Path
 import numpy as np
 from utils import sanitize_for_json
 
+_CSV_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def sanitize_csv_cell(value: Any) -> Any:
+    """Make one value safe to write into a CSV that may be opened in a spreadsheet.
+
+    * NaN / +-inf become '' (they used to be written as the literal ``nan`` / ``inf``).
+    * Text that starts with ``= + - @`` (OCR output from an untrusted PDF, e.g. a label such as
+      ``=HYPERLINK(...)``) is prefixed with ``'`` so Excel/LibreOffice show it as text instead of
+      evaluating it. Plain numbers such as ``-12.5`` are left alone.
+    """
+    if isinstance(value, float) and not np.isfinite(value):
+        return ''
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        try:
+            float(value)
+            return value  # a real (negative / signed) number, not a formula
+        except ValueError:
+            return "'" + value
+    return value
+
 
 def atomic_write_json(
     target_path: Union[str, Path],
@@ -281,7 +302,7 @@ class ExportManager:
                 writer = csv.DictWriter(csvfile, fieldnames=columns, extrasaction='ignore')
                 writer.writeheader()
                 for row in filtered:
-                    writer.writerow({k: row.get(k, '') for k in columns})
+                    writer.writerow({k: sanitize_csv_cell(row.get(k, '')) for k in columns})
 
             # Post-write schema validation
             with open(filename, 'r', encoding='utf-8') as vf:

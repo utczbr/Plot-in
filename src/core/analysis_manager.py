@@ -187,8 +187,12 @@ class AnalysisManager:
                             manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                             output_stem: Optional[str] = None,
                             chart_type: Optional[str] = None,
-                            image_buffer: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+                            image_buffer: Optional[Any] = None,
+                            label_overrides: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
         """Run analysis on a single image.
+
+        label_overrides: user-corrected OCR labels to keep when re-running (see
+        ``core.label_overrides``); they are exempted from OCR.
 
         chart_type: when set (e.g. re-extracting after manual bbox edits),
         skips reclassification and reuses this already-confirmed chart type,
@@ -210,6 +214,7 @@ class AnalysisManager:
                 output_stem=output_stem,
                 chart_type=chart_type,
                 image_buffer=image_buffer,
+                label_overrides=label_overrides,
             )
         except Exception as e:
             self.logger.error(f"Single analysis failed for {image_path}: {e}", exc_info=True)

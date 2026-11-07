@@ -146,7 +146,7 @@ class ModernAnalysisThread(QThread):
     analysis_complete = pyqtSignal(object)
     progress_updated = pyqtSignal(int)
 
-    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None, chart_type=None):
+    def __init__(self, image_path, conf, output_path, advanced_settings, models_dir, context: "ApplicationContext", provenance=None, manual_detections=None, output_stem=None, parent=None, chart_type=None, label_overrides=None):
         # Never bind background worker to a QObject parent to prevent C++ child destruction race on close
         super().__init__(None)
         self.output_stem = output_stem
@@ -159,6 +159,7 @@ class ModernAnalysisThread(QThread):
         self.provenance = provenance
         self.manual_detections = manual_detections
         self.chart_type = chart_type
+        self.label_overrides = label_overrides
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -201,6 +202,7 @@ class ModernAnalysisThread(QThread):
                 manual_detections=self.manual_detections,
                 output_stem=self.output_stem,
                 chart_type=self.chart_type,
+                label_overrides=self.label_overrides,
             )
 
             self.progress_updated.emit(100)

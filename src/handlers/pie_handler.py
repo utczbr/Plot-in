@@ -585,18 +585,24 @@ class PieHandler(PolarChartHandler):
         text = text.strip()
         # Normalize unicode minus
         text = text.replace('\u2212', '-').replace('\u2013', '-').replace('\u2014', '-')
+        # Decimal comma ("12,5%" / "0,25"); a thousands comma is meaningless for a slice share.
+        if re.fullmatch(r'[+-]?\d+,\d+\s*%?', text):
+            text = text.replace(',', '.')
 
         # Try percentage pattern: "25%", "25.0%", "25 %"
         pct_match = re.match(r'^([+-]?\d+\.?\d*)\s*%$', text)
         if pct_match:
             try:
-                return float(pct_match.group(1)) / 100.0
+                pct = float(pct_match.group(1))
+                return pct / 100.0 if pct > 0.0 else None
             except ValueError:
                 return None
 
         # Try plain number — if ≤ 1.0, treat as fraction; if > 1.0, treat as percentage
         try:
             val = float(text)
+            if val <= 0.0:
+                return None  # a slice share is positive; negative/zero is an OCR artefact
             if val <= 1.0:
                 return val
             elif val <= 100.0:

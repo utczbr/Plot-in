@@ -59,6 +59,30 @@ def is_numeric(text: Optional[str]) -> bool:
     )
 
 
+def normalize_decimal_separators(t: str) -> str:
+    """Resolve thousands vs decimal separators in a bare number string (no currency/%/spaces).
+
+    Single source of truth shared by ``clean_numeric_text`` and ``OCRValidator.validate_numeric``
+    (they used to carry diverging copies: "1.234,56" parsed as 1234.56 in one and 1.23456 in the
+    other).
+
+    * comma only: a thousands group never starts with 0, so ``0,125`` is 0.125 (decimal comma);
+      ``1,500`` / ``12,345`` are thousands; a single other comma (``1,5``) is a decimal comma.
+    * comma and dot: whichever comes last is the decimal separator.
+    """
+    if ',' in t and '.' not in t:
+        if re.match(r'^[-+]?[1-9]\d{0,2}(?:,\d{3})+(?:[eE][-+]?\d+)?$', t):
+            return t.replace(',', '')
+        if t.count(',') == 1:
+            return t.replace(',', '.')
+        return t.replace(',', '')
+    if ',' in t and '.' in t:
+        if t.rfind(',') > t.rfind('.'):
+            return t.replace('.', '').replace(',', '.')
+        return t.replace(',', '')
+    return t
+
+
 def clean_numeric_text(text: Optional[str]) -> Optional[float]:
     """
     Convert text to float, handling common formatting (Unicode minus, thousands vs decimal commas,
@@ -77,26 +101,20 @@ def clean_numeric_text(text: Optional[str]) -> Optional[float]:
             .replace('$', '')
             .replace('€', '')
             .replace('£', '')
+            .replace('\u00a5', '')
             .replace(' ', '')
             .strip()
         )
         if not t:
             return None
-        if ',' in t and '.' not in t:
-            if re.match(r'^[-+]?\d{1,3}(?:,\d{3})+(?:[eE][-+]?\d+)?$', t):
-                t = t.replace(',', '')
-            elif t.count(',') == 1:
-                t = t.replace(',', '.')
-            else:
-                t = t.replace(',', '')
-        elif ',' in t and '.' in t:
-            if t.rfind(',') > t.rfind('.'):
-                t = t.replace('.', '').replace(',', '.')
-            else:
-                t = t.replace(',', '')
-        return float(t)
+        return float(normalize_decimal_separators(t))
     except (ValueError, TypeError):
         return None
+
+
+def parse_latex_math(text: Optional[str]) -> Optional[float]:
+    """Public wrapper: value of ``$10^{2}$`` / ``$\\mathdefault{10^{2}}$`` style labels, else None."""
+    return _parse_latex_math(text) if text else None
 
 
 def is_continuous_scale(text: Optional[str]) -> bool:

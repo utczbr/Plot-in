@@ -159,3 +159,82 @@ def test_recalibrate_scale_skips_non_cartesian_chart(monkeypatch):
     ModernChartAnalysisApp.recalibrate_scale(dummy)
 
     assert analysis_manager.run_calls == []
+
+
+def test_data_tab_edit_flags_label_and_refreshes_numeric_value():
+    item = {"text": "1O0", "cleanedvalue": None, "xyxy": [1, 2, 11, 12]}
+    dummy = type("Dummy", (), {})()
+    dummy.current_analysis_result = None
+    dummy.analysis_results_widgets = {"w0": {"entry": _TextField("100"), "original_item": item}}
+
+    ModernChartAnalysisApp._flush_widgets_to_result(dummy)
+
+    assert item["text"] == "100"
+    assert item["cleanedvalue"] == 100.0
+    assert item["user_edited_text"] is True
+
+
+def test_unchanged_data_tab_text_is_not_flagged():
+    item = {"text": "100", "cleanedvalue": 100.0}
+    dummy = type("Dummy", (), {})()
+    dummy.current_analysis_result = None
+    dummy.analysis_results_widgets = {"w0": {"entry": _TextField("100"), "original_item": item}}
+    ModernChartAnalysisApp._flush_widgets_to_result(dummy)
+    assert "user_edited_text" not in item
+
+
+def test_recalibrate_passes_user_ocr_corrections_to_the_pipeline(monkeypatch):
+    monkeypatch.setattr(main_modern, "QMessageBox", _SilentMessageBox)
+    refreshed = {
+        "chart_type": "bar", "detections": {}, "elements": [], "bars": [],
+        "scale_info": {"r_squared": 0.97}, "metadata": {}, "baselines": [],
+    }
+    dummy, analysis_manager, _ = _build_dummy_app("bar", refreshed)
+    dummy.current_analysis_result["detections"] = {
+        "axis_labels": [
+            {"text": "250", "xyxy": [1, 2, 11, 12], "user_edited_text": True},
+            {"text": "5", "xyxy": [20, 2, 30, 12]},   # untouched label: not an override
+        ]
+    }
+
+    ModernChartAnalysisApp.recalibrate_scale(dummy)
+
+    overrides = analysis_manager.run_calls[0]["kwargs"]["label_overrides"]
+    assert overrides == [{"class": "axis_labels", "xyxy": [1.0, 2.0, 11.0, 12.0], "text": "250"}]
+
+
+def test_recalibrate_without_edits_passes_no_overrides(monkeypatch):
+    monkeypatch.setattr(main_modern, "QMessageBox", _SilentMessageBox)
+    refreshed = {
+        "chart_type": "bar", "detections": {}, "elements": [], "bars": [],
+        "scale_info": {}, "metadata": {}, "baselines": [],
+    }
+    dummy, analysis_manager, _ = _build_dummy_app("bar", refreshed)
+    ModernChartAnalysisApp.recalibrate_scale(dummy)
+    assert analysis_manager.run_calls[0]["kwargs"].get("label_overrides") is None
+
+
+def test_recalibrate_warns_when_some_corrections_could_not_be_rematched(monkeypatch):
+    monkeypatch.setattr(main_modern, "QMessageBox", _SilentMessageBox)
+    refreshed = {
+        "chart_type": "bar", "detections": {}, "elements": [], "bars": [],
+        "scale_info": {}, "baselines": [],
+        "metadata": {"label_overrides": {"requested": 3, "applied": 1}},
+    }
+    dummy, _, _ = _build_dummy_app("bar", refreshed)
+    ModernChartAnalysisApp.recalibrate_scale(dummy)
+    # The warning must still be what the user is looking at when Recalibrate finishes; scanning
+    # every status ever emitted would pass even if "Recalibrated" overwrote it straight away.
+    assert "2 of 3 corrected label(s) could not be matched" in dummy._statuses[-1]
+
+
+def test_recalibrate_is_quiet_when_every_correction_was_rematched(monkeypatch):
+    monkeypatch.setattr(main_modern, "QMessageBox", _SilentMessageBox)
+    refreshed = {
+        "chart_type": "bar", "detections": {}, "elements": [], "bars": [],
+        "scale_info": {}, "baselines": [],
+        "metadata": {"label_overrides": {"requested": 2, "applied": 2}},
+    }
+    dummy, _, _ = _build_dummy_app("bar", refreshed)
+    ModernChartAnalysisApp.recalibrate_scale(dummy)
+    assert not any("could not be matched" in s for s in dummy._statuses)

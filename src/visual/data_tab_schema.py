@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,9 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def _value_or_estimated(element: Dict[str, Any]) -> Optional[float]:
+    # A pixel length from a failed/absent calibration is not a data value (matches the export).
+    if element.get("value_is_pixels"):
+        return None
     for key in ("value", "estimated_value"):
         parsed = _safe_float(element.get(key))
         if parsed is not None:
@@ -127,7 +130,147 @@ def autocorrect_box_statistics(element: Dict[str, Any]) -> None:
         element[key] = float(value)
 
 
-def _columns_for_chart(chart_type: str) -> List[DataTabColumnSpec]:
+def _is_horizontal(result: Dict[str, Any], items: List[Dict[str, Any]]) -> bool:
+    """True for horizontal bar-like charts (categories stacked top-to-bottom).
+
+    The result-level ``orientation`` wins; otherwise the elements' own ``orientation`` tags
+    (each box/bar/line point records the orientation it was extracted with) are polled.
+    """
+    value = result.get("orientation")
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower().startswith("h")
+    tags = [str(i.get("orientation")).strip().lower() for i in items
+            if isinstance(i.get("orientation"), str) and i["orientation"].strip()]
+    return bool(tags) and sum(t.startswith("h") for t in tags) * 2 > len(tags)
+
+
+def _reading_pos(bbox: Optional[List[float]], horizontal: bool) -> float:
+    """Position along the category axis: left edge (vertical charts) or top edge (horizontal)."""
+    idx = 1 if horizontal else 0
+    if bbox and len(bbox) > idx:
+        try:
+            return float(bbox[idx])
+        except (TypeError, ValueError):
+            pass
+    return 0.0
+
+
+def _is_int_id(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _series_names(items: List[Dict[str, Any]]) -> Dict[int, str]:
+    """Series name for each element, keyed by ``id(element)`` ('' when unknown).
+
+    ``legend_label`` is preferred, *unless* it cannot distinguish the series: the legend
+    associator currently stamps the first legend entry on every element, so several
+    ``series_id`` values sharing too few legend names means the legend text is not a real
+    per-series assignment. In that case the series are named by their ids ("Series 1", ...).
+    """
+    real = [i for i in items if not str(i.get("type", "")).endswith("_summary")]
+    # Integer and non-empty string ids are both real series identities (_series_sort_key
+    # orders them the same way); ids that differ only by surrounding whitespace are one.
+    sids = {
+        i["series_id"].strip() if isinstance(i.get("series_id"), str) else i.get("series_id")
+        for i in real
+        if _is_int_id(i.get("series_id"))
+        or (isinstance(i.get("series_id"), str) and i["series_id"].strip())
+    }
+    legends = {
+        i["legend_label"].strip() for i in real
+        if isinstance(i.get("legend_label"), str) and i["legend_label"].strip()
+    }
+    legend_usable = len(legends) >= len(sids)
+
+    names: Dict[int, str] = {}
+    for item in items:
+        name = ""
+        legend = item.get("legend_label")
+        sid = item.get("series_id")
+        if legend_usable and isinstance(legend, str) and legend.strip():
+            name = legend.strip()
+        elif _is_int_id(sid):
+            name = f"Series {sid + 1}"
+        elif isinstance(sid, str) and sid.strip():
+            name = sid.strip()
+        elif isinstance(legend, str) and legend.strip():
+            name = legend.strip()
+        names[id(item)] = name
+    return names
+
+
+def _series_sort_key(element: Dict[str, Any]) -> Tuple[int, Any]:
+    """Orderable series rank: numeric ids first (by value), then string ids, then none."""
+    sid = element.get("series_id")
+    if _is_int_id(sid) or (isinstance(sid, float) and not isinstance(sid, bool)):
+        return (0, float(sid))
+    if isinstance(sid, str) and sid.strip():
+        text = sid.strip()
+        try:
+            return (0, float(text))
+        except ValueError:
+            return (1, text)
+    return (2, 0)
+
+
+def _axis_text(element: Dict[str, Any]) -> str:
+    """'2nd' for secondary-axis elements, '1st' otherwise."""
+    return "2nd" if str(element.get("axis", "")).strip().lower() == "secondary" else "1st"
+
+
+def _source_collection(result: Dict[str, Any], chart_type: str) -> List[Dict[str, Any]]:
+    key = "bars" if chart_type in {"bar", "histogram"} else "elements"
+    items = result.get(key)
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+# Column before which the optional (conditional) columns are inserted.
+_EXTRA_COLUMN_ANCHOR = {
+    "bar": "value", "histogram": "value", "line": "value", "area": "value",
+    "box": "whisker_low", "scatter": "x",
+}
+
+
+def _extra_columns(result: Optional[Dict[str, Any]], chart_type: str) -> List[DataTabColumnSpec]:
+    """Conditional columns, shown only when the extracted data actually needs them.
+
+    * ``x``      (line/area)  - calibrated X value, when any point has one.
+    * ``series``              - only when more than one distinct series is present, so the
+                                default "first legend entry" assignment never shows as data.
+    * ``axis``                - only for dual-axis (3-axis) charts: which value axis (1st/2nd)
+                                an element was measured against.
+    """
+    if not isinstance(result, dict) or chart_type not in _EXTRA_COLUMN_ANCHOR:
+        return []
+    items = _source_collection(result, chart_type)
+    extras: List[DataTabColumnSpec] = []
+    if chart_type in {"line", "area"} and any(
+        _safe_float(item.get("x_value")) is not None for item in items
+    ):
+        extras.append(DataTabColumnSpec("x", "X", editable=True, value_type="float"))
+    names = _series_names(items)
+    series = {names[id(item)] for item in items if not str(item.get("type", "")).endswith("_summary")}
+    series.discard("")
+    if len(series) > 1:
+        extras.append(DataTabColumnSpec("series", "Series"))
+    if any(str(item.get("axis", "")).strip().lower() == "secondary" for item in items):
+        extras.append(DataTabColumnSpec("axis", "Axis"))
+    return extras
+
+
+def _columns_for_chart(chart_type: str, result: Optional[Dict[str, Any]] = None) -> List[DataTabColumnSpec]:
+    columns = _base_columns_for_chart(chart_type)
+    extras = _extra_columns(result, chart_type)
+    if not extras:
+        return columns
+    anchor = _EXTRA_COLUMN_ANCHOR[chart_type]
+    pos = next((i for i, col in enumerate(columns) if col.id == anchor), len(columns))
+    return columns[:pos] + extras + columns[pos:]
+
+
+def _base_columns_for_chart(chart_type: str) -> List[DataTabColumnSpec]:
     if chart_type in {"bar", "histogram"}:
         return [
             DataTabColumnSpec("label", "Label", editable=True),
@@ -213,16 +356,17 @@ def _editable_fields_for_chart(chart_type: str, row_kind: str = "element") -> Li
         "bar": ["label", "value", "pixel_size", "error_bar"],
         "histogram": ["label", "value", "pixel_size", "error_bar"],
         "pie": ["label", "value", "percent", "angle"],
-        "line": ["label", "value", "position"],
+        "line": ["label", "x", "value", "position"],
         "scatter": ["x", "y"],
         "box": ["label", "whisker_low", "q1", "median", "q3", "whisker_high", "outliers"],
         "heatmap": ["row_label", "col_label", "value"],
-        "area": ["label", "position", "value"],
+        "area": ["label", "x", "position", "value"],
     }
     return mapping.get(chart_type, ["value"])
 
 
 def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
+    extra_ids = {col.id for col in _extra_columns(result, chart_type)}
     rows: List[DataTabRow] = []
 
     if chart_type in {"bar", "histogram"}:
@@ -230,10 +374,14 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
         bars = result.get("bars")
         if not isinstance(bars, list):
             bars = []
-        # Sort for display but keep each bar's ORIGINAL index for edit writeback.
+        bar_series = _series_names([b for b in bars if isinstance(b, dict)])
+        horizontal = _is_horizontal(result, [b for b in bars if isinstance(b, dict)])
+        # Sort for display but keep each bar's ORIGINAL index for edit writeback. Reading
+        # order is left-to-right for vertical bars and top-to-bottom for horizontal ones
+        # (their left edges all sit on the baseline, so x would not order them).
         indexed_bars = sorted(
             ((i, b) for i, b in enumerate(bars) if isinstance(b, dict)),
-            key=lambda ib: (_bbox_from_element(ib[1]) or [0])[0],
+            key=lambda ib: _reading_pos(_bbox_from_element(ib[1]), horizontal),
         )
         for orig_idx, bar in indexed_bars:
             tick_label = bar.get("tick_label")
@@ -252,6 +400,11 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
                 "pixel_size": _safe_float(bar.get("pixel_height", bar.get("pixel_dimension"))),
                 "error_bar": error_margin,
             }
+            # Conditional columns: only carry values for the columns that are actually shown.
+            if "series" in extra_ids:
+                row_values["series"] = bar_series.get(id(bar), "")
+            if "axis" in extra_ids:
+                row_values["axis"] = _axis_text(bar)
             rows.append(
                 DataTabRow(
                     element_index=orig_idx,
@@ -270,15 +423,23 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
     # Keep each element's ORIGINAL index in result["elements"] so that
     # apply_data_tab_edits writes back to the right element after display sorting.
     indexed_elements = [(i, e) for i, e in enumerate(elements) if isinstance(e, dict)]
+    element_series = _series_names([e for _, e in indexed_elements])
     if chart_type == "heatmap":
         indexed_elements.sort(key=lambda ie: (ie[1].get("row") or 0, ie[1].get("col") or 0))
     else:
+        # Box plots stack along Y when horizontal; line/area/scatter always read along X.
+        horizontal = chart_type == "box" and _is_horizontal(result, [e for _, e in indexed_elements])
+
         def _sort_key(ie):
             el = ie[1]
             is_summary = str(el.get("type", "")).endswith("_summary")
             bbox = _bbox_from_element(el)
-            # Summary rows (no bbox) go last; stable sort keeps series order otherwise.
-            return (1 if is_summary else 0, (bbox or [0])[0])
+            # Line/area: keep each series contiguous (series, then X) instead of interleaving
+            # points of different series by pixel position.
+            series_rank: Tuple[int, Any] = (0, 0)
+            if chart_type in {"line", "area"}:
+                series_rank = _series_sort_key(el)
+            return (1 if is_summary else 0, series_rank, _reading_pos(bbox, horizontal))
         indexed_elements.sort(key=_sort_key)
 
     for display_idx, (orig_idx, element) in enumerate(indexed_elements):
@@ -387,6 +548,13 @@ def _build_rows(result: Dict[str, Any], chart_type: str) -> List[DataTabRow]:
                 "confidence": _safe_float(element.get("confidence", element.get("conf"))),
             }
 
+        if "series" in extra_ids:
+            row_values["series"] = element_series.get(id(element), "")
+        if "axis" in extra_ids:
+            row_values["axis"] = _axis_text(element)
+        if "x" in extra_ids:
+            row_values["x"] = _safe_float(element.get("x_value"))
+
         rows.append(
             DataTabRow(
                 element_index=orig_idx,
@@ -412,7 +580,7 @@ def build_data_tab_model(result: Dict[str, Any]) -> Dict[str, Any]:
     Build a schema-driven model for the Data tab from a normalized result payload.
     """
     chart_type = str(result.get("chart_type", "bar")).strip().lower() or "bar"
-    columns = _columns_for_chart(chart_type)
+    columns = _columns_for_chart(chart_type, result)
     rows = _build_rows(result, chart_type)
 
     page_size = 100
@@ -465,6 +633,7 @@ def _apply_bar_field(target: Dict[str, Any], field: str, parsed: Any) -> None:
         return
     if field == "value":
         target["estimated_value"] = _safe_float(parsed)
+        target["value_is_pixels"] = False  # the user typed a real value
         return
     if field == "pixel_size":
         numeric = _safe_float(parsed)
@@ -519,11 +688,26 @@ def _apply_line_area_field(target: Dict[str, Any], field: str, parsed: Any) -> N
             target["value"] = numeric
         else:
             target["estimated_value"] = numeric
+        target["value_is_pixels"] = False  # the user typed a real value
         return
     if field == "position":
         numeric = _safe_float(parsed)
         if numeric is not None:
             target["position"] = numeric
+        return
+    if field == "x":
+        numeric = _safe_float(parsed)
+        raw = str(parsed).strip() if parsed is not None else ""
+        if numeric is not None:
+            target["x_value"] = numeric
+        # protocol_rows take "group" from tick_label before x_value, so keep it in step; a
+        # non-numeric X (a category) used to be dropped silently.
+        if raw:
+            tick = target.get("tick_label")
+            if isinstance(tick, dict):
+                tick["text"] = raw
+            elif numeric is None or tick is not None:
+                target["tick_label"] = raw
 
 
 def _apply_scatter_field(target: Dict[str, Any], field: str, parsed: Any) -> None:

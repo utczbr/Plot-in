@@ -446,8 +446,9 @@ def export_tidy_csv(
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_V2_COLUMNS, extrasaction="ignore")
         writer.writeheader()
+        from core.export_manager import sanitize_csv_cell
         for r in formatted_rows:
-            writer.writerow(r)
+            writer.writerow({k: sanitize_csv_cell(v) for k, v in r.items()})
 
     # Post-write verification: strict check on header and row count
     with open(out_path, "r", encoding="utf-8") as vf:

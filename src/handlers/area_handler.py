@@ -110,6 +110,7 @@ class AreaHandler(CartesianExtractionHandler):
                 'bbox': [x1, y1, x2, y2],
                 'position': pos,
                 'value': point['estimated_value'],
+                'value_is_pixels': bool(point.get('value_is_pixels', False)),
                 'x_value': point.get('x_value'),
                 'series_id': point.get('series_id', 0),
                 'orientation': orientation_enum.value,

@@ -51,6 +51,7 @@ class LineExtractor(BaseExtractor):
                     logging.warning(f"X scale model failed for line point: {e}")
             estimated_value = None
             pixel_distance = 0
+            value_is_pixels = False
 
             if scale_model is not None:
                 if baseline_coord is not None:
@@ -60,10 +61,12 @@ class LineExtractor(BaseExtractor):
                 except Exception as e:
                     logging.warning(f"Scale model failed for line point: {e}")
                     estimated_value = pixel_distance if baseline_coord is not None else y_center
+                    value_is_pixels = True
             else:
                 if baseline_coord is not None:
                     pixel_distance = abs(baseline_coord - y_center)
                 estimated_value = pixel_distance if baseline_coord is not None else y_center
+                value_is_pixels = True  # uncalibrated: pixels, not data
 
             point_info = {
                 'index': i,
@@ -75,6 +78,7 @@ class LineExtractor(BaseExtractor):
                 'confidence': point.get('conf', 0.0),
                 'pixel_distance': pixel_distance,
                 'estimated_value': estimated_value,
+                'value_is_pixels': value_is_pixels,
                 'data_label': None,
                 'error_bar': None
             }
@@ -89,6 +93,7 @@ class LineExtractor(BaseExtractor):
                 }
                 if assoc_data_label.get('cleanedvalue') is not None:
                     point_info['estimated_value'] = assoc_data_label['cleanedvalue']
+                    point_info['value_is_pixels'] = False  # a printed number is a real data value
 
             assoc_error_bar = find_closest_element(point, error_bars, orientation='vertical')
             if assoc_error_bar:
@@ -100,7 +105,7 @@ class LineExtractor(BaseExtractor):
                 else:
                     eb_y1, eb_y2 = assoc_error_bar['xyxy'][1], assoc_error_bar['xyxy'][3]
                     try:
-                        error_margin = abs(float(scale_func(eb_y1)) - float(scale_func(eb_y2)))
+                        error_margin = abs(float(scale_func(eb_y1)) - float(scale_func(eb_y2))) / 2.0  # +/- (half-span), same as bars
                         point_info['error_bar'] = {'margin': error_margin, 'bbox': assoc_error_bar['xyxy']}
                     except Exception as e:
                         logging.warning(f"Could not calculate error bar value for line point: {e}")

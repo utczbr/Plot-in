@@ -218,6 +218,7 @@ class BarExtractor(BaseExtractor):
             x1, y1, x2, y2 = bar['xyxy']
             estimated_value = None
             pixel_dimension = 0
+            value_is_pixels = False
             
             # Dual-axis logic
             if secondary_scale_model and dual_axis_threshold_x:
@@ -246,6 +247,7 @@ class BarExtractor(BaseExtractor):
                     except Exception as e:
                         logging.warning(f"Scale model failed for vertical bar: {e}")
                         estimated_value = pixel_dimension if value_coord < baseline_to_use else -pixel_dimension
+                        value_is_pixels = True
                 else: # horizontal
                     bar_left, bar_right = min(x1, x2), max(x1, x2)
                     if baseline_coord <= bar_left:
@@ -266,9 +268,11 @@ class BarExtractor(BaseExtractor):
                     except Exception as e:
                         logging.warning(f"Scale model failed for horizontal bar: {e}")
                         estimated_value = pixel_dimension if value_coord > baseline_coord else -pixel_dimension
+                        value_is_pixels = True
             else:
                 pixel_dimension = abs(y2 - y1) if is_vertical else abs(x2 - x1)
                 estimated_value = pixel_dimension
+                value_is_pixels = True  # no scale model / baseline: this is a length in px, not data
 
             bar_info = {
                 'index': i,
@@ -276,6 +280,7 @@ class BarExtractor(BaseExtractor):
                 'confidence': bar.get('conf', 0.0),
                 'pixel_dimension': pixel_dimension,
                 'estimated_value': estimated_value,
+                'value_is_pixels': value_is_pixels,
                 'uncertainty': None,  # NEW: uncertainty (1-sigma)
                 'confidence_interval_95': None,  # NEW: 95% confidence interval [lower, upper]
                 'orientation': orientation,
@@ -315,6 +320,7 @@ class BarExtractor(BaseExtractor):
                 }
                 if assoc_data_label.get('cleanedvalue') is not None:
                     bar_info['estimated_value'] = assoc_data_label['cleanedvalue']
+                    bar_info['value_is_pixels'] = False  # a printed number is a real data value
 
             # Error bars
             validated_error_bar = bar.get('error_bar_validated')

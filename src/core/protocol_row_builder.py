@@ -7,6 +7,7 @@ Pure functions, no GUI dependencies.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -83,14 +84,28 @@ def get_protocol_columns(chart_type: str) -> List[tuple]:
 
 def _extract_value(element: Dict[str, Any]) -> Optional[float]:
     """Extract numeric value with fallback: value → estimated_value → y → median (box) → q1/q3."""
+    # A pixel distance produced by a failed/absent calibration is not a data value; never export it
+    # as one (the extractors flag such elements with value_is_pixels).
+    if element.get('value_is_pixels'):
+        return None
     for key in ('value', 'estimated_value', 'y', 'median', 'q1', 'q3'):
         v = element.get(key)
         if v is not None:
             try:
-                return float(v)
+                fv = float(v)
             except (TypeError, ValueError):
                 continue
+            if math.isfinite(fv):
+                return fv
     return None
+
+
+def _is_number(v: Any) -> bool:
+    """True for finite numbers (and numeric strings); guards outlier formatting against crashes."""
+    try:
+        return math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
 
 
 def _is_synthetic(element: Dict[str, Any]) -> bool:
@@ -142,7 +157,7 @@ def _extract_group(element: Dict[str, Any]) -> str:
     if x_val is not None:
         try:
             fv = float(x_val)
-            return f"{fv:.4g}"
+            return f"{fv:.10g}"
         except (TypeError, ValueError):
             return str(x_val).strip()
     return ''
@@ -318,7 +333,7 @@ def build_protocol_rows(
             raw_outliers = element.get('outliers', [])
             if isinstance(raw_outliers, list):
                 box_fields['outliers_str'] = ', '.join(
-                    f'{o:.4g}' for o in raw_outliers if o is not None
+                    f'{float(o):.10g}' for o in raw_outliers if _is_number(o)
                 )
             else:
                 box_fields['outliers_str'] = ''

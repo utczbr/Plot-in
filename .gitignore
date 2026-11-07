@@ -37,8 +37,9 @@ ENV/
 
 # Project configuration (local runtime overrides)
 config/gui_config.json
+# Model weights live in <repo>/models/. src/models/ is the Python package (models.config) that
+# core/ and pipelines/ import, so it must be tracked.
 models/
-src/models/
 runs/
 *.log
 Backup/

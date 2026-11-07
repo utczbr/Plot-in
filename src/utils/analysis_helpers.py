@@ -30,6 +30,9 @@ def sanitize_for_json(obj):
             "axis_titles": sanitize_for_json(obj.axis_titles),
             "confidence": sanitize_for_json(obj.confidence),
             "metadata": sanitize_for_json(obj.metadata),
+            # Per-axis scale pools (scatter / numeric-X charts) so the split survives a save/reload.
+            "x_scale_labels": sanitize_for_json(getattr(obj, "x_scale_labels", [])),
+            "y_scale_labels": sanitize_for_json(getattr(obj, "y_scale_labels", [])),
         }
     elif isinstance(obj, dict):
         return {key: sanitize_for_json(value) for key, value in obj.items()}

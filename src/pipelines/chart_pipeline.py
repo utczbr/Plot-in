@@ -15,6 +15,9 @@ from models.config import MODELS_CONFIG
 from core.chart_registry import get_chart_element_key, normalize_chart_type, resolve_chart_elements
 from utils import run_inference_on_image, sanitize_for_json
 from core.review_summary import build_summary, write_summary, clear_failure_marker
+from core.label_overrides import (
+    USER_EDIT_FLAG, apply_label_overrides, finalize_edited_labels, lock_edited_labels,
+)
 from utils.validation_utils import is_numeric
 from services.orientation_detection_service import OrientationDetectionService
 from services.orientation_service import Orientation
@@ -109,7 +112,8 @@ class ChartAnalysisPipeline(BasePipeline):
             manual_detections: Optional[Dict[str, List[Dict[str, Any]]]] = None,
             output_stem: Optional[str] = None,
             chart_type: Optional[str] = None,
-            image_buffer: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
+            image_buffer: Optional[np.ndarray] = None,
+            label_overrides: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
         """
         Run the analysis pipeline on a single image.
         
@@ -124,6 +128,9 @@ class ChartAnalysisPipeline(BasePipeline):
                 (typically during a manual bbox re-extract), classification is
                 skipped entirely and only this single chart type is used.
             image_buffer: Optional in-memory BGR numpy array (skips cv2.imread)
+            label_overrides: Optional user-corrected OCR labels (class + box + text). They are
+                re-attached to the matching re-detected labels and exempted from OCR, so
+                corrections survive a re-run such as Recalibrate.
             
         Returns:
             Dictionary with analysis results or None on failure
@@ -178,6 +185,7 @@ class ChartAnalysisPipeline(BasePipeline):
         self.logger.info(f"Classified as: {chart_types}")
         
         primary_final_result = None
+        override_report = None
         all_elements = []
         all_bars = []
         merged_detections = {}
@@ -242,6 +250,21 @@ class ChartAnalysisPipeline(BasePipeline):
                     if alias in detections and detections[alias]:
                         detections.setdefault('axis_labels', []).extend(detections.pop(alias))
                 
+            if label_overrides and isinstance(detections, dict):
+                applied = apply_label_overrides(detections, label_overrides)
+                # Several chart-type hypotheses may run, but only the one that finishes (the loop
+                # breaks on it) becomes the result, so report *its* match count. Taking the max
+                # over earlier, rejected hypotheses hid overrides that were dropped from the
+                # result the user actually gets.
+                override_report = {"requested": len(label_overrides), "applied": applied}
+                if applied < len(label_overrides):
+                    # Re-detection moved or lost the box (changed thresholds, manual boxes, ...).
+                    self.logger.warning(
+                        "Only %d/%d user label overrides could be re-attached; the rest were re-read by OCR.",
+                        applied, len(label_overrides))
+                else:
+                    self.logger.info("Applied %d/%d user label overrides.", applied, len(label_overrides))
+
             if not detections:
                 self.logger.warning(f"No detections found for {chart_type}.")
                 if ct != chart_types[-1]:
@@ -398,6 +421,9 @@ class ChartAnalysisPipeline(BasePipeline):
         if all_bars:
             primary_final_result['bars'] = all_bars
         primary_final_result['detections'] = merged_detections
+        if override_report is not None:
+            # Lets the GUI tell the user when some corrections could not be carried over.
+            primary_final_result.setdefault('metadata', {})['label_overrides'] = override_report
 
         if provenance:
             primary_final_result['_provenance'] = provenance
@@ -1254,6 +1280,9 @@ class ChartAnalysisPipeline(BasePipeline):
         pattern = re.compile(r'^([A-Za-z_]{3,})\s*(\d+)$')
         candidates = []
         for reg in regions:
+            # A user's correction is final: it is neither rewritten nor used as a template.
+            if reg.get(USER_EDIT_FLAG):
+                continue
             txt = str(reg.get('text', '')).strip()
             m = pattern.match(txt)
             if m:
@@ -1334,6 +1363,9 @@ class ChartAnalysisPipeline(BasePipeline):
         appended into ``detections['axis_labels']``.
         """
         if not self.ocr_engine:
+            # Nothing will overwrite user-corrected text, but its numeric value still needs
+            # refreshing so calibration does not keep the stale value.
+            finalize_edited_labels(detections)
             return
 
         axis_labels = detections.get('axis_labels', [])
@@ -1352,8 +1384,12 @@ class ChartAnalysisPipeline(BasePipeline):
         layout_regions = detections.get('layout_text_regions', [])
         extra_regions = TextLayoutService.merge_with_axis_labels(layout_regions, ocr_batch)
 
-        all_regions = list(ocr_batch) + extra_regions
+        # User-corrected labels keep their text; only the rest is sent to OCR.
+        all_regions = lock_edited_labels(list(ocr_batch) + extra_regions)
         if not all_regions:
+            # Nothing left to OCR (e.g. every label was user-corrected); still publish the
+            # deduplicated layout regions exactly as a normal run does.
+            detections['layout_text_regions'] = extra_regions
             return
 
         import math
@@ -1428,12 +1464,12 @@ class ChartAnalysisPipeline(BasePipeline):
                 target['ocr_confidence'] = adj_conf
 
                 if label_type in ('axis_labels', 'axis_label', 'data_label', 'color_bar_label') and target.get('cleanedvalue') is None:
-                    token_core = re.sub(r'[\s\$\%\€\£,]', '', clean_text)
+                    token_core = re.sub(r'[\s\$\%\€\£\u00a5,]', '', clean_text)
                     if is_numeric(token_core):
                         num_val, _ = self.ocr_validator.validate_numeric(clean_text)
                         target['cleanedvalue'] = num_val
                     else:
-                        stripped_alpha = re.sub(r'[\s\$\%\€\£\+\-\.,\d]', '', clean_text)
+                        stripped_alpha = re.sub(r'[\s\$\%\€\£\u00a5\+\-\.,\d]', '', clean_text)
                         if stripped_alpha and all(c in self.ocr_validator.char_corrections for c in stripped_alpha):
                             num_val, _ = self.ocr_validator.validate_numeric(clean_text)
                             if num_val is not None:

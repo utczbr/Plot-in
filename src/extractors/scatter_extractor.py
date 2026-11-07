@@ -120,13 +120,19 @@ class ScatterExtractor(BaseExtractor):
                 error_margin = {}
                 if scale_model:
                     try:
-                        error_margin['y_margin'] = abs(float(y_scale_func(eb_y1)) - float(y_scale_func(eb_y2)))
+                        error_margin['y_margin'] = abs(float(y_scale_func(eb_y1)) - float(y_scale_func(eb_y2))) / 2.0
                     except Exception: pass
                 if x_scale_model:
                     try:
-                        error_margin['x_margin'] = abs(float(x_scale_func(eb_x1)) - float(x_scale_func(eb_x2)))
+                        error_margin['x_margin'] = abs(float(x_scale_func(eb_x1)) - float(x_scale_func(eb_x2))) / 2.0
                     except Exception: pass
-                point_info['error_bar'] = {'margins': error_margin, 'bbox': assoc_error_bar['xyxy']}
+                point_info['error_bar'] = {
+                    # 'margin' is the key every consumer (row builder, data tab) reads; y wins, as
+                    # the value axis. Per-axis detail stays in 'margins'.
+                    'margin': error_margin.get('y_margin', error_margin.get('x_margin')),
+                    'margins': error_margin,
+                    'bbox': assoc_error_bar['xyxy'],
+                }
 
             result['data_points'].append(point_info)
         
